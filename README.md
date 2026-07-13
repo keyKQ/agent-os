@@ -36,7 +36,7 @@ OpenAI, Anthropic, Ollama, DeepSeek, Gemini, Qwen/DashScope, and 20+
 other providers. You do not need to change your code or config to
 switch providers.
 
-AgentOS 0.0.1 is the current release. The project website is
+AgentOS 2026.7.15 is the current release. The project website is
 [useagentos.dev](https://useagentos.dev). Follow
 [@useAgentOS](https://x.com/useAgentOS) on X for updates.
 
@@ -202,7 +202,7 @@ $env:Path = "$env:USERPROFILE\.local\bin;" + $env:Path
 **2. Install AgentOS.** This command is the same on every system.
 
 ```sh
-uv tool install --python 3.12 "agentos[recommended] @ https://github.com/use-agent-os/agent-os/releases/download/v0.0.1/agentos-0.0.1-py3-none-any.whl"
+uv tool install --python 3.12 "agentos[recommended] @ https://github.com/use-agent-os/agent-os/releases/download/v2026.7.15/agentos-2026.7.15-py3-none-any.whl"
 ```
 
 This installs the AgentOS file from the link above. Then `uv`
@@ -223,12 +223,12 @@ agentos gateway run
 > new terminal window. Or run the PATH command from step 1 again.
 
 For an install pinned to one exact version, use this full link:
-`https://github.com/use-agent-os/agent-os/releases/download/v0.0.1/agentos-0.0.1-py3-none-any.whl`.
+`https://github.com/use-agent-os/agent-os/releases/download/v2026.7.15/agentos-2026.7.15-py3-none-any.whl`.
 
 > [!NOTE]
 > Release install commands use published GitHub release assets.
 > Python wheel installs use versioned wheel filenames — for example
-> `agentos-0.0.1-py3-none-any.whl` — because the installers validate the
+> `agentos-2026.7.15-py3-none-any.whl` — because the installers validate the
 > version segment inside the wheel filename, so there is no `latest`
 > wheel alias. Only the Windows portable zip has a version-independent
 > `releases/latest/download/` alias.
