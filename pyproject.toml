@@ -1,6 +1,6 @@
 [project]
 name = "agentos"
-version = "0.0.1"
+version = "2026.07.15"
 description = "AgentOS — microkernel Python agent runtime with MCP-native tools and multi-channel messaging"
 license = "MIT"
 readme = "README.md"
