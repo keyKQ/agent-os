@@ -1,7 +1,7 @@
 # AgentOS — Token-Efficient AI Agent
 
 <p align="center">
-  <img src="assets/agentos-hero-banner.png" alt="AgentOS — The Open Agent Operating System">
+  <img src="https://raw.githubusercontent.com/use-agent-os/agent-os/main/assets/agentos-hero-banner.png" alt="AgentOS — The Open Agent Operating System">
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@ scheduling. It sends each turn to the AgentOS Router, which picks the
 model. Then it runs tool calls inside the safe sandbox.
 
 <p align="center">
-  <img src="assets/agentos-architecture.png" alt="AgentOS architecture: Web UI, CLI, and channels connect to the gateway (sessions, approvals, scheduler), which drives the AgentOS Router and the sandboxed tools layer">
+  <img src="https://raw.githubusercontent.com/use-agent-os/agent-os/main/assets/agentos-architecture.png" alt="AgentOS architecture: Web UI, CLI, and channels connect to the gateway (sessions, approvals, scheduler), which drives the AgentOS Router and the sandboxed tools layer">
 </p>
 
 Here is what happens to one message: it comes in through a channel,
@@ -64,7 +64,7 @@ cheapest model that can handle it, runs any tools in the sandbox, and
 the reply goes back the same way:
 
 <p align="center">
-  <img src="assets/agentos-message-lifecycle.png" alt="Message lifecycle: user, channel, gateway, agent, router, tools — with the reply returning to the user">
+  <img src="https://raw.githubusercontent.com/use-agent-os/agent-os/main/assets/agentos-message-lifecycle.png" alt="Message lifecycle: user, channel, gateway, agent, router, tools — with the reply returning to the user">
 </p>
 
 ---
