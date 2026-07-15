@@ -54,3 +54,8 @@ def test_assistant_turn_is_bare_prose() -> None:
     assert "line-height: 1.7;" in block
     assert "max-width: 100%;" in block
     assert "background: var(--bg-surface);" not in block
+
+
+def test_tool_sidebar_is_fully_removed() -> None:
+    assert "chat-sidebar" not in _css()
+    assert "chat-sidebar" not in _js()

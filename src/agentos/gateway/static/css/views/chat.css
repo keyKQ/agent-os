@@ -404,57 +404,6 @@
   background: var(--border);
 }
 
-/* ─── Sidebar (tool output detail) ─────────────────────────────────────── */
-
-/* Tool-output detail sidebar -- hairline-bordered panel */
-.chat-sidebar {
-  width: 380px;
-  max-width: 40%;
-  border-left: 1px solid var(--border-strong);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-/* Sidebar header -- mono uppercase section label with hairline divider.
-   A faint accent thread below the header rail echoes the topbar pattern. */
-.chat-sidebar-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: var(--sp-2) var(--sp-3);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: var(--track-label);
-  text-transform: uppercase;
-  color: var(--text-dim);
-  flex-shrink: 0;
-  position: relative;
-}
-.chat-sidebar-header::after {
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent) 28%, transparent) 20%, transparent 50%);
-  pointer-events: none;
-}
-
-.chat-sidebar-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--sp-3);
-  font-size: var(--fs-sm);
-}
-
-.chat-sidebar-body pre {
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
 /* ─── Message Bubbles ──────────────────────────────────────────────────── */
 
 /* Each .msg row is full-width; bubble alignment is done via margin on .msg-body. */
