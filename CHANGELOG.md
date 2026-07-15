@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed the repository from MIT to **Apache-2.0** and added a root
+  `NOTICE` file. Core modules derived from
+  [OpenSquilla](https://github.com/opensquilla/opensquilla) (Apache-2.0)
+  are now credited in `THIRD_PARTY_NOTICES.md`; the README credits
+  OpenSquilla (built on) plus OpenClaw and Hermes Agent (influences).
+  Wheels now ship `LICENSE`, `NOTICE`, and `THIRD_PARTY_NOTICES.md` in
+  their dist-info license files.
+
 ## [2026.7.14.post1] - 2026-07-14
 
 ### Changed
