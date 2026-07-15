@@ -19,20 +19,47 @@ def test_skills_view_browses_community_catalog_without_source_picker() -> None:
     # Registry search aggregates across community sources (no ClawHub-only copy).
     assert "Searching ClawHub" not in view
     assert "community skills" in view
-    # Opening the Community tab browses the full catalog (empty-query search).
-    assert "_registryBrowsed" in view
-    assert "_searchRegistry('')" in view
-    # Browse requests a larger page than a targeted search.
-    assert "limit: browsing ? 200 : 40" in view
+    # Opening a browse tab loads the full catalog (empty-query search).
+    assert "_browse(tab, '')" in view
 
 
-def test_skills_view_renders_provider_and_logo() -> None:
+def test_skills_view_has_dedicated_bankr_tab() -> None:
     view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
 
-    assert "_providerCell" in view
-    assert "sk-registry__logo" in view
+    # A dedicated Bankr partner tab, distinct from generic Community.
+    assert 'data-tab="bankr"' in view
+    assert 'id="skills-tab-bankr"' in view
+    assert "Bankr partner catalog" in view
+    # Bankr browse pins source=bankr; community filters bankr out.
+    assert "params.source = 'bankr'" in view
+    assert "results.filter(r => r.source !== 'bankr')" in view
+
+
+def test_skills_view_renders_registry_cards_with_provider_and_logo() -> None:
+    view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
+
+    # Community/Bankr browse uses a card gallery, not a table.
+    assert "sk-grid--registry" in view
+    assert "_renderRegistryCard" in view
+    assert "sk-rcard__logo" in view
     # Falls back to initials when a skill has no logo asset.
-    assert "sk-registry__logo--initials" in view
+    assert "sk-rcard__logo--initials" in view
+
+
+def test_skills_view_registry_detail_shows_demo_and_setup() -> None:
+    view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
+
+    # Detail dialog surfaces catalog demo + setup before install.
+    assert "_openRegistryDialog" in view
+    assert "sk-dialog__setup" in view
+    assert "sk-dialog__code" in view
+
+
+def test_skills_view_has_category_filter_chips() -> None:
+    view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
+
+    assert "data-cat-chip" in view
+    assert "_catFilter" in view
 
 
 def test_skills_view_distinguishes_bundled_from_local_layers() -> None:

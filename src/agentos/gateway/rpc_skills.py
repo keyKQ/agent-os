@@ -366,6 +366,10 @@ async def _handle_skills_search(params: dict | None, ctx: RpcContext) -> dict[st
                 "identifier": r.identifier,
                 "provider": r.provider,
                 "logo": r.logo,
+                "category": r.category,
+                "setup": r.setup,
+                "demo": r.demo,
+                "homepage": r.homepage,
                 "installed": r.identifier in installed or r.name in installed,
             }
             for r in results

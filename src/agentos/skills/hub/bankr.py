@@ -65,11 +65,38 @@ def _catalog_slugs(tree: dict) -> list[str]:
     return slugs
 
 
+# Coarse category buckets inferred from the slug/provider so the browse UI can
+# offer meaningful filter chips. Ordered by specificity — first keyword hit wins.
+_CATEGORY_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("trading", ("trade", "trading", "swap", "uniswap", "dex", "perp", "hyperliquid")),
+    ("defi", ("defi", "aave", "lend", "yield", "vault", "stake", "liquidity", "token")),
+    ("wallet", ("wallet", "account", "erc4337", "erc-4337", "signer", "sign", "custody", "vault")),
+    ("markets", ("polymarket", "kalshi", "prediction", "bet", "market", "odds")),
+    ("social", ("farcaster", "twitter", "x-", "neynar", "social", "community", "chat", "message")),
+    ("data", ("alchemy", "zerion", "data", "monitor", "analytics", "index", "scan", "research")),
+    ("nft", ("nft", "collectible", "mint", "opensea")),
+    ("dev", ("foundry", "contract", "audit", "gas", "deploy", "sdk", "dev", "skill", "eval")),
+    ("infra", ("ens", "rpc", "node", "infra", "gateway", "x402", "webhook")),
+]
+
+
+def _infer_category(slug: str, provider: str) -> str:
+    """Return a coarse category for browse filters, or "" when unknown."""
+    hay = f"{slug} {provider}".lower()
+    for category, keywords in _CATEGORY_KEYWORDS:
+        if any(kw in hay for kw in keywords):
+            return category
+    return "other"
+
+
 def _meta_from_catalog(slug: str, catalog: dict) -> SkillMeta | None:
     """Build a browse-time SkillMeta from a parsed catalog.json.
 
     Returns ``None`` when the skill is not a directly-installable ``bankr``
-    skill (e.g. an ``external`` install), so callers can skip it.
+    skill (e.g. an ``external`` install), so callers can skip it. The
+    human-readable description lives in ``SKILL.md`` frontmatter (``catalog.json``
+    has none); it is filled in at ``fetch()`` time to keep browsing fast, so the
+    browse card shows slug + provider + catalog demo/setup, but no description.
     """
     install = catalog.get("install")
     if not isinstance(install, dict) or install.get("type") != "bankr":
@@ -79,9 +106,13 @@ def _meta_from_catalog(slug: str, catalog: dict) -> SkillMeta | None:
     logo_name = catalog.get("logo")
     logo = f"{_RAW_BASE}/{slug}/{logo_name}" if isinstance(logo_name, str) and logo_name else ""
 
+    setup_raw = catalog.get("setup")
+    setup = [str(s) for s in setup_raw] if isinstance(setup_raw, list) else []
+    demo_raw = catalog.get("demo")
+    demo = demo_raw if isinstance(demo_raw, dict) else {}
+
     return SkillMeta(
         name=slug,
-        # description lives in SKILL.md frontmatter; filled at fetch() time.
         description="",
         source_id="bankr",
         trust_level="community",
@@ -89,6 +120,9 @@ def _meta_from_catalog(slug: str, catalog: dict) -> SkillMeta | None:
         homepage=str(catalog.get("providerUrl") or _tree_url(slug)),
         provider=provider,
         logo=logo,
+        category=_infer_category(slug, provider),
+        setup=setup,
+        demo=demo,
     )
 
 
@@ -188,7 +222,11 @@ class BankrSource(SkillSource):
         return metas
 
     async def _load_catalog_entry(self, client, slug: str) -> SkillMeta | None:
-        """Fetch and parse one skill's catalog.json. Skips on any error."""
+        """Fetch and parse one skill's catalog.json. Skips on any error.
+
+        Only catalog.json is fetched (one request per skill) to keep browsing
+        fast; the description is filled in later at fetch()/install time.
+        """
         url = f"{_RAW_BASE}/{slug}/catalog.json"
         try:
             resp = await client.get(url, headers=self._headers())

@@ -9,7 +9,12 @@ const SkillsView = (() => {
   let _filterText = '';
   let _statusFilter = 'all';
   let _activeTab = 'installed';
-  let _registryBrowsed = false;
+
+  // Community/Bankr browse state.
+  let _registryCache = { bankr: null, community: null }; // source group → results[]
+  let _registryLoading = { bankr: false, community: false };
+  let _catFilter = { bankr: 'all', community: 'all' };
+  let _registryQuery = { bankr: '', community: '' };
 
   const _LAYER_ORDER = ['workspace', 'bundled', 'managed', 'personal', 'project', 'extra'];
   const _LAYER_LABEL = {
@@ -29,6 +34,12 @@ const SkillsView = (() => {
     extra: 'Extra skills come from configured local directories.',
   };
 
+  const _CAT_LABEL = {
+    all: 'All', trading: 'Trading', defi: 'DeFi', wallet: 'Wallets',
+    markets: 'Markets', social: 'Social', data: 'Data', nft: 'NFT',
+    dev: 'Dev tools', infra: 'Infra', other: 'Other',
+  };
+
   function _ensureCss() {
     if (document.querySelector('link[data-view-css="skills"]')) return;
     const data = document.getElementById('agentos-data');
@@ -44,7 +55,11 @@ const SkillsView = (() => {
   function render(el) {
     _el = el;
     _rpc = App.getRpc();
-    _registryBrowsed = false;
+    _registryCache = { bankr: null, community: null };
+    _registryLoading = { bankr: false, community: false };
+    _catFilter = { bankr: 'all', community: 'all' };
+    _registryQuery = { bankr: '', community: '' };
+    _activeTab = 'installed';
     _ensureCss();
 
     _el.innerHTML = `
@@ -53,12 +68,12 @@ const SkillsView = (() => {
           <div class="sk-stage__title-block">
             <span class="sk-stage__eyebrow">Control · Skills</span>
             <h2 class="sk-stage__title">Skills</h2>
-            <p class="sk-stage__subtitle">Composable agent capabilities: bundled AgentOS skills plus local managed, personal, project, and workspace packs.</p>
+            <p class="sk-stage__subtitle">Composable agent capabilities — bundled packs, the Bankr partner catalog, and the wider community.</p>
           </div>
           <div class="sk-stage__actions">
             <div class="sk-search-wrap" id="sk-search-wrap">
               <span class="sk-search-icon">${icons.search()}</span>
-              <input class="sk-search-input" type="search" id="skills-filter" placeholder="Filter skills…" autocomplete="off" />
+              <input class="sk-search-input" type="search" id="skills-filter" placeholder="Filter installed…" autocomplete="off" />
             </div>
             <button class="btn btn--ghost" id="skills-refresh" title="Refresh">
               ${icons.refresh()}<span>Refresh</span>
@@ -70,20 +85,42 @@ const SkillsView = (() => {
 
         <div class="sk-tabs" role="group" aria-label="Skill source">
           <button class="sk-tab is-active" data-tab="installed" aria-pressed="true">${icons.skills()}<span>Installed</span></button>
-          <button class="sk-tab" data-tab="registry" aria-pressed="false">${icons.download()}<span>Community</span></button>
+          <button class="sk-tab sk-tab--bankr" data-tab="bankr" aria-pressed="false">${_bankrGlyph()}<span>Bankr</span></button>
+          <button class="sk-tab" data-tab="community" aria-pressed="false">${icons.download()}<span>Community</span></button>
         </div>
 
         <div id="skills-tab-installed" class="sk-panel">
           <div id="skills-installed-wrap"></div>
         </div>
-        <div id="skills-tab-registry" class="sk-panel" hidden>
-          <div class="sk-registry">
-            <div class="sk-registry__head">
+
+        <div id="skills-tab-bankr" class="sk-panel" hidden>
+          <div class="sk-partner">
+            <div class="sk-partner__mark">${_bankrGlyph(22)}</div>
+            <div class="sk-partner__text">
+              <div class="sk-partner__name">Bankr partner catalog</div>
+              <p class="sk-partner__desc">Plug-and-play on-chain skills — trading, wallets, DeFi, markets, and more — installed straight from <span class="sk-mono">BankrBot/skills</span>.</p>
+            </div>
+            <a class="sk-partner__link" href="https://bankr.bot" target="_blank" rel="noopener">bankr.bot ↗</a>
+          </div>
+          <div class="sk-browse" data-group="bankr">
+            <div class="sk-browse__bar">
               <div class="sk-search-wrap sk-search-wrap--lg">
                 <span class="sk-search-icon">${icons.search()}</span>
-                <input class="sk-search-input sk-search-input--lg" type="search" id="skills-registry-search" placeholder="Search community skills..." autocomplete="off" />
+                <input class="sk-search-input sk-search-input--lg" type="search" data-registry-search="bankr" placeholder="Search Bankr skills…" autocomplete="off" />
               </div>
-              <button class="btn btn--primary" id="skills-registry-search-btn">Search</button>
+            </div>
+            <div class="sk-chips" data-chips="bankr"></div>
+            <div class="sk-browse__results" data-results="bankr"></div>
+          </div>
+        </div>
+
+        <div id="skills-tab-community" class="sk-panel" hidden>
+          <div class="sk-browse" data-group="community">
+            <div class="sk-browse__bar">
+              <div class="sk-search-wrap sk-search-wrap--lg">
+                <span class="sk-search-icon">${icons.search()}</span>
+                <input class="sk-search-input sk-search-input--lg" type="search" data-registry-search="community" placeholder="Search community skills…" autocomplete="off" />
+              </div>
             </div>
             <div class="sk-github-install">
               <div class="sk-search-wrap sk-search-wrap--lg">
@@ -92,13 +129,8 @@ const SkillsView = (() => {
               </div>
               <button class="btn btn--primary" id="skills-github-install">Install GitHub URL</button>
             </div>
-            <div id="skills-registry-results" class="sk-registry__results">
-              <div class="sk-registry__hint">
-                <div class="sk-registry__hint-icon">${icons.skills()}</div>
-                <p>Browse community skills to install, or search by name.</p>
-                <p class="sk-dim">Paste a GitHub skill URL above for direct install.</p>
-              </div>
-            </div>
+            <div class="sk-chips" data-chips="community"></div>
+            <div class="sk-browse__results" data-results="community"></div>
           </div>
         </div>
 
@@ -107,54 +139,39 @@ const SkillsView = (() => {
         </dialog>
       </div>`;
 
-    // Dialog backdrop click → close (attach once, not per-open)
     const _dlg = _el.querySelector('#skill-detail-dialog');
     if (_dlg) {
-      _dlg.addEventListener('click', (e) => {
-        if (e.target === _dlg) _dlg.close();
-      });
+      _dlg.addEventListener('click', (e) => { if (e.target === _dlg) _dlg.close(); });
     }
 
     const _filterInput = _el.querySelector('#skills-filter');
     const _searchWrap = _el.querySelector('#sk-search-wrap');
     _el.querySelectorAll('.sk-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        _activeTab = btn.dataset.tab;
-        _el.querySelectorAll('.sk-tab').forEach(b => {
-          const active = b === btn;
-          b.classList.toggle('is-active', active);
-          b.setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-        _el.querySelectorAll('.sk-panel').forEach(p => { p.hidden = true; });
-        const panel = _el.querySelector('#skills-tab-' + btn.dataset.tab);
-        if (panel) panel.hidden = false;
-        if (_searchWrap) _searchWrap.style.visibility = btn.dataset.tab === 'installed' ? '' : 'hidden';
-        // Browse the full community catalog on first open of the Community tab.
-        if (btn.dataset.tab === 'registry' && !_registryBrowsed) {
-          _registryBrowsed = true;
-          _searchRegistry('');
-        }
-      });
+      btn.addEventListener('click', () => _selectTab(btn.dataset.tab, _searchWrap));
     });
 
-    _el.querySelector('#skills-refresh').addEventListener('click', _loadData);
+    _el.querySelector('#skills-refresh').addEventListener('click', () => {
+      if (_activeTab === 'installed') { _loadData(); return; }
+      _registryCache[_activeTab] = null;
+      _browse(_activeTab, _registryQuery[_activeTab]);
+    });
 
     _filterInput.addEventListener('input', () => {
       _filterText = _filterInput.value.toLowerCase();
       _renderCards();
     });
 
-    // Registry search
-    const searchBtn = _el.querySelector('#skills-registry-search-btn');
-    const searchInput = _el.querySelector('#skills-registry-search');
+    // Registry search inputs (Bankr + Community).
+    _el.querySelectorAll('[data-registry-search]').forEach(input => {
+      const group = input.dataset.registrySearch;
+      input.addEventListener('input', _debounce(() => {
+        _registryQuery[group] = input.value;
+        _renderRegistry(group);
+      }, 160));
+    });
+
     const githubBtn = _el.querySelector('#skills-github-install');
     const githubInput = _el.querySelector('#skills-github-url');
-    if (searchBtn) {
-      searchBtn.addEventListener('click', () => _searchRegistry(searchInput.value));
-      searchInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') _searchRegistry(searchInput.value);
-      });
-    }
     if (githubBtn && githubInput) {
       githubBtn.addEventListener('click', () => {
         if (githubInput.value.trim()) _installSkill(githubInput.value.trim(), 'github', githubBtn);
@@ -164,8 +181,15 @@ const SkillsView = (() => {
       });
     }
 
-    // Delegate install / uninstall / card / status-filter / deps-install clicks
+    // Delegated clicks.
     _el.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-cat-chip]');
+      if (chip) {
+        const group = chip.dataset.group;
+        _catFilter[group] = chip.dataset.catChip;
+        _renderRegistry(group);
+        return;
+      }
       const installBtn = e.target.closest('[data-install]');
       if (installBtn) {
         _installSkill(installBtn.dataset.install, installBtn.dataset.source || 'clawhub', installBtn);
@@ -188,6 +212,14 @@ const SkillsView = (() => {
         _installDeps(depsBtn.dataset.installDepsName, depsBtn.dataset.installDepsId, depsBtn);
         return;
       }
+      const regCard = e.target.closest('[data-registry-card]');
+      if (regCard) {
+        const group = regCard.dataset.group;
+        const list = _registryCache[group] || [];
+        const item = list.find(r => (r.identifier || r.name) === regCard.dataset.registryCard);
+        if (item) _openRegistryDialog(item);
+        return;
+      }
       const card = e.target.closest('[data-skill-card]');
       if (card) {
         const skill = _allSkills.find(s => s.name === card.dataset.skillCard);
@@ -196,6 +228,22 @@ const SkillsView = (() => {
     });
 
     _loadData();
+  }
+
+  function _selectTab(tab, searchWrap) {
+    _activeTab = tab;
+    _el.querySelectorAll('.sk-tab').forEach(b => {
+      const active = b.dataset.tab === tab;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    _el.querySelectorAll('.sk-panel').forEach(p => { p.hidden = true; });
+    const panel = _el.querySelector('#skills-tab-' + tab);
+    if (panel) panel.hidden = false;
+    if (searchWrap) searchWrap.style.visibility = tab === 'installed' ? '' : 'hidden';
+    if ((tab === 'bankr' || tab === 'community') && _registryCache[tab] === null && !_registryLoading[tab]) {
+      _browse(tab, '');
+    }
   }
 
   function destroy() {
@@ -312,7 +360,6 @@ const SkillsView = (() => {
     Object.values(groups).forEach(_sortByReady);
 
     let html = '';
-
     _LAYER_ORDER.forEach(layer => {
       const list = groups[layer];
       if (!list || list.length === 0) return;
@@ -351,6 +398,200 @@ const SkillsView = (() => {
       <p class="sk-card__desc" title="${_esc(desc)}">${_esc(desc)}</p>
     </button>`;
   }
+
+  // ── Community / Bankr browse ───────────────────────────────────────────
+  // A "group" is bankr (source=bankr) or community (all non-bankr sources).
+
+  async function _browse(group, query) {
+    if (!_el) return;
+    _registryLoading[group] = true;
+    _renderRegistry(group); // shows loading
+    try {
+      const params = { query: (query || '').trim(), limit: 200 };
+      if (group === 'bankr') params.source = 'bankr';
+      const data = await _rpc.call('skills.search', params);
+      let results = data.results || [];
+      if (group === 'community') results = results.filter(r => r.source !== 'bankr');
+      _registryCache[group] = results;
+    } catch (err) {
+      _registryCache[group] = { error: err.message };
+    } finally {
+      _registryLoading[group] = false;
+      _renderRegistry(group);
+    }
+  }
+
+  function _categoriesFor(list) {
+    const counts = {};
+    list.forEach(r => { const c = r.category || 'other'; counts[c] = (counts[c] || 0) + 1; });
+    return counts;
+  }
+
+  function _renderRegistry(group) {
+    if (!_el) return;
+    const wrap = _el.querySelector(`[data-results="${group}"]`);
+    const chipsWrap = _el.querySelector(`[data-chips="${group}"]`);
+    if (!wrap) return;
+
+    if (_registryLoading[group]) {
+      if (chipsWrap) chipsWrap.innerHTML = '';
+      wrap.innerHTML = `<div class="sk-registry__loading"><span class="sk-spinner"></span> ${group === 'bankr' ? 'Loading Bankr catalog…' : 'Loading community catalog…'}</div>`;
+      return;
+    }
+
+    const cache = _registryCache[group];
+    if (cache && cache.error) {
+      if (chipsWrap) chipsWrap.innerHTML = '';
+      wrap.innerHTML = `<div class="sk-error">Failed to load: ${_esc(cache.error)}</div>`;
+      return;
+    }
+    const all = Array.isArray(cache) ? cache : [];
+
+    // Category chips (only when categories are meaningful — Bankr provides them).
+    if (chipsWrap) {
+      const counts = _categoriesFor(all);
+      const hasCats = Object.keys(counts).some(c => c && c !== 'other') || Object.keys(counts).length > 1;
+      if (hasCats && all.length) {
+        const cats = ['all', ...Object.keys(counts).sort((a, b) => counts[b] - counts[a])];
+        chipsWrap.innerHTML = cats.map(c => {
+          const active = _catFilter[group] === c;
+          const label = _CAT_LABEL[c] || c;
+          const count = c === 'all' ? all.length : counts[c];
+          return `<button type="button" class="sk-chip-btn${active ? ' is-active' : ''}" data-cat-chip="${_esc(c)}" data-group="${group}">${_esc(label)} <span class="sk-chip-btn__count">${count}</span></button>`;
+        }).join('');
+      } else {
+        chipsWrap.innerHTML = '';
+      }
+    }
+
+    // Apply text + category filters.
+    const q = (_registryQuery[group] || '').trim().toLowerCase();
+    const cat = _catFilter[group] || 'all';
+    let items = all;
+    if (cat !== 'all') items = items.filter(r => (r.category || 'other') === cat);
+    if (q) {
+      items = items.filter(r =>
+        (r.name || '').toLowerCase().includes(q) ||
+        (r.provider || '').toLowerCase().includes(q) ||
+        (r.description || '').toLowerCase().includes(q)
+      );
+    }
+
+    if (items.length === 0) {
+      const msg = q
+        ? `No skills match <strong>${_esc(q)}</strong>.`
+        : (group === 'bankr' ? 'No Bankr skills available right now.' : 'No community skills available right now.');
+      wrap.innerHTML = `<div class="sk-registry__hint"><p>${msg}</p></div>`;
+      return;
+    }
+
+    wrap.innerHTML = `<div class="sk-grid sk-grid--registry">${items.map(r => _renderRegistryCard(r, group)).join('')}</div>`;
+  }
+
+  function _renderRegistryCard(r, group) {
+    const badge = r.logo
+      ? `<img class="sk-rcard__logo" src="${_esc(r.logo)}" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'sk-rcard__logo sk-rcard__logo--initials',textContent:'${_esc(_initials(r.provider || r.name))}'}))" />`
+      : `<span class="sk-rcard__logo sk-rcard__logo--initials">${_esc(_initials(r.provider || r.name))}</span>`;
+    const cat = r.category && r.category !== 'other'
+      ? `<span class="sk-rcard__cat">${_esc(_CAT_LABEL[r.category] || r.category)}</span>` : '';
+    const desc = r.description || '';
+    const key = r.identifier || r.name;
+    const action = r.installed
+      ? `<span class="sk-chip sk-chip--ok">✓ Installed</span>`
+      : `<button class="btn btn--primary btn--sm" data-install="${_esc(key)}" data-source="${_esc(r.source || 'clawhub')}">Install</button>`;
+    return `<div class="sk-rcard" data-registry-card="${_esc(key)}" data-group="${group}" role="button" tabindex="0">
+      <div class="sk-rcard__head">
+        ${badge}
+        <div class="sk-rcard__titles">
+          <span class="sk-rcard__name">${_esc(r.name)}</span>
+          <span class="sk-rcard__provider">${_esc(r.provider || r.source || '')}</span>
+        </div>
+        ${cat}
+      </div>
+      <p class="sk-rcard__desc">${_esc(desc || 'View details →')}</p>
+      <div class="sk-rcard__foot">
+        <span class="sk-rcard__src sk-mono">${_esc(r.source || '')}</span>
+        ${action}
+      </div>
+    </div>`;
+  }
+
+  function _openRegistryDialog(r) {
+    const dlg = _el.querySelector('#skill-detail-dialog');
+    const body = _el.querySelector('#skill-detail-body');
+    if (!dlg || !body) return;
+
+    const badge = r.logo
+      ? `<img class="sk-dialog__logo" src="${_esc(r.logo)}" alt="" onerror="this.remove()" />`
+      : `<span class="sk-dialog__logo sk-dialog__logo--initials">${_esc(_initials(r.provider || r.name))}</span>`;
+    const trustCls = r.trust_level === 'trusted' ? 'sk-chip--ok' : 'sk-chip--warn';
+    const chips = [
+      `<span class="sk-chip ${trustCls}">${_esc(r.trust_level || 'community')}</span>`,
+      r.category && r.category !== 'other' ? `<span class="sk-chip">${_esc(_CAT_LABEL[r.category] || r.category)}</span>` : '',
+      `<span class="sk-chip sk-mono">${_esc(r.source || '')}</span>`,
+    ].join(' ');
+
+    const descHtml = r.description
+      ? `<p class="sk-dialog__desc">${_esc(r.description)}</p>`
+      : `<p class="sk-dialog__desc sk-dim">Description loads after install (from the skill's SKILL.md).</p>`;
+
+    let setupHtml = '';
+    if (Array.isArray(r.setup) && r.setup.length) {
+      setupHtml = `<div class="sk-dialog__section">
+        <div class="sk-dialog__section-title">Setup</div>
+        <ol class="sk-dialog__setup">${r.setup.map(s => `<li>${_esc(s)}</li>`).join('')}</ol>
+      </div>`;
+    }
+
+    let demoHtml = '';
+    if (r.demo && r.demo.code) {
+      const lang = r.demo.language ? `<span class="sk-dialog__demo-lang sk-mono">${_esc(r.demo.language)}</span>` : '';
+      const title = r.demo.title ? `<span class="sk-dialog__demo-title sk-mono">${_esc(r.demo.title)}</span>` : '';
+      demoHtml = `<div class="sk-dialog__section">
+        <div class="sk-dialog__section-title">Demo ${title} ${lang}</div>
+        <pre class="sk-dialog__code"><code>${_esc(r.demo.code)}</code></pre>
+      </div>`;
+    }
+
+    const homepage = r.homepage
+      ? `<a href="${_esc(r.homepage)}" target="_blank" rel="noopener" class="sk-dialog__link">Source ↗</a>`
+      : '';
+    const key = r.identifier || r.name;
+    const actionBtn = r.installed
+      ? `<span class="sk-chip sk-chip--ok">✓ Installed</span>`
+      : `<button class="btn btn--primary" data-install="${_esc(key)}" data-source="${_esc(r.source || 'clawhub')}">Install skill</button>`;
+
+    body.innerHTML = `
+      <header class="sk-dialog__head">
+        <div class="sk-dialog__head-left">
+          ${badge}
+          <div>
+            <strong class="sk-dialog__name">${_esc(r.name)}</strong>
+            <div class="sk-dialog__provider">${_esc(r.provider || '')}</div>
+          </div>
+        </div>
+        <button type="button" class="sk-iconbtn" id="skill-dialog-close" aria-label="Close">${icons.x()}</button>
+      </header>
+      <section class="sk-dialog__body">
+        <div class="sk-dialog__chips">${chips}</div>
+        ${descHtml}
+        ${setupHtml}
+        ${demoHtml}
+        ${homepage ? `<div class="sk-dialog__section">${homepage}</div>` : ''}
+      </section>
+      <footer class="sk-dialog__foot">
+        <small class="sk-dim sk-mono sk-dialog__path">${_esc(key)}</small>
+        ${actionBtn}
+      </footer>`;
+
+    const closeBtn = body.querySelector('#skill-dialog-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => dlg.close(), { once: true });
+    if (dlg.open) dlg.close();
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
+  }
+
+  // ── Installed skill detail dialog ──────────────────────────────────────
 
   function _renderRequirements(requirements) {
     const items = requirements && Array.isArray(requirements.items) ? requirements.items : [];
@@ -510,60 +751,6 @@ const SkillsView = (() => {
     }
   }
 
-  function _initials(text) {
-    const words = (text || '').trim().split(/\s+/).filter(Boolean);
-    if (!words.length) return '?';
-    return (words[0][0] + (words[1] ? words[1][0] : '')).toUpperCase();
-  }
-
-  function _providerCell(r) {
-    const provider = r.provider || '';
-    const badge = r.logo
-      ? `<img class="sk-registry__logo" src="${_esc(r.logo)}" alt="" loading="lazy" onerror="this.remove()" />`
-      : `<span class="sk-registry__logo sk-registry__logo--initials">${_esc(_initials(provider || r.name))}</span>`;
-    return `<span class="sk-registry__provider">${badge}<span>${_esc(provider || '—')}</span></span>`;
-  }
-
-  async function _searchRegistry(query) {
-    if (!_el || !_rpc) return;
-    const q = (query || '').trim();
-    const browsing = q === '';
-    const wrap = _el.querySelector('#skills-registry-results');
-    if (!wrap) return;
-    wrap.innerHTML = `<div class="sk-registry__loading"><span class="sk-spinner"></span> ${browsing ? 'Loading community catalog…' : 'Searching community skills…'}</div>`;
-
-    try {
-      const data = await _rpc.call('skills.search', { query: q, limit: browsing ? 200 : 40 });
-      const results = data.results || [];
-      if (results.length === 0) {
-        wrap.innerHTML = browsing
-          ? `<div class="sk-registry__hint"><p>No community skills available right now. Try again shortly.</p></div>`
-          : `<div class="sk-registry__hint"><p>No results for <strong>${_esc(q)}</strong>. Try a different query.</p></div>`;
-        return;
-      }
-      let html = '<table class="sk-registry__table"><thead><tr><th>Name</th><th>Provider</th><th>Description</th><th>Source</th><th>Trust</th><th></th></tr></thead><tbody>';
-      results.forEach(r => {
-        const trustCls = r.trust_level === 'trusted' ? 'sk-chip--ok' : 'sk-chip--warn';
-        const trustChip = `<span class="sk-chip ${trustCls}">${_esc(r.trust_level || 'community')}</span>`;
-        const actionCell = r.installed
-          ? `<button class="btn btn--sm" disabled>✓ Installed</button>`
-          : `<button class="btn btn--primary btn--sm" data-install="${_esc(r.identifier || r.name)}" data-source="${_esc(r.source || 'clawhub')}">Install</button>`;
-        html += `<tr>
-          <td class="sk-registry__name">${_esc(r.name)}</td>
-          <td>${_providerCell(r)}</td>
-          <td class="sk-registry__desc">${_esc((r.description || '').slice(0, 80))}</td>
-          <td class="sk-mono sk-dim">${_esc(r.source || '')}</td>
-          <td>${trustChip}</td>
-          <td>${actionCell}</td>
-        </tr>`;
-      });
-      html += '</tbody></table>';
-      wrap.innerHTML = html;
-    } catch (err) {
-      wrap.innerHTML = `<div class="sk-error">Search failed: ${_esc(err.message)}</div>`;
-    }
-  }
-
   async function _installSkill(identifier, source, btn) {
     if (!_rpc) return;
     btn.disabled = true;
@@ -573,13 +760,17 @@ const SkillsView = (() => {
       if (res.success) {
         btn.textContent = '✓ Installed';
         btn.classList.remove('btn--primary');
+        // Invalidate registry caches so the "installed" badge refreshes.
+        _registryCache = { bankr: null, community: null };
         _loadData();
       } else {
         btn.textContent = 'Failed';
+        btn.disabled = false;
         UI.toast(res.message || 'Install failed', 'err');
       }
     } catch (err) {
       btn.textContent = 'Error';
+      btn.disabled = false;
       UI.toast(err.message, 'err');
     }
   }
@@ -590,9 +781,27 @@ const SkillsView = (() => {
     btn.textContent = 'Removing…';
     try {
       const res = await _rpc.call('skills.uninstall', { name });
-      if (res.success) { _loadData(); }
+      if (res.success) { _registryCache = { bankr: null, community: null }; _loadData(); }
       else { btn.textContent = 'Failed'; UI.toast(res.message || 'Uninstall failed', 'err'); }
     } catch (err) { btn.textContent = 'Error'; UI.toast(err.message, 'err'); }
+  }
+
+  // ── helpers ────────────────────────────────────────────────────────────
+
+  function _debounce(fn, ms) {
+    let t = null;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  }
+
+  function _initials(text) {
+    const words = (text || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return '?';
+    return (words[0][0] + (words[1] ? words[1][0] : '')).toUpperCase();
+  }
+
+  function _bankrGlyph(size = 16) {
+    // Simple square "B" mark that reads as a partner badge in the app's accent.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 8h4a2 2 0 0 1 0 4H9zm0 4h4.5a2 2 0 0 1 0 4H9z"/></svg>`;
   }
 
   function _esc(s) {

@@ -16,22 +16,32 @@ def _catalog(slug: str, *, install_type: str = "bankr", logo: str | None = None)
             "provider": slug.title(),
             "providerUrl": f"https://{slug}.example",
             "logo": logo,
+            "setup": [f"Install {slug}", "Set env var"],
+            "demo": {"title": f"{slug}.sh", "language": "bash", "code": f"{slug} run"},
             "install": {"type": install_type, "repoPath": slug},
         }
     ).encode("utf-8")
 
 
 class _Response:
-    def __init__(self, *, json_data: dict[str, Any] | None = None, content: bytes = b"") -> None:
+    def __init__(
+        self,
+        *,
+        json_data: dict[str, Any] | None = None,
+        content: bytes = b"",
+        status_code: int = 200,
+    ) -> None:
         self._json_data = json_data or {}
         self.content = content
         self.text = content.decode("utf-8", errors="replace")
+        self.status_code = status_code
 
     def json(self) -> dict[str, Any]:
         return self._json_data
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 class _AsyncClient:
@@ -115,6 +125,26 @@ async def test_search_builds_provider_logo_and_identifier(monkeypatch) -> None:
 
     # Null logo in the catalog → empty logo (UI renders initials).
     assert by_name["bankr"].logo == ""
+
+
+@pytest.mark.asyncio
+async def test_search_carries_catalog_setup_demo_and_category(monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _AsyncClient)
+
+    results = await BankrSource().search("")
+    bankr = next(r for r in results if r.name == "bankr")
+
+    assert bankr.setup == ["Install bankr", "Set env var"]
+    assert bankr.demo == {"title": "bankr.sh", "language": "bash", "code": "bankr run"}
+    # Category is inferred from slug/provider keywords; always non-empty.
+    assert bankr.category
+    from agentos.skills.hub.bankr import _infer_category
+
+    assert _infer_category("uniswap", "Uniswap") == "trading"
+    assert _infer_category("aeon-defi-monitor", "Aeon") == "defi"
+    assert _infer_category("zzz-unknown", "Nobody") == "other"
 
 
 @pytest.mark.asyncio
