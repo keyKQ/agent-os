@@ -46,7 +46,7 @@ def test_composer_input_bar_is_floating_pill() -> None:
     start = css.index(".chat-input-bar {")
     block = css[start : css.index("}", start)]
     assert "border-radius: 22px;" in block
-    assert "border: 1px solid var(--border);" in block
+    assert "border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));" in block
     assert "box-shadow:" in block
     assert "border-top:" not in block
 
@@ -159,3 +159,41 @@ def test_popover_surfaces_share_palette_language() -> None:
     dock_start = css.index(".chat-routerfx-dock {")
     dock_block = css[dock_start : css.index("}", dock_start)]
     assert "max-height" in dock_block
+
+
+def test_settings_gear_is_first_child_of_input_bar() -> None:
+    js = _js()
+    bar_start = js.index('<div class="chat-input-bar">')
+    bar_end = js.index('<div class="chat-routerfx-dock"', bar_start)
+    bar = js[bar_start:bar_end]
+    # The toolbar wrap (gear) appears before the attach button.
+    assert bar.index('class="chat-toolbar-wrap"') < bar.index('id="chat-btn-attach"')
+
+
+def test_export_button_lives_in_topbar_not_pill() -> None:
+    js = _js()
+    # Export button is emitted in the topbar block, right after copy-session.
+    topbar_start = js.index('<label class="chat-label">Chat session</label>')
+    topbar_end = js.index('_el.innerHTML', topbar_start)
+    topbar = js[topbar_start:topbar_end]
+    assert 'id="chat-btn-export"' in topbar
+    assert topbar.index('id="chat-session-copy"') < topbar.index('id="chat-btn-export"')
+
+    # It is NOT inside the input bar anymore.
+    bar_start = js.index('<div class="chat-input-bar">')
+    bar_end = js.index('<div class="chat-routerfx-dock"', bar_start)
+    bar = js[bar_start:bar_end]
+    assert 'id="chat-btn-export"' not in bar
+
+
+def test_input_pill_has_accent_glow() -> None:
+    css = _css()
+    start = css.index(".chat-input-bar {")
+    block = css[start : css.index("}", start)]
+    # Rest-state box-shadow includes an accent-tinted halo layer.
+    assert "var(--accent)" in block
+
+    assert ".chat-input-bar:focus-within" in css
+    focus_start = css.index(".chat-input-bar:focus-within")
+    focus_block = css[focus_start : css.index("}", focus_start)]
+    assert "var(--accent)" in focus_block

@@ -1224,6 +1224,7 @@ const ChatView = (() => {
           <span class="chat-session-chip-caret" aria-hidden="true">${_iconChevronDown()}</span>
         </button>
         <button class="chat-session-copy-btn" id="chat-session-copy" title="Copy session key" aria-label="Copy session key">${icons.copy()}</button>
+        <button class="btn btn--icon btn--ghost chat-topbar-export" id="chat-btn-export" title="Export as Markdown" aria-label="Export as Markdown">${icons.download()}</button>
         <span class="chip" id="chat-run-status" title="Idle">Idle</span>
         <span class="chat-ctx-warn hidden" id="chat-ctx-warn">Request ctx</span>`;
       topbarCenter.classList.remove('hidden');
@@ -1244,7 +1245,6 @@ const ChatView = (() => {
           <div class="chat-attachments hidden" id="chat-attach-preview"></div>
           <div class="chat-slash hidden" id="chat-slash"></div>
           <div class="chat-input-bar">
-            <button class="btn btn--icon btn--ghost" id="chat-btn-attach" title="Attach files: PNG, JPEG, GIF, WEBP, PDF, TXT, MD, HTML, CSV, JSON" aria-label="Attach files">${icons.paperclip()}</button>
             <div class="chat-toolbar-wrap">
               <button type="button" class="btn btn--icon btn--ghost chat-toolbar-trigger" id="chat-toolbar-trigger"
                       title="Run modes — execution, router"
@@ -1280,6 +1280,7 @@ const ChatView = (() => {
                 </div>
               </div>
             </div>
+            <button class="btn btn--icon btn--ghost" id="chat-btn-attach" title="Attach files: PNG, JPEG, GIF, WEBP, PDF, TXT, MD, HTML, CSV, JSON" aria-label="Attach files">${icons.paperclip()}</button>
             <div class="chat-input-wrap">
               <span class="chat-input-glyph" aria-hidden="true">&gt;</span>
               <textarea class="chat-textarea" id="chat-textarea" rows="1"
@@ -1288,7 +1289,6 @@ const ChatView = (() => {
             </div>
             <button class="btn btn--icon btn--ghost" id="chat-btn-mic" title="Record voice input" aria-label="Record voice input">${icons.microphone ? icons.microphone() : icons.chat()}</button>
             <button class="btn btn--icon btn--ghost" id="chat-btn-new" title="New chat session in the current agent" aria-label="New chat session in the current agent">${icons.plus()}</button>
-            <button class="btn btn--icon btn--ghost" id="chat-btn-export" title="Export as Markdown" aria-label="Export as Markdown">${icons.download()}</button>
             <button class="btn btn--icon btn--primary" id="chat-btn-send" title="Send (queues while streaming)" aria-label="Send message">${icons.send()}</button>
             <button class="btn btn--icon btn--danger hidden" id="chat-btn-stop" title="Stop current response (Esc)" aria-label="Stop current response">${icons.stop()}</button>
           </div>
@@ -2347,7 +2347,7 @@ const ChatView = (() => {
   function _bindEvents() {
     const attachBtn = _el.querySelector('#chat-btn-attach');
     const newBtn    = _el.querySelector('#chat-btn-new');
-    const exportBtn = _el.querySelector('#chat-btn-export');
+    const exportBtn = document.getElementById('chat-btn-export');
 
     // Send
     _sendBtn.addEventListener('click', _onSend);
@@ -2383,7 +2383,7 @@ const ChatView = (() => {
     });
 
     // Export
-    exportBtn.addEventListener('click', _exportMarkdown);
+    if (exportBtn) exportBtn.addEventListener('click', _exportMarkdown);
 
     // File picker
     attachBtn.addEventListener('click', () => _fileInput.click());
