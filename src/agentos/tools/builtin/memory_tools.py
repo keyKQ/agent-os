@@ -20,6 +20,8 @@ Usage (multi-agent routing):
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Final, NamedTuple
 
 import structlog
 
+from agentos.memory.curated import CuratedMemoryStore
 from agentos.memory.redaction import redact_memory_text
 from agentos.memory.source_paths import is_memory_source_path, is_searchable_source_path
 from agentos.memory.types import (
@@ -388,6 +391,32 @@ def create_memory_tools(
             wd = memory_dir  # fallback: use memory_dir as workspace in test/legacy mode
         return ResolvedAgent(store=s, retriever=r, memory_dir=md, workspace_dir=wd)
 
+    _curated_stores: dict[str, CuratedMemoryStore] = {}
+    _curated_memory_char_limit = getattr(memory_config, "curated_memory_char_limit", 4000)
+    _curated_user_char_limit = getattr(memory_config, "curated_user_char_limit", 2000)
+
+    def _curated_store_for(r: ResolvedAgent) -> CuratedMemoryStore:
+        """Return the curated store for r's workspace root, building it once.
+
+        The curated store's ``memory_dir`` is the workspace root -- the same
+        directory ``memory_save`` resolves MEMORY.md/USER.md against (see
+        ``_resolve_memory_path`` / ``_is_memory_source_path``), not the
+        ``memory/`` subfolder used for daily notes.
+        """
+        if not r.workspace_dir:
+            raise ToolError("workspace directory not configured.")
+        key = str(Path(r.workspace_dir))
+        curated = _curated_stores.get(key)
+        if curated is None:
+            curated = CuratedMemoryStore(
+                memory_dir=Path(r.workspace_dir),
+                memory_char_limit=_curated_memory_char_limit,
+                user_char_limit=_curated_user_char_limit,
+            )
+            curated.load_from_disk()
+            _curated_stores[key] = curated
+        return curated
+
     @dataclass(frozen=True)
     class PlannedWrite:
         path: str
@@ -417,10 +446,11 @@ def create_memory_tools(
     def _validate_memory_save_target(path: str, mode: str) -> None:
         if not _is_memory_save_path(path):
             raise ToolError(f"invalid memory path. {_MEMORY_SOURCE_PATH_HINT}")
-        if path == "MEMORY.md" and mode != "replace":
+        if path == "MEMORY.md":
             raise ToolError(
-                "MEMORY.md must use mode='replace'. "
-                "Read it first, then write the full updated content."
+                "MEMORY.md is managed by the `memory` tool now. Use "
+                "memory(action=add, ...) for durable facts; memory_save is for "
+                "memory/**/*.md notes."
             )
 
     def _ensure_clean_memory_content(content: str, path: str) -> None:
@@ -674,21 +704,22 @@ def create_memory_tools(
     @tool(
         name="memory_save",
         description=(
-            "Save content to memory source files for future recall. This is not "
-            "for ordinary task deliverables such as reports, JSON outputs, or "
-            "result files. Use MEMORY.md for long-term facts (mode=replace) and "
-            "memory/YYYY-MM-DD.md for daily notes (mode=append). Profile/bootstrap "
-            "files such as USER.md are edited with filesystem tools, not memory_save."
+            "Save content to memory/**/*.md source files for future recall. This is "
+            "not for ordinary task deliverables such as reports, JSON outputs, or "
+            "result files. Use memory/YYYY-MM-DD.md for daily notes (mode=append). "
+            "For durable long-term facts, use the `memory` tool instead -- MEMORY.md "
+            "is managed there, not with memory_save. Profile/bootstrap files such as "
+            "USER.md are edited with filesystem tools, not memory_save."
         ),
         params={
             "content": {"type": "string", "description": "Content to save"},
             "path": {
                 "type": "string",
                 "description": (
-                    "MEMORY.md (long-term, mode=replace) or "
                     "memory/YYYY-MM-DD.md / memory/<name>.md "
                     "(daily or named memory source, mode=append). "
-                    "Defaults to today's daily note."
+                    "Defaults to today's daily note. MEMORY.md is not accepted here "
+                    "-- use the `memory` tool for long-term facts."
                 ),
             },
             "mode": {
@@ -720,6 +751,180 @@ def create_memory_tools(
             on_memory_write(_aid)
         integrity = "ok" if chunks[path] > 0 else "missing_chunks"
         return f"Saved to {path} ({chunks[path]} chunks indexed; integrity={integrity})."
+
+    def _missing_old_text_error(store: CuratedMemoryStore, target: str, action: str) -> str:
+        """Build a recoverable error for a replace/remove call missing old_text.
+
+        ``replace``/``remove`` are inherently targeted -- without ``old_text``
+        there is no entry to act on. Rather than a dead-end "old_text is
+        required" error, return the current entry inventory plus an explicit
+        retry instruction so the model can reissue the call with ``old_text``
+        set to a unique substring of the entry it means. Ported from hermes
+        ``memory_tool.py::_missing_old_text_error`` (see NOTICE).
+        """
+        entries = store.entries_for(target)
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    f"'{action}' needs old_text -- a short unique substring of the "
+                    f"entry to {action}. None was provided. Reissue the {action} "
+                    f"with old_text set to part of one of the current_entries below."
+                ),
+                "current_entries": entries,
+            },
+            ensure_ascii=False,
+        )
+
+    @tool(
+        name="memory",
+        description=(
+            "Save durable facts to persistent memory that survive across sessions. Memory is "
+            "injected into every future turn, so keep entries compact and high-signal.\n\n"
+            "HOW: make ALL your changes in ONE call via an 'operations' array (each item: "
+            "{action, content?, old_text?}). The batch applies atomically and the char limit is "
+            "checked only on the FINAL result — so a single call can remove/replace stale entries "
+            "to free room AND add new ones, even when an add alone would overflow. The response "
+            "reports current/limit chars and confirms completion; one batch call finishes the "
+            "update, so don't repeat it. Use the bare action/content/old_text fields only for a "
+            "single lone change.\n\n"
+            "WHEN: save proactively when the user states a preference, correction, or personal "
+            "detail, or you learn a stable fact about their environment, conventions, or workflow. "
+            "Priority: user preferences & corrections > environment facts > procedures. The best "
+            "memory stops the user repeating themselves.\n\n"
+            "IF FULL: an add is rejected with the current entries shown. Reissue as ONE batch that "
+            "removes or shortens enough stale entries and adds the new one together.\n\n"
+            "TARGETS: 'user' = who the user is (name, role, preferences, style). 'memory' = your "
+            "notes (environment, conventions, tool quirks, lessons).\n\n"
+            "SKIP: trivial/obvious info, easily re-discovered facts, raw data dumps, task "
+            "progress, completed-work logs, temporary TODO state (use session_search for "
+            "those). Reusable procedures belong in a skill, not memory."
+        ),
+        params={
+            "action": {
+                "type": "string",
+                "enum": ["add", "replace", "remove"],
+                "description": (
+                    "The action to perform (single-op shape). Omit when using 'operations'."
+                ),
+            },
+            "target": {
+                "type": "string",
+                "enum": ["memory", "user"],
+                "description": (
+                    "Which memory store: 'memory' for personal notes, 'user' for user profile."
+                ),
+            },
+            "content": {
+                "type": "string",
+                "description": (
+                    "The entry content. Required for 'add' and 'replace' (single-op shape)."
+                ),
+            },
+            "old_text": {
+                "type": "string",
+                "description": (
+                    "REQUIRED for 'replace' and 'remove' (single-op shape): a short unique "
+                    "substring identifying the existing entry to modify. Omit only for 'add'."
+                ),
+            },
+            "operations": {
+                "type": "array",
+                "description": (
+                    "Batch shape: a list of operations applied atomically in one call "
+                    "against the final char budget. Preferred when making multiple changes "
+                    "or consolidating to make room. Each item is {action, content?, old_text?}."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["add", "replace", "remove"]},
+                        "content": {
+                            "type": "string",
+                            "description": "Entry content for add/replace.",
+                        },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Substring identifying the entry for replace/remove.",
+                        },
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+        required=[],
+        registry=registry,
+    )
+    async def memory(
+        action: str | None = None,
+        target: str | None = "memory",
+        content: str | None = None,
+        old_text: str | None = None,
+        operations: list[dict[str, Any]] | None = None,
+    ) -> str:
+        r = _resolve()
+        store = _curated_store_for(r)
+
+        # Some strict providers fill optional schema fields with JSON null
+        # rather than omitting them. Treat target: null as omitted so writes
+        # still use the documented default store instead of failing.
+        if target is None:
+            target = "memory"
+
+        if target not in {"memory", "user"}:
+            return json.dumps(
+                {"success": False, "error": f"Invalid target '{target}'. Use 'memory' or 'user'."},
+                ensure_ascii=False,
+            )
+
+        # --- Batch path ----------------------------------------------------
+        if operations:
+            if not isinstance(operations, list):
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": (
+                            "operations must be a list of "
+                            "{action, content?, old_text?} objects."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            result = await asyncio.to_thread(store.apply_batch, target, operations)
+            return json.dumps(result, ensure_ascii=False)
+
+        # --- Single-op path --------------------------------------------------
+        if action == "add" and not content:
+            return json.dumps(
+                {"success": False, "error": "Content is required for 'add' action."},
+                ensure_ascii=False,
+            )
+        if action == "replace" and (not old_text or not content):
+            if not old_text:
+                return _missing_old_text_error(store, target, "replace")
+            return json.dumps(
+                {"success": False, "error": "content is required for 'replace' action."},
+                ensure_ascii=False,
+            )
+        if action == "remove" and not old_text:
+            return _missing_old_text_error(store, target, "remove")
+
+        if action == "add":
+            result = await asyncio.to_thread(store.add, target, content or "")
+        elif action == "replace":
+            result = await asyncio.to_thread(store.replace, target, old_text or "", content or "")
+        elif action == "remove":
+            result = await asyncio.to_thread(store.remove, target, old_text or "")
+        else:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"Unknown action '{action}'. Use: add, replace, remove",
+                },
+                ensure_ascii=False,
+            )
+
+        return json.dumps(result, ensure_ascii=False)
 
     @tool(
         name="memory_get",
@@ -835,6 +1040,7 @@ def create_memory_tools(
         tools=[
             "memory_search",
             "memory_save",
+            "memory",
             "memory_get",
             "memory_delete",
         ],
