@@ -1,6 +1,11 @@
 /** AgentOS Web UI — Skills Management view. */
 
 const SkillsView = (() => {
+  // Show/hide the Bankr partner tab in the Skills view. Set to true to bring
+  // the tab back — the BankrSource backend (browse/search/install) stays wired
+  // either way, so Bankr skills remain reachable via the Community tab / CLI.
+  const _SHOW_BANKR = false;
+
   let _el = null;
   let _rpc = null;
   let _unsubs = [];
@@ -84,7 +89,7 @@ const SkillsView = (() => {
             <div class="sk-hero__intro">
               <span class="sk-hero__eyebrow">${icons.skills()}<span>Control · Skills</span></span>
               <h2 class="sk-hero__title">Skills</h2>
-              <p class="sk-hero__subtitle">Composable agent capabilities — bundled packs, the Bankr partner catalog, and the wider community.</p>
+              <p class="sk-hero__subtitle">Composable agent capabilities — bundled packs, partner catalogs, and the wider community.</p>
             </div>
             <div class="sk-hero__actions">
               <div class="sk-search-wrap" id="sk-search-wrap">
@@ -101,7 +106,7 @@ const SkillsView = (() => {
 
         <div class="sk-tabs" role="group" aria-label="Skill source">
           <button class="sk-tab is-active" data-tab="installed" aria-pressed="true">${icons.skills()}<span>Installed</span></button>
-          <button class="sk-tab sk-tab--bankr" data-tab="bankr" aria-pressed="false">${_bankrGlyph()}<span>Bankr</span></button>
+          ${_SHOW_BANKR ? `<button class="sk-tab sk-tab--bankr" data-tab="bankr" aria-pressed="false">${_bankrGlyph()}<span>Bankr</span></button>` : ''}
           <button class="sk-tab sk-tab--robinhood" data-tab="robinhood" aria-pressed="false">${_robinhoodGlyph()}<span>Robinhood</span></button>
           <button class="sk-tab" data-tab="community" aria-pressed="false">${icons.download()}<span>Community</span></button>
         </div>
@@ -110,6 +115,7 @@ const SkillsView = (() => {
           <div id="skills-installed-wrap"></div>
         </div>
 
+        ${_SHOW_BANKR ? `
         <div id="skills-tab-bankr" class="sk-panel" hidden>
           <div class="sk-partner">
             <div class="sk-partner__mark">${_bankrGlyph(48)}</div>
@@ -129,7 +135,7 @@ const SkillsView = (() => {
             <div class="sk-chips" data-chips="bankr"></div>
             <div class="sk-browse__results" data-results="bankr"></div>
           </div>
-        </div>
+        </div>` : ''}
 
         <div id="skills-tab-robinhood" class="sk-panel" hidden>
           <div class="sk-partner sk-partner--robinhood">
@@ -486,7 +492,12 @@ const SkillsView = (() => {
   }
 
   // ── Community / Bankr browse ───────────────────────────────────────────
-  // A "group" is bankr (source=bankr) or community (all non-bankr sources).
+  // A "group" is bankr (source=bankr) or community. Community excludes Bankr
+  // only while the dedicated Bankr tab is showing; when that tab is hidden,
+  // Bankr skills fall through into Community so they stay reachable.
+  function _communityFilter(results) {
+    return _SHOW_BANKR ? results.filter(r => r.source !== 'bankr') : results;
+  }
 
   async function _browse(group) {
     if (!_el) return;
@@ -498,7 +509,7 @@ const SkillsView = (() => {
       if (group === 'bankr') params.source = 'bankr';
       const data = await _rpc.call('skills.search', params);
       let results = data.results || [];
-      if (group === 'community') results = results.filter(r => r.source !== 'bankr');
+      if (group === 'community') results = _communityFilter(results);
       _registryCache[group] = results;
     } catch (err) {
       // Leave the cache null so the next tab entry retries automatically.
@@ -519,7 +530,7 @@ const SkillsView = (() => {
     let results = [];
     try {
       const data = await _rpc.call('skills.search', { query, limit: 100 });
-      results = (data.results || []).filter(r => r.source !== 'bankr');
+      results = _communityFilter(data.results || []);
     } catch (err) {
       results = [];
     }

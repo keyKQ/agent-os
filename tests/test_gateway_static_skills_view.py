@@ -27,16 +27,19 @@ def test_skills_view_browses_community_catalog_without_source_picker() -> None:
     assert "_communitySeq" in view
 
 
-def test_skills_view_has_dedicated_bankr_tab() -> None:
+def test_skills_view_bankr_tab_is_flag_gated_and_hidden_by_default() -> None:
     view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
 
-    # A dedicated Bankr partner tab, distinct from generic Community.
-    assert 'data-tab="bankr"' in view
-    assert 'id="skills-tab-bankr"' in view
+    # The Bankr partner tab is behind a flag that is off by default (hidden
+    # from the UI) while the browse machinery stays wired for when it returns.
+    assert "const _SHOW_BANKR = false;" in view
+    assert 'data-tab="bankr"' in view  # markup preserved behind the flag
     assert "Bankr partner catalog" in view
-    # Bankr browse pins source=bankr; community filters bankr out.
     assert "params.source = 'bankr'" in view
-    assert "results.filter(r => r.source !== 'bankr')" in view
+    # Community only excludes Bankr while the Bankr tab is showing; otherwise
+    # Bankr skills fall through into Community so they stay reachable.
+    assert "_communityFilter" in view
+    assert "_SHOW_BANKR ? results.filter(r => r.source !== 'bankr') : results" in view
 
 
 def test_skills_view_has_dedicated_robinhood_tab() -> None:
