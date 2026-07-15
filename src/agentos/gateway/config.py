@@ -535,6 +535,12 @@ class MemoryConfig(BaseSettings):
     # Dream consolidation
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
+    # Curated memory (hermes-style bounded entry stores). Char budgets for the
+    # always-injected MEMORY.md / USER.md files. Chars, not tokens — char
+    # counts are model-independent.
+    curated_memory_char_limit: int = 4000
+    curated_user_char_limit: int = 2000
+
 
 def _default_tiers() -> dict:
     """Default model routing config.

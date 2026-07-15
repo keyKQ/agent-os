@@ -133,6 +133,12 @@ source = "workspace"
 # capture_assistant = false
 # capture_excluded_run_kinds = ["recall", "session_recall"]
 # capture_excluded_provenance_kinds = ["recall", "tool_result", "memory_injected"]
+#
+# Curated memory: MEMORY.md (agent notes) and USER.md (user profile) are
+# bounded entry stores injected into every system prompt. When full, the
+# agent consolidates via the `memory` tool instead of growing unbounded.
+# curated_memory_char_limit = 4000
+# curated_user_char_limit = 2000
 
 [memory.dream]
 # Dream consolidation is safety-first by default. Background scheduling and
