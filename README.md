@@ -15,7 +15,7 @@
   <a href="https://x.com/useAgentOS"><img src="https://img.shields.io/badge/follow-%40useAgentOS-CCFF00?style=for-the-badge&logo=x&logoColor=black" alt="Follow @useAgentOS on X"></a>
   <a href="https://github.com/use-agent-os/agent-os/releases"><img src="https://img.shields.io/github/v/release/use-agent-os/agent-os?include_prereleases&style=for-the-badge&color=CCFF00" alt="GitHub release"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.12%2B-CCFF00?style=for-the-badge" alt="Python 3.12+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-CCFF00?style=for-the-badge" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-CCFF00?style=for-the-badge" alt="Apache-2.0 License"></a>
 </p>
 
 ---
@@ -584,10 +584,14 @@ agentos gateway restart
 
 ## Credits
 
-AgentOS took ideas from
-[OpenClaw](https://github.com/openclaw/openclaw). Other tools and
-code used inside AgentOS are credited in
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+AgentOS is built on
+[OpenSquilla](https://github.com/opensquilla/opensquilla)
+(Apache-2.0) and influenced by
+[OpenClaw](https://github.com/openclaw/openclaw) and
+[Hermes Agent](https://github.com/NousResearch/hermes-agent). Other
+tools and code used inside AgentOS are credited in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the root
+[`NOTICE`](NOTICE) file.
 
 ---
 
@@ -600,4 +604,4 @@ request on
 [GitHub](https://github.com/use-agent-os/agent-os).
 
 [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) ·
-[Support](SUPPORT.md) · [License](LICENSE) (MIT)
+[Support](SUPPORT.md) · [License](LICENSE) (Apache-2.0)
