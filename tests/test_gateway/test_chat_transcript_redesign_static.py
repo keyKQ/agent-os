@@ -134,3 +134,14 @@ def test_cmd_k_opens_session_palette_and_is_torn_down() -> None:
     assert "_sessionPaletteKeyHandler" in js
     assert js.count("_sessionPaletteKeyHandler") >= 3  # declare, add, remove
     assert "e.key.toLowerCase() === 'k'" in js
+
+
+def test_popover_surfaces_share_palette_language() -> None:
+    css = _css()
+    slash_start = css.index(".chat-slash-item {")
+    slash_block = css[slash_start : css.index("}", slash_start)]
+    assert "font-family: var(--font-mono);" in slash_block
+
+    dock_start = css.index(".chat-routerfx-dock {")
+    dock_block = css[dock_start : css.index("}", dock_start)]
+    assert "max-height" in dock_block

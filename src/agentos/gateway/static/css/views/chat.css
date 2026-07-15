@@ -157,7 +157,7 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.40), 0 2px 8px rgba(0, 0, 0, 0.20);
   display: flex;
   flex-direction: column;
-  width: 320px;
+  width: 360px;
   max-height: 380px;
   overflow: hidden;
   font-family: var(--font-sans);
@@ -1841,7 +1841,8 @@
   min-width: 0;
   min-height: 42px;
   cursor: pointer;
-  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
   transition: background var(--transition);
 }
 
@@ -2336,6 +2337,8 @@
   max-width: var(--chat-measure);
   margin: 0 auto;
   padding: 0 var(--sp-4);
+  max-height: 220px;
+  overflow-y: auto;
 }
 .chat-routerfx-dock:empty { display: none; }
 .chat-routerfx-dock > .router-fx {
