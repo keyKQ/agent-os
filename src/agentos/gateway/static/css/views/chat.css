@@ -517,10 +517,10 @@
 }
 
 .chat-subagent-disclosure {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--ok);
-  border-radius: var(--radius-md);
+  background: none;
+  border: 0;
+  border-left: 1px solid var(--ok);
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -904,10 +904,10 @@
 
 /* Thinking indicator bubble */
 .msg.thinking .msg-body {
-  background: var(--bg-surface);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--radius-lg);
-  padding: var(--sp-3) var(--sp-4);
+  background: none;
+  border-left: 2px solid var(--accent);
+  border-radius: 0;
+  padding: var(--sp-1) var(--sp-4);
   box-shadow: none;
   animation: msgFadeIn 150ms ease;
 }
