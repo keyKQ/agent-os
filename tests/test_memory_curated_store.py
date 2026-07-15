@@ -179,3 +179,46 @@ def test_roundtrip_mismatch_drift_blocks_replace(store: CuratedMemoryStore, tmp_
     assert result["success"] is False
     assert "drift_backup" in result
     assert list(tmp_path.glob("MEMORY.md.bak.*"))
+
+
+def test_snapshot_block_renders_header_and_entries(store: CuratedMemoryStore):
+    store.add("memory", "fact A")
+    store.load_from_disk()  # snapshot captured at load
+    block = store.snapshot_block("memory")
+    assert block is not None
+    assert "MEMORY (your personal notes)" in block
+    assert "fact A" in block
+
+
+def test_snapshot_is_frozen_after_load(store: CuratedMemoryStore):
+    store.add("memory", "fact A")
+    store.load_from_disk()
+    store.add("memory", "fact B")  # mid-session write
+    assert "fact B" not in (store.snapshot_block("memory") or "")
+
+
+def test_snapshot_empty_returns_none(store: CuratedMemoryStore):
+    store.load_from_disk()
+    assert store.snapshot_block("memory") is None
+
+
+def test_poisoned_on_disk_entry_is_blocked_in_snapshot_only(
+    store: CuratedMemoryStore, tmp_path: Path, monkeypatch
+):
+    from agentos.memory import curated
+
+    (tmp_path / "MEMORY.md").write_text("normal entry" + ENTRY_DELIMITER + "EVIL")
+    monkeypatch.setattr(
+        curated, "_scan", lambda c: "threat: test-pattern" if c == "EVIL" else None
+    )
+    store.load_from_disk()
+    block = store.snapshot_block("memory") or ""
+    assert "EVIL" not in block
+    assert "[BLOCKED:" in block
+    assert "EVIL" in store.entries_for("memory")  # live state keeps original
+
+
+def test_user_snapshot_header_is_user_profile(store: CuratedMemoryStore):
+    store.add("user", "Name: Key")
+    store.load_from_disk()
+    assert "USER PROFILE" in (store.snapshot_block("user") or "")

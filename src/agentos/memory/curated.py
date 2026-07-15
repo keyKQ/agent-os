@@ -60,13 +60,37 @@ class CuratedMemoryStore:
         self.memory_entries: list[str] = []
         self.user_entries: list[str] = []
         self._consolidation_failures = 0
+        # Frozen snapshot for system-prompt injection -- set once per
+        # load_from_disk() call and never mutated by mid-session writes.
+        self._snapshot: dict[str, str] = {}
 
     # -- loading ----------------------------------------------------------
 
     def load_from_disk(self) -> None:
+        """Load entries from disk and capture a frozen system-prompt snapshot.
+
+        The snapshot is what enters the system prompt. Each entry is scanned
+        for injection/exfil threat patterns at snapshot-build time -- any hit
+        replaces the entry text in the snapshot with a ``[BLOCKED: ...]``
+        placeholder, so a poisoned on-disk memory file (supply chain,
+        compromised tool, sister-session write) cannot inject into the
+        system prompt. The live ``memory_entries`` / ``user_entries`` lists
+        keep the original text so the user can inspect and remove poisoned
+        entries via the memory tool.
+
+        Scanning is deterministic from disk bytes, so the snapshot remains
+        stable for the entire session (prefix-cache invariant holds).
+        """
         self._memory_dir.mkdir(parents=True, exist_ok=True)
         self.memory_entries = list(dict.fromkeys(self._read_file(self._path_for("memory"))))
         self.user_entries = list(dict.fromkeys(self._read_file(self._path_for("user"))))
+
+        sanitized_memory = self._sanitize_entries_for_snapshot(self.memory_entries, "MEMORY.md")
+        sanitized_user = self._sanitize_entries_for_snapshot(self.user_entries, "USER.md")
+        self._snapshot = {
+            "memory": self._render_block("memory", sanitized_memory),
+            "user": self._render_block("user", sanitized_user),
+        }
 
     def reset_consolidation_failures(self) -> None:
         self._consolidation_failures = 0
@@ -76,6 +100,16 @@ class CuratedMemoryStore:
     def entries_for(self, target: str) -> list[str]:
         # Return a copy to prevent callers from mutating internal state
         return list(self.user_entries if target == "user" else self.memory_entries)
+
+    def snapshot_block(self, target: str) -> str | None:
+        """Return the frozen system-prompt snapshot for *target*.
+
+        Captured at ``load_from_disk()`` time; mid-session writes never
+        change it. Returns None when the snapshot is empty (no entries at
+        load time).
+        """
+        block = self._snapshot.get(target, "")
+        return block if block else None
 
     # -- mutations --------------------------------------------------------
 
@@ -340,6 +374,54 @@ class CuratedMemoryStore:
 
     def _char_limit(self, target: str) -> int:
         return self.user_char_limit if target == "user" else self.memory_char_limit
+
+    @staticmethod
+    def _sanitize_entries_for_snapshot(entries: list[str], filename: str) -> list[str]:
+        """Return *entries* with any threat-matching entry replaced by a placeholder.
+
+        Each entry is scanned with ``_scan``. On a hit, the entry is
+        replaced in the returned list with a ``[BLOCKED: ...]`` placeholder
+        -- the placeholder enters the snapshot, the original entry stays in
+        live state for the user to inspect and delete.
+
+        Empty or already-block-marker entries pass through unchanged.
+        """
+        sanitized: list[str] = []
+        for entry in entries:
+            if not entry or entry.startswith("[BLOCKED:"):
+                sanitized.append(entry)
+                continue
+            threat = _scan(entry)
+            if threat:
+                log.warning(
+                    "memory_entry_blocked_at_load", filename=filename, threat=threat
+                )
+                sanitized.append(
+                    f"[BLOCKED: {filename} entry contained threat pattern(s): "
+                    f"{threat}. Removed from system prompt; use the memory "
+                    f"tool remove action to delete the original.]"
+                )
+            else:
+                sanitized.append(entry)
+        return sanitized
+
+    def _render_block(self, target: str, entries: list[str]) -> str:
+        """Render a system prompt block with header and usage indicator."""
+        if not entries:
+            return ""
+
+        limit = self._char_limit(target)
+        content = ENTRY_DELIMITER.join(entries)
+        current = len(content)
+        pct = min(100, int((current / limit) * 100)) if limit > 0 else 0
+
+        if target == "user":
+            header = f"USER PROFILE (who the user is) [{pct}% — {current:,}/{limit:,} chars]"
+        else:
+            header = f"MEMORY (your personal notes) [{pct}% — {current:,}/{limit:,} chars]"
+
+        separator = "═" * 46
+        return f"{separator}\n{header}\n{separator}\n{content}"
 
     def _reload_target(self, target: str, skip_drift: bool = True) -> str | None:
         """Re-read entries from disk into in-memory state.
