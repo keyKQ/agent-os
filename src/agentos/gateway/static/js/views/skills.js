@@ -87,6 +87,7 @@ const SkillsView = (() => {
         <div class="sk-tabs" role="group" aria-label="Skill source">
           <button class="sk-tab is-active" data-tab="installed" aria-pressed="true">${icons.skills()}<span>Installed</span></button>
           <button class="sk-tab sk-tab--bankr" data-tab="bankr" aria-pressed="false">${_bankrGlyph()}<span>Bankr</span></button>
+          <button class="sk-tab sk-tab--robinhood" data-tab="robinhood" aria-pressed="false">${_robinhoodGlyph()}<span>Robinhood</span></button>
           <button class="sk-tab" data-tab="community" aria-pressed="false">${icons.download()}<span>Community</span></button>
         </div>
 
@@ -112,6 +113,24 @@ const SkillsView = (() => {
             </div>
             <div class="sk-chips" data-chips="bankr"></div>
             <div class="sk-browse__results" data-results="bankr"></div>
+          </div>
+        </div>
+
+        <div id="skills-tab-robinhood" class="sk-panel" hidden>
+          <div class="sk-partner sk-partner--robinhood">
+            <div class="sk-partner__mark">${_robinhoodGlyph(48)}</div>
+            <div class="sk-partner__text">
+              <div class="sk-partner__name">Robinhood partner catalog</div>
+              <p class="sk-partner__desc">Trade stocks, ETFs, and crypto through Robinhood — tokenized equities, spot &amp; leverage, and Robinhood Chain skills. Coming soon.</p>
+            </div>
+            <a class="sk-partner__link" href="https://robinhood.com" target="_blank" rel="noopener">robinhood.com ↗</a>
+          </div>
+          <div class="sk-browse" data-group="robinhood">
+            <div class="sk-empty">
+              <div class="sk-empty__mark">${_robinhoodGlyph(40)}</div>
+              <p class="sk-empty__title">Robinhood skills are on the way</p>
+              <p class="sk-empty__hint">This catalog is being prepared. Check back soon, or browse the Bankr &amp; Community catalogs in the meantime.</p>
+            </div>
           </div>
         </div>
 
@@ -840,6 +859,18 @@ const SkillsView = (() => {
     const src = `${_basePath()}/static/img/bankr-symbol.svg`;
     const fallback = _bankrFallbackGlyph(size).replace(/"/g, '&quot;');
     return `<img class="sk-bankr-logo" src="${src}" alt="Bankr" width="${size}" height="${size}" onerror="this.outerHTML='${fallback}'" />`;
+  }
+
+  function _robinhoodFallbackGlyph(size) {
+    // Drawn feather mark, used if the brand PNG asset fails to load.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4C10 5 6 12 6 20"/><path d="M6 20l4-4"/><path d="M18 6c-3 0-7 2-8 6"/></svg>`;
+  }
+
+  function _robinhoodGlyph(size = 16) {
+    // Official Robinhood brand mark (served locally); falls back to a drawn glyph.
+    const src = `${_basePath()}/static/img/robinhood-symbol.png`;
+    const fallback = _robinhoodFallbackGlyph(size).replace(/"/g, '&quot;');
+    return `<img class="sk-robinhood-logo" src="${src}" alt="Robinhood" width="${size}" height="${size}" onerror="this.outerHTML='${fallback}'" />`;
   }
 
   function _esc(s) {

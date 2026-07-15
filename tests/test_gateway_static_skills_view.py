@@ -35,6 +35,18 @@ def test_skills_view_has_dedicated_bankr_tab() -> None:
     assert "results.filter(r => r.source !== 'bankr')" in view
 
 
+def test_skills_view_has_dedicated_robinhood_tab_placeholder() -> None:
+    view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
+
+    # A dedicated Robinhood partner tab with its brand logo and a coming-soon
+    # placeholder (no live source wired yet).
+    assert 'data-tab="robinhood"' in view
+    assert 'id="skills-tab-robinhood"' in view
+    assert "Robinhood partner catalog" in view
+    assert "robinhood-symbol.png" in view
+    assert "Robinhood skills are on the way" in view
+
+
 def test_skills_view_renders_registry_cards_with_provider_and_logo() -> None:
     view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
 
