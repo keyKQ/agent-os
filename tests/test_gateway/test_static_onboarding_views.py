@@ -1298,3 +1298,45 @@ def test_example_config_does_not_advertise_local_embedding_model_override():
     )[0]
     assert "model =" not in local_section
     assert "onnx_dir" in local_section
+
+
+def test_setup_view_has_memory_settings_card_with_user_facing_labels():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "Long-term memory budget (MEMORY.md)" in txt
+    assert "User profile budget (USER.md)" in txt
+    assert "Prompt injection limit" in txt
+    assert "data-memory-settings-memory-limit" in txt
+    assert "data-memory-settings-user-limit" in txt
+    assert "data-memory-settings-inject-limit" in txt
+
+
+def test_setup_view_memory_settings_card_reads_curated_config_fields():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "curated_memory_char_limit" in txt
+    assert "curated_user_char_limit" in txt
+    assert "memory.inject_limit" in txt
+
+
+def test_setup_view_memory_settings_card_warns_when_inject_limit_too_small():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "Injection limit too small" in txt
+    assert "the user profile block may be dropped" in txt
+
+
+def test_setup_view_memory_settings_card_renders_curated_usage_rows():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    assert "data-memory-settings-usage" in txt
+    assert "entries" in txt
+    assert "doctor.memory.status" in txt
+
+
+def test_setup_view_memory_settings_card_saves_via_config_patch():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    start = txt.index("async function _saveMemorySettings()")
+    end = txt.index("\n  }", start)
+    body = txt[start:end]
+    assert "'config.patch'" in body
+    assert "memory.curated_memory_char_limit" in body
+    assert "memory.curated_user_char_limit" in body
+    assert "memory.inject_limit" in body
+    assert "data-save-memory-settings" in txt

@@ -29,6 +29,7 @@ const SetupView = (() => {
   let _status = {};
   let _config = {};
   let _channelStatus = { channels: [] };
+  let _memoryDoctorStatus = null;
   let _step = 'provider';
   let _channelType = '';
   let _pollTimer = null;
@@ -48,16 +49,18 @@ const SetupView = (() => {
 
   async function _load() {
     try {
-      const [catalog, status, config, channelStatus] = await Promise.all([
+      const [catalog, status, config, channelStatus, memoryDoctorStatus] = await Promise.all([
         _rpc.call('onboarding.catalog'),
         _rpc.call('onboarding.status'),
         _rpc.call('config.get'),
         _rpc.call('channels.status').catch(() => ({ channels: [] })),
+        _rpc.call('doctor.memory.status').catch(() => null),
       ]);
       _catalog = catalog || {};
       _status = status || {};
       _config = config || {};
       _channelStatus = channelStatus || { channels: [] };
+      _memoryDoctorStatus = memoryDoctorStatus || null;
     } catch (err) {
       _el.innerHTML = `<div class="setup-error">Failed to load setup catalog: ${_esc(err.message)}</div>`;
     }
@@ -255,6 +258,22 @@ const SetupView = (() => {
       <span>${_esc(label)}</span>
       <ul>${needs.map(item => `<li>${_esc(item)}</li>`).join('')}</ul>
     </div>`;
+  }
+
+  function _renderMemorySettingsUsageRows(curated) {
+    if (!curated || typeof curated !== 'object') return '';
+    const rows = [
+      ['memory', 'MEMORY.md'],
+      ['user', 'USER.md'],
+    ].map(([key, label]) => {
+      const entry = curated[key];
+      if (!entry) return '';
+      const entries = Number(entry.entries || 0);
+      const usage = _esc(String(entry.usage || ''));
+      const noun = entries === 1 ? 'entry' : 'entries';
+      return `<p class="setup-muted" data-memory-settings-usage data-memory-settings-usage-${key}>${label}: ${entries} ${noun} — ${usage} chars</p>`;
+    }).join('');
+    return rows;
   }
 
   function _credentialNeedList(items, envKey) {
@@ -676,6 +695,18 @@ const SetupView = (() => {
     const memoryLocalHidden = memoryLocalControlEnabled ? '' : ' hidden';
     const memoryStatusText = _memoryEmbeddingStatusText(effectiveProvider);
     const memoryNeeds = _memoryNeedList(memorySpec, effectiveProvider, memoryEnv);
+    const memoryConfig = ((_config || {}).memory || {});
+    const memorySettingsMemoryLimit = memoryConfig.curated_memory_char_limit ?? 4000;
+    const memorySettingsUserLimit = memoryConfig.curated_user_char_limit ?? 2000;
+    const memorySettingsInjectLimit = memoryConfig.inject_limit ?? 6400;
+    // ~310 chars of header/separator overhead per curated block (see
+    // MemoryConfig.inject_limit docstring in gateway/config.py) — a
+    // client-side heuristic only, not an authoritative budget check.
+    const memorySettingsOverheadChars = 310;
+    const memorySettingsOverBudget = (
+      memorySettingsMemoryLimit + memorySettingsUserLimit + memorySettingsOverheadChars
+    ) > memorySettingsInjectLimit;
+    const memorySettingsCurated = (_memoryDoctorStatus || {}).curated || null;
     const imageProviderSelected = _status.imageGenerationProvider || (_status.imageGenerationPrimary || '').split('/')[0] || imageProviders[0]?.providerId || 'openrouter';
     const imageSpec = imageProviders.find(p => p.providerId === imageProviderSelected) || imageProviders[0] || {};
     const imageConfig = ((_config || {}).image_generation || {});
@@ -772,6 +803,27 @@ const SetupView = (() => {
               </div>
             </details>
             <button class="${_capabilitySaveButtonClass('memory_embedding')}" data-save-memory>Save memory embedding</button>
+          </div>
+          <div class="setup-mini">
+            <div class="setup-mini__head">
+              <h4>Memory</h4>
+            </div>
+            <p class="setup-muted">Bounded long-term memory and profile notes carried into every conversation.</p>
+            <label><span>Long-term memory budget (MEMORY.md)</span>
+              <input id="setup-memory-settings-memory-limit" name="setup_memory_settings_memory_limit" type="number" min="0" step="1" inputmode="numeric" data-memory-settings-memory-limit value="${_esc(String(memorySettingsMemoryLimit))}">
+            </label>
+            <p class="setup-muted">Max characters kept in MEMORY.md, the agent's shared long-term notes.</p>
+            <label><span>User profile budget (USER.md)</span>
+              <input id="setup-memory-settings-user-limit" name="setup_memory_settings_user_limit" type="number" min="0" step="1" inputmode="numeric" data-memory-settings-user-limit value="${_esc(String(memorySettingsUserLimit))}">
+            </label>
+            <p class="setup-muted">Max characters kept in USER.md, notes about you specifically.</p>
+            <label><span>Prompt injection limit</span>
+              <input id="setup-memory-settings-inject-limit" name="setup_memory_settings_inject_limit" type="number" min="0" step="1" inputmode="numeric" data-memory-settings-inject-limit value="${_esc(String(memorySettingsInjectLimit))}">
+            </label>
+            <p class="setup-muted">Max characters of memory injected into the system prompt each turn, chars not tokens.</p>
+            ${memorySettingsOverBudget ? '<div class="setup-warning" data-memory-settings-warning>Injection limit too small — the user profile block may be dropped.</div>' : ''}
+            ${_renderMemorySettingsUsageRows(memorySettingsCurated)}
+            <button class="setup-btn" data-save-memory-settings>Save memory settings</button>
           </div>
           <div class="setup-mini">
             <div class="setup-mini__head">
@@ -1202,6 +1254,7 @@ const SetupView = (() => {
     _el.querySelector('[data-save-channel]')?.addEventListener('click', _saveChannel);
     _el.querySelector('[data-save-search]')?.addEventListener('click', _saveSearch);
     _el.querySelector('[data-save-memory]')?.addEventListener('click', _saveMemory);
+    _el.querySelector('[data-save-memory-settings]')?.addEventListener('click', _saveMemorySettings);
     _el.querySelector('[data-save-image]')?.addEventListener('click', _saveImage);
     _el.querySelector('[data-save-audio]')?.addEventListener('click', _saveAudio);
   }
@@ -1713,6 +1766,30 @@ const SetupView = (() => {
       )) {
         UI.toast('Memory embedding saved. Restart required.', 'info');
       }
+      await _load();
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  async function _saveMemorySettings() {
+    const memoryLimitInput = _el.querySelector('[data-memory-settings-memory-limit]');
+    const userLimitInput = _el.querySelector('[data-memory-settings-user-limit]');
+    const injectLimitInput = _el.querySelector('[data-memory-settings-inject-limit]');
+    const patches = {
+      'memory.curated_memory_char_limit': Number.parseInt(memoryLimitInput?.value || '0', 10),
+      'memory.curated_user_char_limit': Number.parseInt(userLimitInput?.value || '0', 10),
+      'memory.inject_limit': Number.parseInt(injectLimitInput?.value || '0', 10),
+    };
+    try {
+      const res = await _rpc.call('config.patch', { patches });
+      UI.toast(
+        (res || {}).restartRequired
+          ? 'Memory settings saved. Restart required.'
+          : 'Memory settings saved.',
+        'info',
+      );
       await _load();
       _draw();
     } catch (err) {

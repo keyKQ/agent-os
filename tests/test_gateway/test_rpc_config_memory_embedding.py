@@ -513,3 +513,34 @@ async def test_config_patch_disabling_channel_reports_restart_required(tmp_path)
 
     assert res.error is None, res.error
     assert res.payload["restartRequired"] is True
+
+
+@pytest.mark.asyncio
+async def test_config_patch_accepts_curated_memory_budget_fields(tmp_path):
+    """Setup UI's Memory card patches these three MemoryConfig fields directly.
+
+    They gate prompt assembly per-turn (read fresh via ``getattr`` in
+    ``engine/runtime.py`` and ``tools/builtin/memory_tools.py`` on the same
+    in-memory config object ``config.patch`` mutates in place), not anything
+    constructed once at boot -- so, unlike ``memory.embedding``/
+    ``memory.retrieval_mode``, they should NOT require a gateway restart.
+    """
+    cfg = GatewayConfig(config_path=str(tmp_path / "c.toml"))
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "config.patch",
+        {
+            "patches": {
+                "memory.curated_memory_char_limit": 5000,
+                "memory.curated_user_char_limit": 2500,
+                "memory.inject_limit": 7000,
+            }
+        },
+        _admin_ctx(cfg),
+    )
+
+    assert res.error is None, res.error
+    assert res.payload["restartRequired"] is False
+    assert cfg.memory.curated_memory_char_limit == 5000
+    assert cfg.memory.curated_user_char_limit == 2500
+    assert cfg.memory.inject_limit == 7000
