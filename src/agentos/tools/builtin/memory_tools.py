@@ -332,12 +332,20 @@ def create_memory_tools(
     on_memory_write: Any | None = None,
     memory_source: str = "state",
     workspace_base: str | None = None,
+    config_root: Any | None = None,
 ) -> None:
     """Register memory tools. Accepts either a single store or a dict keyed by agent_id.
 
     Backward-compatible: a single store/retriever is auto-wrapped into ``{"main": ...}``.
     When dicts are provided, the active agent_id (from ToolContext via contextvar) selects
     the correct store, retriever, and memory directory at call time.
+
+    ``config_root`` (optional): the ROOT ``GatewayConfig`` object (or a
+    zero-arg getter returning it), used to resolve curated memory budgets
+    live on every call -- see ``_curated_store_for`` for why this must be
+    the root, not ``memory_config`` alone. Falls back to the (possibly
+    stale-after-patch) ``memory_config`` sub-object when omitted, so
+    existing callers/tests that only pass ``memory_config`` keep working.
     """
     # Normalize to dict form
     if not isinstance(stores, dict):
@@ -393,6 +401,28 @@ def create_memory_tools(
 
     _curated_stores: dict[str, CuratedMemoryStore] = {}
 
+    def _live_memory_config() -> Any | None:
+        """Resolve the current ``MemoryConfig`` sub-object from the ROOT config.
+
+        REAL contract (round 1 got this wrong): ``config.patch`` ->
+        ``_update_config_in_place`` (rpc_config.py) does a top-level,
+        attribute-by-attribute ``setattr`` loop on ``GatewayConfig``, e.g.
+        ``setattr(old, "memory", getattr(new, "memory"))``. That REPLACES
+        ``config.memory`` with a brand-new ``MemoryConfig`` instance -- it
+        does not mutate the old sub-object's fields in place. So a closure
+        that captured ``memory_config`` (the sub-object) directly is looking
+        at an orphaned instance forever after the first patch; only the ROOT
+        config object survives a patch and stays the same instance.
+
+        Mirrors runtime.py's proven-live pattern: hold the root and
+        traverse ``getattr(root, "memory", None)`` fresh on every call, so
+        each call sees whatever sub-object is currently attached.
+        """
+        root = config_root() if callable(config_root) else config_root
+        if root is not None:
+            return getattr(root, "memory", None)
+        return memory_config
+
     def _curated_store_for(r: ResolvedAgent) -> CuratedMemoryStore:
         """Return the curated store for r's workspace root, building it once.
 
@@ -401,22 +431,21 @@ def create_memory_tools(
         ``_resolve_memory_path`` / ``_is_memory_source_path``), not the
         ``memory/`` subfolder used for daily notes.
 
-        Live-refresh contract: the char-limit budgets are read from
-        ``memory_config`` on EVERY call rather than captured once at boot.
-        ``config.patch`` mutates the ``memory_config`` object in place
-        (``_update_config_in_place`` in rpc_config.py does attribute-by-attribute
-        ``setattr`` on the same object, so ``config.memory`` stays the same
-        instance with new field values) and callers expect that to take effect
-        without a restart -- the same way runtime.py's system-prompt injection
-        already re-reads the limits fresh per call. If a cached store's limits
-        no longer match the live config, we rebuild it from disk (files are the
-        source of truth, guarded by file-lock + atomic replace, so rebuilding
-        mid-session is safe) and swap it into the cache.
+        Live-refresh contract: the char-limit budgets are read from the
+        ROOT config (via ``_live_memory_config``) on EVERY call rather than
+        captured once at boot or from a sub-object closure. See
+        ``_live_memory_config`` for why the root -- not ``memory_config`` --
+        is the only thing guaranteed to survive ``config.patch``. If a
+        cached store's limits no longer match the live config, we rebuild it
+        from disk (files are the source of truth, guarded by file-lock +
+        atomic replace, so rebuilding mid-session is safe) and swap it into
+        the cache.
         """
         if not r.workspace_dir:
             raise ToolError("workspace directory not configured.")
-        memory_char_limit = getattr(memory_config, "curated_memory_char_limit", 4000)
-        user_char_limit = getattr(memory_config, "curated_user_char_limit", 2000)
+        live_memory_config = _live_memory_config()
+        memory_char_limit = getattr(live_memory_config, "curated_memory_char_limit", 4000)
+        user_char_limit = getattr(live_memory_config, "curated_user_char_limit", 2000)
         key = str(Path(r.workspace_dir))
         curated = _curated_stores.get(key)
         if curated is None or (

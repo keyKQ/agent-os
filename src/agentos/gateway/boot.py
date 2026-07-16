@@ -1677,6 +1677,7 @@ async def build_services(
                 memory_source=getattr(config.memory, "source", "state"),
                 on_memory_write=_on_memory_write,
                 memory_config=config.memory,
+                config_root=config,
                 workspace_base=config.workspace_dir
                 if getattr(config.memory, "source", "state") == "workspace"
                 else None,
