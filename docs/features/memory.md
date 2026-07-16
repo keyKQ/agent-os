@@ -7,6 +7,49 @@ previous decisions, and notes that should survive across sessions.
 Memory is separate from skills. Skills teach the agent how to do a task; memory
 stores useful facts and context the agent may need later.
 
+## How it fits together
+
+```mermaid
+graph TB
+    subgraph Sources["📁 Memory sources — files are the source of truth"]
+        CUR["🧠 MEMORY.md<br/>curated agent notes, char-budgeted"]
+        USR["👤 USER.md<br/>user profile, char-budgeted"]
+        NOTES["📝 memory/**/*.md<br/>daily and named notes"]
+    end
+
+    subgraph Engine["⚙️ Built-in memory engine — always on"]
+        IDX[("🔎 Hybrid index<br/>SQLite FTS + sqlite-vec")]
+        EMB["🧮 Embedding provider<br/>auto: Gemma → BGE → remote → FTS-only"]
+    end
+
+    subgraph Ext["🔌 External provider — optional, off by default"]
+        MEM0["mem0, fully local<br/>Ollama LLM + embeddinggemma + on-disk vectors"]
+    end
+
+    PROMPT["💬 System prompt<br/>frozen snapshots + fenced recall"]
+    TOOLS["🛠️ Tools<br/>memory · memory_save · memory_search"]
+
+    CUR -->|frozen snapshot| PROMPT
+    USR -->|frozen snapshot| PROMPT
+    CUR --> IDX
+    NOTES --> IDX
+    EMB --> IDX
+    IDX -->|memory_search| TOOLS
+    TOOLS -->|memory tool writes| CUR
+    TOOLS -->|memory_save| NOTES
+    MEM0 -->|fenced recall block| PROMPT
+    TOOLS -.->|write mirror, add only| MEM0
+
+    classDef store fill:#E6E6FA,stroke:#333,stroke-width:2px,color:#1a1a5e
+    classDef engine fill:#90EE90,stroke:#333,stroke-width:2px,color:#0a3d0a
+    classDef ext fill:#FFE4B5,stroke:#333,stroke-width:2px,color:#5e3a00
+    classDef out fill:#87CEEB,stroke:#333,stroke-width:2px,color:#003554
+    class CUR,USR,NOTES store
+    class IDX,EMB engine
+    class MEM0 ext
+    class PROMPT,TOOLS out
+```
+
 ## What to Store
 
 Good memory entries are stable and reusable:
@@ -104,6 +147,34 @@ order:
    install).
 3. A memory-specific **remote** embedding key, if one is configured.
 4. **FTS-only** (keyword search) when nothing else is available.
+
+```mermaid
+flowchart TD
+    START(["🚀 Gateway boot · provider = auto"]) --> GEMMA{"EmbeddingGemma<br/>downloaded?"}
+    GEMMA -->|yes| USEG["✅ local · google/embeddinggemma-300m<br/>mean pooling + prompt prefixes"]
+    GEMMA -->|no| BGE{"Bundled BGE<br/>available?"}
+    BGE -->|yes| USEB["✅ local · BAAI/bge-small-zh-v1.5"]
+    BGE -->|no| KEY{"Remote API key<br/>configured?"}
+    KEY -->|yes| REM["☁️ remote · text-embedding-3-small"]
+    KEY -->|no| FTS["🔤 FTS-only keyword search"]
+    USEG --> FP["🔑 Provider fingerprint"]
+    USEB --> FP
+    REM --> FP
+    FP --> SAME{"Fingerprint changed<br/>since last run?"}
+    SAME -->|no| READY(["🟢 Search ready"])
+    SAME -->|yes| DROP["🧹 Drop stale index"]
+    DROP --> REEMB["♻️ Re-embed on next sync — automatic"]
+    REEMB --> READY
+
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:#000
+    classDef local fill:#90EE90,stroke:#333,stroke-width:2px,color:#0a3d0a
+    classDef remote fill:#87CEEB,stroke:#333,stroke-width:2px,color:#003554
+    classDef fallback fill:#FFB6C1,stroke:#333,stroke-width:2px,color:#5e0a1e
+    class GEMMA,BGE,KEY,SAME decision
+    class USEG,USEB local
+    class REM remote
+    class FTS fallback
+```
 
 ### Upgrading the local model
 
@@ -203,6 +274,26 @@ frees room and adds the new fact. Repeated consolidation failures within a
 turn cap out after a few attempts so a fragile add/replace can't loop the
 turn to budget exhaustion.
 
+```mermaid
+flowchart TD
+    W(["🛠️ memory tool call"]) --> SCAN{"🛡️ Threat scan<br/>clean?"}
+    SCAN -->|no| BLOCK["❌ Rejected — content never written"]
+    SCAN -->|yes| DRIFT{"External file drift<br/>detected?"}
+    DRIFT -->|yes| BAK["🗄️ Refused — .bak snapshot saved"]
+    DRIFT -->|no| BUDGET{"Fits the char<br/>budget?"}
+    BUDGET -->|yes| SAVE["💾 Atomic write under file lock"]
+    SAVE --> OK(["✅ Saved"])
+    BUDGET -->|no| CONS["♻️ Consolidate in ONE batch call:<br/>remove/replace stale entries + add new,<br/>budget checked on the final result"]
+    CONS --> BUDGET
+
+    classDef decision fill:#FFD700,stroke:#333,stroke-width:2px,color:#000
+    classDef good fill:#90EE90,stroke:#333,stroke-width:2px,color:#0a3d0a
+    classDef bad fill:#FFB6C1,stroke:#333,stroke-width:2px,color:#5e0a1e
+    class SCAN,DRIFT,BUDGET decision
+    class SAVE,OK good
+    class BLOCK,BAK bad
+```
+
 ### Drift guard (`.bak` files)
 
 Each store expects its file to be a clean §-delimited list it wrote itself.
@@ -249,6 +340,30 @@ When a provider is active it hooks four points:
 - **Write mirror** — curated `memory` tool **ADDs** are mirrored to the
   provider so it picks up new facts too; replace/remove are not propagated
   in v1, so the provider's copy can drift from edited or deleted notes.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 👤 User
+    participant RT as ⚙️ Engine turn
+    participant CM as 🧠 Curated stores
+    participant IX as 🔎 Hybrid index
+    participant XP as 🔌 Provider
+
+    U->>RT: message
+    RT->>XP: prefetch(query) — 3s budget
+    XP-->>RT: fenced recall (or empty)
+    RT->>CM: frozen snapshots (loaded once per session)
+    RT-->>U: reply
+    par background — never blocks the turn
+        RT->>IX: turn capture → index sync
+        RT->>XP: sync_turn(user, assistant)
+    end
+    opt memory tool write during the turn
+        RT->>CM: add / replace / remove (budget-checked)
+        RT-->>XP: mirror (add only)
+    end
+```
 
 ### mem0 (fully local by default)
 
