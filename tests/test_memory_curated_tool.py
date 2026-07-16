@@ -88,6 +88,15 @@ async def test_memory_tool_missing_old_text_on_remove_returns_inventory(memory_t
     assert result["current_entries"] == ["only entry"]
 
 
+async def test_memory_tool_missing_old_text_error_reports_usage(memory_tools_fixture):
+    # Hermes parity: the missing-old_text error carries the char-usage string so
+    # the model sees how full the store is before it reissues the call.
+    tools = memory_tools_fixture
+    await tools["memory"](action="add", content="only entry")
+    result = json.loads(await tools["memory"](action="replace", content="new"))
+    assert result["usage"] == "10/4,000"  # len("only entry") == 10, default limit
+
+
 async def test_memory_tool_unknown_action_returns_error(memory_tools_fixture):
     tools = memory_tools_fixture
     result = json.loads(await tools["memory"](action="bogus", content="x"))

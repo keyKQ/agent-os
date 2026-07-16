@@ -101,6 +101,12 @@ class CuratedMemoryStore:
         # Return a copy to prevent callers from mutating internal state
         return list(self.user_entries if target == "user" else self.memory_entries)
 
+    def usage_for(self, target: str) -> str:
+        """Return the ``"{current:,}/{limit:,}"`` char-usage string for *target*."""
+        current = self._char_count(target)
+        limit = self._char_limit(target)
+        return f"{current:,}/{limit:,}"
+
     def snapshot_block(self, target: str) -> str | None:
         """Return the frozen system-prompt snapshot for *target*.
 

@@ -772,6 +772,7 @@ def create_memory_tools(
                     f"with old_text set to part of one of the current_entries below."
                 ),
                 "current_entries": entries,
+                "usage": store.usage_for(target),
             },
             ensure_ascii=False,
         )

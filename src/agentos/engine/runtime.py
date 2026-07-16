@@ -3465,6 +3465,16 @@ class TurnRunner:
         else:
             daily = self._load_daily_notes(memory_source_dir)
             memory_text = self._load_memory_md(memory_source_dir)
+        # The curated store now owns MEMORY.md / USER.md injection via the
+        # ``## Memory`` block (usage header + sanitization). Drop the raw copies
+        # from the volatile "Workspace Files" block so they are not injected
+        # twice. ``memory_text`` carries the curated headers only when the
+        # corresponding store actually produced a block.
+        if memory_text:
+            if "MEMORY (your personal notes)" in memory_text:
+                workspace_files.pop("MEMORY.md", None)
+            if "USER PROFILE (who the user is)" in memory_text:
+                workspace_files.pop("USER.md", None)
         daily_notes_count_before_omit = len(daily)
         daily_notes_omitted = daily_notes_count_before_omit > 0
         if daily_notes_omitted:
@@ -3628,12 +3638,28 @@ class TurnRunner:
         return 50_000
 
     def _load_memory_md(self, workspace_dir: Any, max_chars: int | None = None) -> str | None:
-        """Load MEMORY.md from agent workspace for system prompt injection."""
+        """Build the curated MEMORY.md + USER.md block for system-prompt injection.
+
+        Runs the one-time free-form → §-entry migration, then loads a
+        ``CuratedMemoryStore`` and returns its frozen snapshot blocks (usage
+        header + per-entry threat sanitization) joined memory-then-user. Falls
+        back to the legacy raw-file read only when the curated store yields no
+        block (e.g. a ``memory.md`` lowercase file the store does not manage).
+        """
         from pathlib import Path
 
         if max_chars is None:
             max_chars = getattr(getattr(self._config, "memory", None), "inject_limit", 4000)
         root = Path(workspace_dir)
+
+        curated = self._load_curated_memory_block(root)
+        if curated is not None:
+            if len(curated) > max_chars:
+                return curated[:max_chars] + "\n..."
+            return curated
+
+        # Legacy fallback: lowercase memory.md, or any file the curated store
+        # does not treat as MEMORY.md.
         memory_file = root / "MEMORY.md"
         if not memory_file.is_file():
             memory_file = root / "memory.md"
@@ -3648,6 +3674,43 @@ class TurnRunner:
         if len(content) > max_chars:
             return content[:max_chars] + "\n..."
         return content
+
+    def _load_curated_memory_block(self, memory_dir: Any) -> str | None:
+        """Return the joined curated MEMORY.md + USER.md snapshot block, or None.
+
+        Migrates a pre-curated free-form MEMORY.md before the first load, then
+        renders the store's frozen snapshot blocks. Returns None when neither
+        store has any entries so the caller can apply its legacy fallback.
+        """
+        from pathlib import Path
+
+        from agentos.memory.curated import CuratedMemoryStore
+        from agentos.memory.curated_migration import migrate_freeform_memory_md
+
+        memory_cfg = getattr(self._config, "memory", None)
+        memory_limit = getattr(memory_cfg, "curated_memory_char_limit", 4000)
+        user_limit = getattr(memory_cfg, "curated_user_char_limit", 2000)
+
+        root = Path(memory_dir)
+        try:
+            migrate_freeform_memory_md(root, memory_limit)
+        except OSError:
+            pass
+
+        store = CuratedMemoryStore(
+            memory_dir=root,
+            memory_char_limit=memory_limit,
+            user_char_limit=user_limit,
+        )
+        store.load_from_disk()
+        blocks = [
+            block
+            for block in (store.snapshot_block("memory"), store.snapshot_block("user"))
+            if block
+        ]
+        if not blocks:
+            return None
+        return "\n\n".join(blocks)
 
     def _load_daily_notes(self, workspace_dir: Any) -> dict[str, str]:
         from agentos.identity.workspace import load_daily_notes
