@@ -116,6 +116,12 @@ line- or entry-limited:
   lower-priority block after it) is dropped whole rather than sliced
   mid-block — memory is checked first, then user.
 
+All three limits can also be adjusted from the gateway web UI: Setup view →
+"Memory" card. The card exposes friendly labels for each budget, warns when
+the combined limits would exceed the injection limit, and shows live
+per-store usage. Changes save through `config.patch` and apply immediately —
+no gateway restart needed.
+
 ### The `memory` tool
 
 Writes go through a single `memory` tool, not free-form file edits:
