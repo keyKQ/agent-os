@@ -222,6 +222,14 @@ def test_config_object_summaries_wrap_on_phone_widths() -> None:
     assert "text-overflow: clip" in summary_rule
 
 
+def test_config_memory_help_text_documents_curated_memory_keys() -> None:
+    source = CONFIG_JS.read_text(encoding="utf-8")
+
+    assert "'memory.curated_memory_char_limit':" in source
+    assert "'memory.curated_user_char_limit':" in source
+    assert "'memory.inject_limit':" in source
+
+
 def test_config_field_labels_wrap_long_keys_on_phone_widths() -> None:
     css = CONFIG_CSS.read_text(encoding="utf-8")
     mobile = css.split("@media (max-width: 640px)", 1)[1]

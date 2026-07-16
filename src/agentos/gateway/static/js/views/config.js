@@ -80,6 +80,12 @@ const ConfigView = (() => {
       'Optional ONNX directory for a custom local embedding model. Leave empty to use the bundled BGE-small model.',
     'memory.retrieval_mode':
       'Memory retrieval mode. "hybrid" uses vectors when an embedding provider is available; "fts_only" disables vectors.',
+    'memory.curated_memory_char_limit':
+      'Character budget for MEMORY.md, the agent’s curated notes file. When full, the agent consolidates existing entries via the memory tool instead of growing the file further.',
+    'memory.curated_user_char_limit':
+      'Character budget for USER.md, the curated user profile file.',
+    'memory.inject_limit':
+      'Cap on the combined curated MEMORY.md + USER.md blocks injected into every system prompt. Keep it above the sum of the two char-limit budgets plus roughly 310 chars of header/separator overhead, or the user-profile block is dropped whole to stay under budget.',
     'sandbox.sandbox':
       'Runtime sandbox switch. The out-of-box posture keeps this false; use agentos sandbox on|bypass|full to change sandbox and permission defaults together.',
     'sandbox.security_grading':
