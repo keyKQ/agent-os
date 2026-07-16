@@ -464,6 +464,39 @@ class MemoryCostConfig(BaseModel):
     query_embedding_cache: Literal["off", "shadow", "on"] = "on"
 
 
+class Mem0ProviderSettings(BaseModel):
+    """Settings for the mem0 external memory provider (Plan B).
+
+    Defaults target a fully local stack (Ollama LLM + embedder) so the
+    provider works offline without API keys. ``vector_store_path`` defaults to
+    ``None`` — the provider resolves ``<agent state dir>/mem0`` at boot.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm_provider: str = "ollama"
+    llm_model: str = "qwen3:4b"
+    llm_base_url: str = "http://localhost:11434"
+    embedder_provider: str = "ollama"
+    embedder_model: str = "embeddinggemma"
+    embedder_base_url: str = "http://localhost:11434"
+    vector_store_path: str | None = None
+
+
+class MemoryProviderSettings(BaseModel):
+    """External memory-provider selection (Plan B).
+
+    ``name`` is ``None`` (disabled) by default — the provider layer adds zero
+    overhead unless a provider is explicitly selected. Set ``name="mem0"`` to
+    activate the mem0 provider (requires the ``mem0`` extra).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None  # None/"" = disabled (default)
+    mem0: Mem0ProviderSettings = Field(default_factory=Mem0ProviderSettings)
+
+
 class MemoryConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="AGENTOS_MEMORY_",
@@ -547,6 +580,10 @@ class MemoryConfig(BaseSettings):
     # counts are model-independent.
     curated_memory_char_limit: int = 4000
     curated_user_char_limit: int = 2000
+
+    # External memory provider (Plan B). Disabled by default (name=None) — the
+    # provider layer is never imported unless a provider is explicitly selected.
+    provider: MemoryProviderSettings = Field(default_factory=MemoryProviderSettings)
 
 
 def _default_tiers() -> dict:
