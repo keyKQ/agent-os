@@ -143,3 +143,36 @@ async def test_memory_save_still_accepts_memory_notes(memory_tools_fixture, tmp_
     result = await tools["memory_save"](path="memory/notes.md", content="daily note")
     assert "Saved to memory/notes.md" in result
     assert "daily note" in (tmp_path / "memory" / "notes.md").read_text(encoding="utf-8")
+
+
+async def test_memory_tool_picks_up_budget_change_without_restart(tmp_path):
+    """config.patch mutates the SAME memory_config object in place (see
+    _update_config_in_place in rpc_config.py); the memory tool must observe
+    the new curated budget on the very next call, with no tool rebuild.
+    """
+    registry = ToolRegistry()
+    memory_config = SimpleNamespace(curated_memory_char_limit=200, curated_user_char_limit=200)
+    create_memory_tools(
+        stores=_FakeMemorySaveStore(),
+        retrievers=SimpleNamespace(),
+        memory_dir=str(tmp_path),
+        registry=registry,
+        memory_config=memory_config,
+    )
+    tools = {name: registry.get(name).handler for name in registry.list_names()}
+
+    # Fill close to the 200-char limit so a subsequent add overflows it.
+    filler = "x" * 190
+    result = json.loads(await tools["memory"](action="add", content=filler))
+    assert result["success"] is True
+
+    over_budget = json.loads(await tools["memory"](action="add", content="y" * 50))
+    assert over_budget["success"] is False
+
+    # Simulate config.patch: mutate the SAME memory_config object in place,
+    # exactly like _update_config_in_place's setattr loop would.
+    memory_config.curated_memory_char_limit = 4000
+    memory_config.curated_user_char_limit = 2000
+
+    now_fits = json.loads(await tools["memory"](action="add", content="y" * 50))
+    assert now_fits["success"] is True

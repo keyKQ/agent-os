@@ -392,8 +392,6 @@ def create_memory_tools(
         return ResolvedAgent(store=s, retriever=r, memory_dir=md, workspace_dir=wd)
 
     _curated_stores: dict[str, CuratedMemoryStore] = {}
-    _curated_memory_char_limit = getattr(memory_config, "curated_memory_char_limit", 4000)
-    _curated_user_char_limit = getattr(memory_config, "curated_user_char_limit", 2000)
 
     def _curated_store_for(r: ResolvedAgent) -> CuratedMemoryStore:
         """Return the curated store for r's workspace root, building it once.
@@ -402,16 +400,33 @@ def create_memory_tools(
         directory ``memory_save`` resolves MEMORY.md/USER.md against (see
         ``_resolve_memory_path`` / ``_is_memory_source_path``), not the
         ``memory/`` subfolder used for daily notes.
+
+        Live-refresh contract: the char-limit budgets are read from
+        ``memory_config`` on EVERY call rather than captured once at boot.
+        ``config.patch`` mutates the ``memory_config`` object in place
+        (``_update_config_in_place`` in rpc_config.py does attribute-by-attribute
+        ``setattr`` on the same object, so ``config.memory`` stays the same
+        instance with new field values) and callers expect that to take effect
+        without a restart -- the same way runtime.py's system-prompt injection
+        already re-reads the limits fresh per call. If a cached store's limits
+        no longer match the live config, we rebuild it from disk (files are the
+        source of truth, guarded by file-lock + atomic replace, so rebuilding
+        mid-session is safe) and swap it into the cache.
         """
         if not r.workspace_dir:
             raise ToolError("workspace directory not configured.")
+        memory_char_limit = getattr(memory_config, "curated_memory_char_limit", 4000)
+        user_char_limit = getattr(memory_config, "curated_user_char_limit", 2000)
         key = str(Path(r.workspace_dir))
         curated = _curated_stores.get(key)
-        if curated is None:
+        if curated is None or (
+            curated.memory_char_limit != memory_char_limit
+            or curated.user_char_limit != user_char_limit
+        ):
             curated = CuratedMemoryStore(
                 memory_dir=Path(r.workspace_dir),
-                memory_char_limit=_curated_memory_char_limit,
-                user_char_limit=_curated_user_char_limit,
+                memory_char_limit=memory_char_limit,
+                user_char_limit=user_char_limit,
             )
             curated.load_from_disk()
             _curated_stores[key] = curated
