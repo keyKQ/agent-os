@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
@@ -22,6 +23,72 @@ BATCH_FAILURE_LIMIT = 2
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BASE_MS = 500
 DEFAULT_RETRY_MAX_MS = 8000
+
+
+@dataclass(frozen=True)
+class LocalModelSpec:
+    """Per-model metadata for local (ONNX) embedding models.
+
+    ``dims`` is ``None`` when the dimensionality should be discovered at
+    load time rather than asserted up front.
+    """
+
+    model_id: str
+    query_prefix: str
+    document_prefix: str
+    pooling: str  # "cls" | "mean"
+    max_tokens: int
+    dims: int | None
+
+
+LOCAL_MODEL_SPECS: dict[str, LocalModelSpec] = {
+    "BAAI/bge-small-zh-v1.5": LocalModelSpec(
+        model_id="BAAI/bge-small-zh-v1.5",
+        query_prefix="",
+        document_prefix="",
+        pooling="cls",
+        max_tokens=512,
+        dims=None,
+    ),
+    "google/embeddinggemma-300m": LocalModelSpec(
+        model_id="google/embeddinggemma-300m",
+        query_prefix="task: search result | query: ",
+        document_prefix="title: none | text: ",
+        pooling="mean",
+        max_tokens=1024,
+        dims=768,
+    ),
+}
+
+_DEFAULT_MODEL_SPEC = LocalModelSpec(
+    model_id="",
+    query_prefix="",
+    document_prefix="",
+    pooling="cls",
+    max_tokens=512,
+    dims=None,
+)
+
+# Ollama tags don't carry HF-style org/name ids, so map the ones we know
+# apply prompt prefixes to the canonical spec id. Any other Ollama model
+# (e.g. "nomic-embed-text") falls through to the no-prefix default.
+_OLLAMA_SPEC_ALIASES: dict[str, str] = {
+    "embeddinggemma": "google/embeddinggemma-300m",
+    "embeddinggemma:300m": "google/embeddinggemma-300m",
+}
+
+
+def model_spec(model_id: str) -> LocalModelSpec:
+    """Spec for model_id; unknown ids get a BGE-like default (cls/512/no prefixes)."""
+    return LOCAL_MODEL_SPECS.get(model_id, _DEFAULT_MODEL_SPEC)
+
+
+def format_query_text(model_id: str, text: str) -> str:
+    return model_spec(model_id).query_prefix + text
+
+
+def format_document_text(model_id: str, text: str) -> str:
+    return model_spec(model_id).document_prefix + text
 
 RETRYABLE_ERROR_PATTERNS = [
     "rate_limit",
@@ -172,7 +239,7 @@ class OpenAIEmbeddingProvider:
 class OllamaEmbeddingProvider:
     """Ollama local embedding provider."""
 
-    DEFAULT_MODEL = "nomic-embed-text"
+    DEFAULT_MODEL = "embeddinggemma"
 
     def __init__(
         self,
@@ -194,7 +261,15 @@ class OllamaEmbeddingProvider:
     def model(self) -> str:
         return self._model
 
-    async def embed_query(self, text: str) -> list[float]:
+    @property
+    def _spec_id(self) -> str:
+        """Canonical spec id for prompt-prefix lookups. Ollama tags don't
+        carry HF-style org/name ids, so known prefix-capable tags are
+        mapped via ``_OLLAMA_SPEC_ALIASES``; anything else (e.g.
+        ``nomic-embed-text``) gets the no-prefix default."""
+        return _OLLAMA_SPEC_ALIASES.get(self._model, self._model)
+
+    async def _embed_raw(self, text: str) -> list[float]:
         async def _call():
             async with httpx.AsyncClient(trust_env=_trust_env()) as client:
                 resp = await client.post(
@@ -207,10 +282,13 @@ class OllamaEmbeddingProvider:
 
         return await _retry_with_backoff(_call)  # type: ignore[no-any-return]
 
+    async def embed_query(self, text: str) -> list[float]:
+        return await self._embed_raw(format_query_text(self._spec_id, text))
+
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         results = []
         for text in texts:
-            vec = await self.embed_query(text)
+            vec = await self._embed_raw(format_document_text(self._spec_id, text))
             results.append(vec)
         return results
 
