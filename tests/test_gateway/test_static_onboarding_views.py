@@ -607,13 +607,21 @@ def test_setup_view_rebinds_conditional_fields_after_dynamic_redraw():
     assert "_bindConditionalSelects(box || _el)" in txt
 
 
-def test_setup_view_is_loaded_and_registered_but_not_sidebar_primary():
+def test_setup_view_is_loaded_and_registered_in_sidebar_settings():
     template = TEMPLATE.read_text(encoding="utf-8")
     app = APP.read_text(encoding="utf-8")
     assert "static/js/views/setup.js" in template
     assert "_renderStandardView(SetupView, el)" in app
     assert "Router.register('/setup'" in app
-    assert 'data-path="/setup"' not in app
+    assert 'data-path="/setup"' in app
+
+
+def test_sidebar_settings_group_links_setup_view():
+    app_js = APP.read_text(encoding="utf-8")
+    settings_idx = app_js.index('nav-group-label">Settings')
+    setup_idx = app_js.index('data-path="/setup"')
+    config_idx = app_js.index('data-path="/config"')
+    assert settings_idx < setup_idx < config_idx  # Setup listed first in Settings group
 
 
 def test_setup_view_marks_unsupported_providers_disabled():
