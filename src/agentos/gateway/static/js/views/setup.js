@@ -22,6 +22,18 @@ const SetupView = (() => {
     degraded: 'Needs action',
     unknown: 'Check',
   };
+  // Section id -> setup step id. Shared by initial-step selection and the
+  // clickable action-needed rows so both jump to the same fix surface.
+  const SECTION_STEPS = [
+    ['llm', 'provider'],
+    ['provider', 'provider'],
+    ['router', 'router'],
+    ['channels', 'channels'],
+    ['search', 'extras'],
+    ['image_generation', 'extras'],
+    ['audio', 'extras'],
+    ['memory_embedding', 'extras'],
+  ];
 
   let _el = null;
   let _rpc = null;
@@ -68,22 +80,23 @@ const SetupView = (() => {
 
   function _draw() {
     if (!_el) return;
-    const setupAction = _hasSetupAction();
+    const reasons = _onboardingReasons();
+    const headline = _setupHeadline(reasons);
     _el.innerHTML = `
       <section class="setup">
         <header class="setup__head">
           <div>
             <p class="setup__kicker">AgentOS setup</p>
-            <h2>${setupAction ? 'Action needed' : 'Ready to run'}</h2>
+            <h2>${_esc(headline.title)}</h2>
           </div>
           <div class="setup__head-aside">
             <button type="button" class="setup__exit" data-exit-setup aria-label="Exit setup and return to Overview">
               <span aria-hidden="true">←</span><span>Exit setup</span>
             </button>
-            <div class="setup__status ${setupAction ? 'is-warn' : 'is-ok'}">
-              ${setupAction ? 'Action needed' : 'Ready'}
+            <div class="setup__status ${headline.tone}">
+              ${_esc(headline.chip)}
             </div>
-            ${_renderOnboardingReasons()}
+            ${_renderOnboardingReasons(reasons)}
           </div>
         </header>
         <nav class="setup-stepper" aria-label="Setup steps">
@@ -159,35 +172,80 @@ const SetupView = (() => {
     );
   }
 
-  function _renderOnboardingReasons() {
-    const reasons = _onboardingReasons();
-    if (!reasons.length) return '';
-    return `<ul class="setup-reasons" aria-label="Setup actions needed">
-      ${reasons.map(reason => `<li>${_esc(reason)}</li>`).join('')}
+  // Header headline + status chip, tiered by the reasons list. Blocking wins;
+  // optional-only downgrades to "Optional improvements"; empty is "Ready".
+  function _setupHeadline(reasons) {
+    const list = reasons || _onboardingReasons();
+    const blocking = list.filter(reason => reason.tier === 'blocking').length;
+    const optional = list.length - blocking;
+    if (blocking) {
+      return { title: 'Action needed', chip: 'Action needed', tone: 'is-warn' };
+    }
+    if (optional) {
+      return {
+        title: 'Optional improvements',
+        chip: `Optional · ${optional} ${optional === 1 ? 'item' : 'items'}`,
+        tone: 'is-optional',
+      };
+    }
+    return { title: 'Ready to run', chip: 'Ready', tone: 'is-ok' };
+  }
+
+  function _renderOnboardingReasons(reasons) {
+    const list = reasons || _onboardingReasons();
+    if (!list.length) return '';
+    const blocking = list.filter(reason => reason.tier === 'blocking').length;
+    const label = blocking ? 'Setup actions needed' : 'Optional improvements';
+    return `<ul class="setup-reasons" aria-label="${_esc(label)}">
+      ${list.map(_renderReasonRow).join('')}
     </ul>`;
   }
 
+  function _renderReasonRow(reason) {
+    const isBlocking = reason.tier === 'blocking';
+    const toneClass = isBlocking ? 'is-blocking' : 'is-optional';
+    const affordance = isBlocking ? 'Fix →' : 'Review →';
+    const ariaLabel = `${affordance.replace(' →', '')} ${reason.text}`;
+    return `<li class="setup-reasons__item ${toneClass}">
+      <button type="button" class="setup-reasons__action" data-step="${_esc(reason.step)}" aria-label="${_esc(ariaLabel)}" title="${_esc(ariaLabel)}">
+        <span class="setup-reasons__text">${_esc(reason.text)}</span>
+        <span class="setup-reasons__fix" aria-hidden="true">${_esc(affordance)}</span>
+      </button>
+    </li>`;
+  }
+
+  // Reasons as tiered, clickable rows: { text, tier, step }.
+  // Blocking = detail.blocking || status === 'missing'; optional otherwise.
   function _onboardingReasons() {
     if (!_hasSetupAction()) return [];
     const reasons = [];
+    const seen = new Set();
+    const push = (text, tier, step) => {
+      if (seen.has(text)) return;
+      seen.add(text);
+      reasons.push({ text, tier, step });
+    };
     const llm = _config.llm || {};
     if (_providerEnvMissing()) {
-      reasons.push(`${_providerEnvKey()} is not visible`);
+      push(`${_providerEnvKey()} is not visible`, 'blocking', 'provider');
     } else if (!llm.provider || !llm.model) {
-      reasons.push('Connect a model provider');
+      push('Connect a model provider', 'blocking', 'provider');
     }
     const details = _status.sectionDetails || {};
     Object.entries(details).forEach(([name, detail]) => {
-      if (!detail.blocking && !detail.actionRequired) return;
+      if (!detail.blocking && !detail.actionRequired
+        && detail.status !== 'missing' && detail.status !== 'degraded') return;
+      const step = _stepForSection(name);
+      const tier = detail.blocking || detail.status === 'missing' ? 'blocking' : 'optional';
       if ((name === 'llm' || name === 'provider') && detail.status === 'missing') {
-        if (!reasons.includes('Connect a model provider')) reasons.push('Connect a model provider');
+        push('Connect a model provider', 'blocking', step);
         return;
       }
       if ((name === 'llm' || name === 'provider') && reasons.length) return;
-      const reason = _setupActionReason(name, detail);
-      if (!reasons.includes(reason)) reasons.push(reason);
+      push(_setupActionReason(name, detail), tier, step);
     });
-    return reasons.length ? reasons : ['Review setup sections for pending actions'];
+    if (!reasons.length) push('Review setup sections for pending actions', 'blocking', 'provider');
+    return reasons;
   }
 
   function _setupActionReason(name, detail) {
@@ -227,16 +285,7 @@ const SetupView = (() => {
 
   function _initialStepFromStatus() {
     const details = _status.sectionDetails || {};
-    const sectionSteps = [
-      ['llm', 'provider'],
-      ['router', 'router'],
-      ['channels', 'channels'],
-      ['search', 'extras'],
-      ['image_generation', 'extras'],
-      ['audio', 'extras'],
-      ['memory_embedding', 'extras'],
-    ];
-    const entry = sectionSteps.find(([section]) => {
+    const entry = SECTION_STEPS.find(([section]) => {
       const detail = details[section] || {};
       return (
         detail.blocking
@@ -248,6 +297,11 @@ const SetupView = (() => {
     if (entry) return entry[1];
     if (_status.needsOnboarding === false) return 'finish';
     return 'provider';
+  }
+
+  function _stepForSection(name) {
+    const entry = SECTION_STEPS.find(([section]) => section === name);
+    return entry ? entry[1] : 'provider';
   }
 
   function _renderNeedList(items, label, dataAttr = '') {

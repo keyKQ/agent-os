@@ -247,11 +247,13 @@ def test_setup_view_starts_on_most_relevant_step():
     assert "function _initialStepFromStatus()" in txt
     assert "await _load();\n    _selectInitialStep();" in render_body
     assert render_body.index("await _load();") < render_body.index("_selectInitialStep();")
-    assert txt.index("const entry = sectionSteps.find") < txt.index(
+    # Initial-step selection reuses the shared SECTION_STEPS map.
+    assert txt.index("const entry = SECTION_STEPS.find(([section]) =>") < txt.index(
         "if (_status.needsOnboarding === false) return 'finish';"
     )
     assert "if (_status.needsOnboarding === false) return 'finish';" in txt
     assert "detail.actionRequired" in txt
+    assert "const SECTION_STEPS = [" in txt
     assert "['llm', 'provider']" in txt
     assert "['router', 'router']" in txt
     assert "['search', 'extras']" in txt
@@ -265,19 +267,39 @@ def test_setup_view_starts_on_most_relevant_step():
 def test_setup_header_tracks_optional_action_required_sections():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
     draw_start = txt.index("function _draw()")
-    draw_end = txt.index("  function _renderOnboardingReasons()", draw_start)
+    draw_end = txt.index("  function _renderStepButton", draw_start)
     draw_body = txt[draw_start:draw_end]
+    headline_start = txt.index("function _setupHeadline(reasons)")
+    headline_end = txt.index("  function _renderOnboardingReasons", headline_start)
+    headline_body = txt[headline_start:headline_end]
     reasons_start = txt.index("function _onboardingReasons()")
-    reasons_end = txt.index("  function _renderCurrentStep()", reasons_start)
+    reasons_end = txt.index("  function _setupActionReason", reasons_start)
     reasons_body = txt[reasons_start:reasons_end]
 
     assert "function _hasSetupAction()" in txt
-    assert "const setupAction = _hasSetupAction();" in draw_body
-    assert "${setupAction ? 'Action needed' : 'Ready to run'}" in draw_body
-    assert "setup__status ${setupAction ? 'is-warn' : 'is-ok'}" in draw_body
-    assert "${setupAction ? 'Action needed' : 'Ready'}" in draw_body
+    # The header derives its headline/chip from the tiered reasons list, not a
+    # binary _hasSetupAction() flag.
+    assert "const reasons = _onboardingReasons();" in draw_body
+    assert "const headline = _setupHeadline(reasons);" in draw_body
+    assert "<h2>${_esc(headline.title)}</h2>" in draw_body
+    assert 'class="setup__status ${headline.tone}"' in draw_body
+    assert "${_esc(headline.chip)}" in draw_body
+    assert "${_renderOnboardingReasons(reasons)}" in draw_body
+    # Three tiers: blocking -> Action needed, optional-only -> Optional
+    # improvements, clean -> Ready to run.
+    assert "reason.tier === 'blocking'" in headline_body
+    assert "title: 'Action needed'" in headline_body
+    assert "title: 'Optional improvements'" in headline_body
+    assert "title: 'Ready to run'" in headline_body
+    assert "tone: 'is-optional'" in headline_body
+    assert "'item' : 'items'" in headline_body
+    # Reasons are tiered {text, tier, step} objects.
     assert "if (!_hasSetupAction()) return [];" in reasons_body
-    assert "if (!detail.blocking && !detail.actionRequired)" in reasons_body
+    assert "reasons.push({ text, tier, step });" in reasons_body
+    assert (
+        "detail.blocking || detail.status === 'missing' ? 'blocking' : 'optional'"
+        in reasons_body
+    )
 
 
 def test_setup_finish_summarizes_provider_proxy_only_when_present():
@@ -785,6 +807,7 @@ def test_setup_view_does_not_redraw_dirty_channel_form_during_status_poll():
 
 def test_setup_view_surfaces_action_needed_reasons():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    css = (ROOT / "static/css/views/setup.css").read_text(encoding="utf-8")
     assert "function _onboardingReasons" in txt
     assert "setup-reasons" in txt
     assert "Connect a model provider" in txt
@@ -794,12 +817,34 @@ def test_setup_view_surfaces_action_needed_reasons():
     assert "detail.blocking" in txt
     assert "(_status.channelCount || 0) === 0" not in txt
 
+    # Reasons render as clickable rows that jump to the section's setup step
+    # via the shared SECTION_STEPS map (reused by initial-step selection too).
+    assert "const SECTION_STEPS = [" in txt
+    assert "function _stepForSection(name)" in txt
+    assert "const entry = SECTION_STEPS.find(([section]) => section === name);" in txt
+    assert "function _renderReasonRow(reason)" in txt
+    assert 'data-step="${_esc(reason.step)}"' in txt
+    assert "'Fix →'" in txt
+    assert "'Review →'" in txt
+    assert "setup-reasons__action" in txt
+    assert "setup-reasons__fix" in txt
+    # Blocking rows are visually distinct from optional rows.
+    assert "is-blocking" in txt
+    assert ".setup-reasons__item.is-blocking .setup-reasons__action" in css
+    assert ".setup__status.is-optional" in css
+    # _initialStepFromStatus reuses the shared map rather than a local copy.
+    init_start = txt.index("function _initialStepFromStatus()")
+    init_end = txt.index("  function _stepForSection", init_start)
+    init_body = txt[init_start:init_end]
+    assert "SECTION_STEPS.find(([section]) =>" in init_body
+    assert "const sectionSteps = [" not in init_body
+
 
 def test_setup_stepper_surfaces_readiness_for_each_setup_area():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
     css = (ROOT / "static/css/views/setup.css").read_text(encoding="utf-8")
     draw_start = txt.index("function _draw()")
-    draw_end = txt.index("  function _renderOnboardingReasons()", draw_start)
+    draw_end = txt.index("  function _renderStepButton", draw_start)
     draw_body = txt[draw_start:draw_end]
 
     assert "STEPS.map(_renderStepButton).join('')" in draw_body
