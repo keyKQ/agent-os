@@ -48,12 +48,12 @@ EMBEDDING_MODEL_MANIFESTS: dict[str, ModelManifest] = {
         target_dirname="embeddinggemma-300m-q8",
         base_url="https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/resolve/main/",
         files=(
-            "onnx/model_quantized.onnx",
             "onnx/model_quantized.onnx_data",
             "tokenizer.json",
             "tokenizer_config.json",
             "config.json",
             "special_tokens_map.json",
+            "onnx/model_quantized.onnx",
         ),
         approx_total_mb=340,
     ),
@@ -74,11 +74,14 @@ def _manifest_for(model_id: str) -> ModelManifest:
 
 
 def downloaded_model_dir(model_id: str) -> Path | None:
-    """Return the target dir for ``model_id`` if it exists and has an ONNX file.
+    """Return the target dir for ``model_id`` if a complete download exists.
 
-    Returns ``None`` when the model is unknown, the directory does not exist,
-    or the directory exists but contains no ``*.onnx`` file (e.g. a partial or
-    stale download).
+    For a known model (registered in ``EMBEDDING_MODEL_MANIFESTS``), every
+    file in its manifest must be present with size > 0 — a gateway booting
+    mid-download (or after a crash) must never resolve a model with missing
+    weights. Returns ``None`` when the model is unknown, the directory does
+    not exist, or any manifest file is missing/empty (a partial or stale
+    download).
     """
 
     manifest = EMBEDDING_MODEL_MANIFESTS.get(model_id)
@@ -87,8 +90,10 @@ def downloaded_model_dir(model_id: str) -> Path | None:
     target = user_models_dir() / manifest.target_dirname
     if not target.is_dir():
         return None
-    if next(target.glob("*.onnx"), None) is None:
-        return None
+    for remote_path in manifest.files:
+        file_path = target / _flattened_name(remote_path)
+        if not file_path.is_file() or file_path.stat().st_size == 0:
+            return None
     return target
 
 

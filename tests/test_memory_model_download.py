@@ -10,13 +10,41 @@ from agentos.memory import model_download as md
 
 def test_manifest_flattens_onnx_paths(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(md, "user_models_dir", lambda: tmp_path)
-    # downloaded_model_dir: None when absent, None when dir exists but no onnx
+    # downloaded_model_dir: None when absent, None when dir exists but empty
     assert md.downloaded_model_dir("google/embeddinggemma-300m") is None
     target = tmp_path / "embeddinggemma-300m-q8"
     target.mkdir(parents=True)
     assert md.downloaded_model_dir("google/embeddinggemma-300m") is None
     (target / "model_quantized.onnx").write_bytes(b"x")
+    # Partial download (only the .onnx present, not the rest of the
+    # manifest) must not resolve — this is the boot-race guard.
+    assert md.downloaded_model_dir("google/embeddinggemma-300m") is None
+
+
+def test_downloaded_model_dir_requires_all_manifest_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(md, "user_models_dir", lambda: tmp_path)
+    target = tmp_path / "embeddinggemma-300m-q8"
+    target.mkdir(parents=True)
+    manifest = md.EMBEDDING_MODEL_MANIFESTS["google/embeddinggemma-300m"]
+    names = [md._flattened_name(p) for p in manifest.files]
+
+    # Write all files except the last one (still incomplete).
+    for name in names[:-1]:
+        (target / name).write_bytes(b"x")
+    assert md.downloaded_model_dir("google/embeddinggemma-300m") is None
+
+    # A zero-byte file (e.g. an interrupted os.replace target) also fails.
+    (target / names[-1]).write_bytes(b"")
+    assert md.downloaded_model_dir("google/embeddinggemma-300m") is None
+
+    # Once every file has size > 0, the dir resolves.
+    (target / names[-1]).write_bytes(b"x")
     assert md.downloaded_model_dir("google/embeddinggemma-300m") == target
+
+
+def test_downloaded_model_dir_unknown_model_returns_none(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(md, "user_models_dir", lambda: tmp_path)
+    assert md.downloaded_model_dir("nope/none") is None
 
 
 def _mock_transport(fetched: list[str]) -> httpx.MockTransport:

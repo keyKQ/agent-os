@@ -70,11 +70,14 @@ _DEFAULT_MODEL_SPEC = LocalModelSpec(
 )
 
 # Ollama tags don't carry HF-style org/name ids, so map the ones we know
-# apply prompt prefixes to the canonical spec id. Any other Ollama model
-# (e.g. "nomic-embed-text") falls through to the no-prefix default.
+# apply prompt prefixes to the canonical spec id. The lookup key is the
+# model name with any ":tag" suffix stripped first (see ``_spec_id``), so
+# "embeddinggemma:latest", "embeddinggemma:300m", and bare "embeddinggemma"
+# all resolve to the same alias. Any other Ollama model (e.g.
+# "nomic-embed-text" or "nomic-embed-text:latest") falls through to the
+# no-prefix default.
 _OLLAMA_SPEC_ALIASES: dict[str, str] = {
     "embeddinggemma": "google/embeddinggemma-300m",
-    "embeddinggemma:300m": "google/embeddinggemma-300m",
 }
 
 
@@ -266,8 +269,13 @@ class OllamaEmbeddingProvider:
         """Canonical spec id for prompt-prefix lookups. Ollama tags don't
         carry HF-style org/name ids, so known prefix-capable tags are
         mapped via ``_OLLAMA_SPEC_ALIASES``; anything else (e.g.
-        ``nomic-embed-text``) gets the no-prefix default."""
-        return _OLLAMA_SPEC_ALIASES.get(self._model, self._model)
+        ``nomic-embed-text``) gets the no-prefix default.
+
+        The ``:tag`` suffix (e.g. ``:latest``, ``:300m``) is stripped
+        before the alias lookup so any tag of a known model (not just the
+        untagged name) resolves to its prefix-capable spec."""
+        base = self._model.split(":", 1)[0]
+        return _OLLAMA_SPEC_ALIASES.get(base, self._model)
 
     async def _embed_raw(self, text: str) -> list[float]:
         async def _call():
@@ -396,6 +404,7 @@ class LocalEmbeddingProvider:
         #   <path>           → use exactly this dir
         # ``None`` is rejected explicitly: the previous semantics
         # (force sentence-transformers fallback) no longer exists.
+        self._onnx_dir_explicit = onnx_dir != "auto"
         if onnx_dir == "auto":
             self._onnx_dir: Path | None = self.resolve_onnx_dir(self._model_name)
         elif onnx_dir is None:
@@ -481,6 +490,15 @@ class LocalEmbeddingProvider:
                 "it contains no *.onnx files."
             )
         spec = model_spec(self._model_name)
+        if self._onnx_dir_explicit and spec is _DEFAULT_MODEL_SPEC:
+            logger.warning(
+                "local_embedding.default_spec_for_custom_dir",
+                model_name=self._model_name,
+                onnx_dir=str(self._onnx_dir),
+                assumed_pooling=_DEFAULT_MODEL_SPEC.pooling,
+                assumed_max_tokens=_DEFAULT_MODEL_SPEC.max_tokens,
+                assumed_prefixes=False,
+            )
         try:
             session = ort.InferenceSession(str(onnx_files[0]), providers=["CPUExecutionProvider"])
             tokenizer_path = self._onnx_dir / "tokenizer.json"

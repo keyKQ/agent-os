@@ -65,6 +65,34 @@ async def test_ollama_non_gemma_model_unprefixed(monkeypatch):
     assert seen == ["q"]
 
 
+async def test_ollama_gemma_tagged_model_still_prefixed(monkeypatch):
+    """A ':tag' suffix (e.g. from `ollama pull embeddinggemma:latest`) must
+    not defeat the alias lookup — the tag is stripped before matching."""
+    provider = OllamaEmbeddingProvider(model="embeddinggemma:latest")
+    seen: list[str] = []
+
+    async def fake_embed(text: str) -> list[float]:
+        seen.append(text)
+        return [0.0]
+
+    monkeypatch.setattr(provider, "_embed_raw", fake_embed)
+    await provider.embed_query("q")
+    assert seen == ["task: search result | query: q"]
+
+
+async def test_ollama_non_gemma_tagged_model_unprefixed(monkeypatch):
+    provider = OllamaEmbeddingProvider(model="nomic-embed-text:latest")
+    seen: list[str] = []
+
+    async def fake_embed(text: str) -> list[float]:
+        seen.append(text)
+        return [0.0]
+
+    monkeypatch.setattr(provider, "_embed_raw", fake_embed)
+    await provider.embed_query("q")
+    assert seen == ["q"]
+
+
 class _StubEncoding:
     def __init__(self, ids: list[int], attention_mask: list[int]) -> None:
         self.ids = ids

@@ -135,7 +135,10 @@ source = "workspace"
 #
 # [memory.embedding.ollama]
 # base_url = "http://localhost:11434"
-# model = "nomic-embed-text"
+# model = "embeddinggemma"
+# Older setups may still have "nomic-embed-text" configured here; that
+# continues to work, but changing the model (in either direction) triggers
+# a full reindex since it changes the embedding fingerprint.
 # Turn capture writes memory/archive/** audit transcripts by default.
 # These archives are not searchable memory unless explicitly opted in.
 # capture_user = true

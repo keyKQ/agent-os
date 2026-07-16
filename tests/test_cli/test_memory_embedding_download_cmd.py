@@ -29,8 +29,8 @@ def test_embedding_download_reports_target_and_reindex_hint(tmp_path, monkeypatc
     assert "tokenizer.json" in result.stdout
     normalized = " ".join(result.stdout.split())
     assert (
-        "Restart the gateway (or run `agentos memory index --force`) to reindex "
-        "with the new model." in normalized
+        "Restart the gateway (or stop/start it) to pick up the new model; "
+        "reindexing then happens automatically on the next sync." in normalized
     )
 
 

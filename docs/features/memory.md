@@ -116,7 +116,8 @@ agentos memory embedding-download
 
 The files land under `~/.agentos/models/embeddings/`. Use `--model <id>` to select
 a different model; the default is `google/embeddinggemma-300m`. Auto mode then
-prefers the downloaded model automatically — no config change required. To pin a specific
+prefers the downloaded model automatically — no config change required, but the
+gateway must be restarted to pick it up (see below). To pin a specific
 local model instead of relying on auto, set `[memory.embedding.local]`:
 
 ```toml
@@ -129,13 +130,14 @@ model = "google/embeddinggemma-300m"  # or "BAAI/bge-small-zh-v1.5"
 The active provider, model id, and ONNX directory are hashed into an embedding
 **fingerprint**. Switching the local model (for example, after downloading
 EmbeddingGemma or changing `[memory.embedding.local].model`) changes that
-fingerprint and triggers a full reindex on the next gateway start, so existing
-vectors are never mixed across incompatible models. You can force it immediately
-with:
+fingerprint, so existing vectors are never mixed across incompatible models.
 
-```sh
-agentos memory index --force
-```
+Applying a new local model requires restarting the gateway (or a full
+stop/start) — the provider is resolved once at boot, so `agentos memory index
+--force` against an already-running gateway just reindexes with whichever
+provider it already loaded, not the new one. Once the gateway has restarted
+with the new model, the fingerprint change is detected automatically and a
+full reindex happens on the next sync; no manual `--force` step is needed.
 
 ## Curated memory (MEMORY.md / USER.md)
 

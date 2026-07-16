@@ -363,8 +363,8 @@ def memory_embedding_download_cmd(
 
     console.print(f"[green]Downloaded to {target_dir}[/green]")
     console.print(
-        "Restart the gateway (or run `agentos memory index --force`) to reindex "
-        "with the new model."
+        "Restart the gateway (or stop/start it) to pick up the new model; "
+        "reindexing then happens automatically on the next sync."
     )
 
 
