@@ -408,6 +408,7 @@ MemoryEmbeddingProvider = Literal[
 class MemoryEmbeddingLocalConfig(BaseModel):
     """Local memory embedding settings."""
 
+    model: str | None = None
     onnx_dir: str | None = None
 
 
