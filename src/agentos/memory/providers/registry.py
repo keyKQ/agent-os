@@ -30,19 +30,15 @@ _MEM0_EXTRA = "pip install 'use-agent-os[mem0]'"
 def _make_mem0(
     *, memory_config: Any, agent_state_dir: Path
 ) -> MemoryProvider:
-    """Construct the mem0 provider (Task B5 owns the implementation).
+    """Construct the mem0 provider (Task B5).
 
-    Lazily imports ``agentos.memory.providers.mem0_provider``. Until B5 lands,
-    that module does not exist, so the import raises :class:`ImportError` and
-    the caller routes to the actionable-warning path — exactly the same path
-    taken once B5 exists but the ``mem0ai`` dependency is not installed.
+    Lazily imports ``agentos.memory.providers.mem0_provider``. That module
+    imports ``mem0ai`` only inside ``initialize`` (never at import time), so
+    this import succeeds whether or not the optional ``mem0`` extra is present;
+    a genuinely missing/broken provider module raises :class:`ImportError`,
+    which the caller routes to the actionable-warning path.
     """
-    # B5 owns this module; until it lands the import raises ImportError, which
-    # the caller routes to the actionable-warning path. The ignore covers the
-    # not-yet-typed provider module.
-    from agentos.memory.providers.mem0_provider import (  # type: ignore[import]
-        Mem0Provider,
-    )
+    from agentos.memory.providers.mem0_provider import Mem0Provider
 
     provider: MemoryProvider = Mem0Provider(
         memory_config=memory_config, agent_state_dir=agent_state_dir

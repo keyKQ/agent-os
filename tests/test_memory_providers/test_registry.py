@@ -1,13 +1,12 @@
 """Tests for the memory-provider registry (Task B3).
 
 Offline and deterministic: no ``mem0ai``, no network. The mem0 factory path
-is exercised both TODAY (its provider module does not exist yet, so the lazy
-import raises ImportError) and via monkeypatch to simulate the future
-"module exists but raises ImportError" and "constructs successfully" paths.
+is exercised for real (the provider module imports without the ``mem0ai``
+extra) and via monkeypatch to simulate the "module exists but raises
+ImportError" (extra missing at ``initialize``) and generic-failure paths.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -42,20 +41,33 @@ def test_create_provider_unknown_name_returns_none() -> None:
     assert result is None
 
 
-def test_create_provider_mem0_module_missing_returns_none() -> None:
-    """TODAY's path: ``mem0_provider`` module does not exist yet.
+def test_create_provider_mem0_module_imports_cleanly() -> None:
+    """B5 landed: ``mem0_provider`` now imports without the ``mem0ai`` dep.
 
-    The lazy import in ``_make_mem0`` raises ImportError, which the registry
-    routes to the actionable-warning path and returns None. This must hold
-    with no monkeypatching so B3 is shippable before B5.
+    The provider imports ``mem0ai`` only inside ``initialize`` (never at module
+    import time), so the lazy import in ``_make_mem0`` succeeds even with the
+    extra absent. Construction with a valid config returns a real provider —
+    the ImportError-on-missing-module path from B3 no longer applies. (A bare
+    ``object()`` config still degrades to None via the generic-error path,
+    proving the registry never crashes boot.)
     """
-    assert "agentos.memory.providers.mem0_provider" not in sys.modules
+    from agentos.gateway.config import MemoryConfig
+
+    cfg = MemoryConfig()
+    cfg.provider.name = "mem0"
     result = create_provider(
         "mem0",
-        memory_config=object(),
+        memory_config=cfg,
         agent_state_dir=Path("/tmp/agent"),
     )
-    assert result is None
+    assert result is not None
+    assert result.name == "mem0"
+
+    # A malformed config never crashes boot — it degrades to None.
+    assert (
+        create_provider("mem0", memory_config=object(), agent_state_dir=Path("/tmp/agent"))
+        is None
+    )
 
 
 def test_create_provider_mem0_import_error_from_factory(monkeypatch: Any) -> None:
