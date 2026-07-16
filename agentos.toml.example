@@ -159,6 +159,26 @@ source = "workspace"
 # block being dropped whole at the injection boundary.
 # inject_limit = 6400
 
+# [memory.provider]
+# Optional external memory provider layered on top of built-in memory. When a
+# provider is selected it adds a prompt recall block, fenced recall, per-turn
+# sync, and a write mirror. name is empty by default (built-in memory only).
+# The provider is built once at boot, so changing name requires a gateway
+# restart. mem0 needs the extra: pip install "use-agent-os[mem0]".
+# name = "mem0"  # "" (disabled) | "mem0"
+#
+# [memory.provider.mem0]
+# mem0 defaults target a fully local stack (Ollama LLM + embedder, on-disk
+# vector store) so it works offline with no API keys. vector_store_path is
+# empty by default and resolves to <agent state dir>/mem0 at boot.
+# llm_provider = "ollama"
+# llm_model = "qwen3:4b"
+# llm_base_url = "http://localhost:11434"
+# embedder_provider = "ollama"
+# embedder_model = "embeddinggemma"
+# embedder_base_url = "http://localhost:11434"
+# vector_store_path = ""  # empty -> <agent state dir>/mem0
+
 [memory.dream]
 # Dream consolidation is safety-first by default. Background scheduling and
 # curated MEMORY.md writes require explicit opt-in.

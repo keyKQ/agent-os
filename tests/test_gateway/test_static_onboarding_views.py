@@ -73,6 +73,23 @@ def test_setup_view_loads_catalog_and_status():
     assert "current.mode" in txt
 
 
+def test_setup_memory_card_offers_external_provider_selector():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+
+    # A select bound to memory.provider.name with none (default) + mem0 options.
+    assert "data-memory-provider-name" in txt
+    assert "memory.provider.name" in txt
+    assert "None — built-in memory only" in txt
+    assert ">mem0<" in txt
+    # Hint spells out the extra + the fully-local stack requirement.
+    assert "use-agent-os[mem0]" in txt
+    assert "Ollama" in txt
+    # Saved via config.patch and surfaces the restart hint from the response.
+    save_start = txt.index("async function _saveMemorySettings()")
+    save_body = txt[save_start : txt.index("\n  }", save_start)]
+    assert "memory.provider.name" in save_body
+
+
 def test_setup_view_is_available_and_uses_canonical_cli_fallbacks():
     txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
     assert "SETUP_UI_AVAILABLE" not in txt

@@ -544,3 +544,36 @@ async def test_config_patch_accepts_curated_memory_budget_fields(tmp_path):
     assert cfg.memory.curated_memory_char_limit == 5000
     assert cfg.memory.curated_user_char_limit == 2500
     assert cfg.memory.inject_limit == 7000
+
+
+@pytest.mark.asyncio
+async def test_config_patch_selecting_memory_provider_reports_restart_required(tmp_path):
+    """The external memory-provider manager is built once at boot, so selecting a
+    provider (or retuning its mem0 sub-settings) requires a gateway restart.
+    """
+    cfg = GatewayConfig(config_path=str(tmp_path / "c.toml"))
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "config.patch",
+        {"patches": {"memory.provider.name": "mem0"}},
+        _admin_ctx(cfg),
+    )
+
+    assert res.error is None, res.error
+    assert res.payload["restartRequired"] is True
+    assert cfg.memory.provider.name == "mem0"
+
+
+@pytest.mark.asyncio
+async def test_config_patch_retuning_mem0_settings_reports_restart_required(tmp_path):
+    cfg = GatewayConfig(config_path=str(tmp_path / "c.toml"))
+    res = await get_dispatcher().dispatch(
+        "r1",
+        "config.patch",
+        {"patches": {"memory.provider.mem0.llm_model": "qwen3:8b"}},
+        _admin_ctx(cfg),
+    )
+
+    assert res.error is None, res.error
+    assert res.payload["restartRequired"] is True
+    assert cfg.memory.provider.mem0.llm_model == "qwen3:8b"

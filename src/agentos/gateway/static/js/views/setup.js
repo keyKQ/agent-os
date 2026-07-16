@@ -699,6 +699,7 @@ const SetupView = (() => {
     const memorySettingsMemoryLimit = memoryConfig.curated_memory_char_limit ?? 4000;
     const memorySettingsUserLimit = memoryConfig.curated_user_char_limit ?? 2000;
     const memorySettingsInjectLimit = memoryConfig.inject_limit ?? 6400;
+    const memoryProviderName = String(((memoryConfig.provider || {}).name) || '');
     // ~310 chars of header/separator overhead per curated block (see
     // MemoryConfig.inject_limit docstring in gateway/config.py) — a
     // client-side heuristic only, not an authoritative budget check.
@@ -809,6 +810,13 @@ const SetupView = (() => {
               <h4>Memory</h4>
             </div>
             <p class="setup-muted">Bounded long-term memory and profile notes carried into every conversation.</p>
+            <label><span>Memory provider</span>
+              <select id="setup-memory-provider-name" name="setup_memory_provider_name" data-memory-provider-name>
+                <option value=""${memoryProviderName === '' ? ' selected' : ''}>None — built-in memory only</option>
+                <option value="mem0"${memoryProviderName === 'mem0' ? ' selected' : ''}>mem0</option>
+              </select>
+            </label>
+            <p class="setup-muted">mem0 runs fully local (Ollama + on-disk vector store) and needs <code>pip install 'use-agent-os[mem0]'</code>. Switching provider requires a gateway restart.</p>
             <label><span>Long-term memory budget (MEMORY.md)</span>
               <input id="setup-memory-settings-memory-limit" name="setup_memory_settings_memory_limit" type="number" min="0" step="1" inputmode="numeric" data-memory-settings-memory-limit value="${_esc(String(memorySettingsMemoryLimit))}">
             </label>
@@ -1777,7 +1785,9 @@ const SetupView = (() => {
     const memoryLimitInput = _el.querySelector('[data-memory-settings-memory-limit]');
     const userLimitInput = _el.querySelector('[data-memory-settings-user-limit]');
     const injectLimitInput = _el.querySelector('[data-memory-settings-inject-limit]');
+    const providerNameInput = _el.querySelector('[data-memory-provider-name]');
     const patches = {
+      'memory.provider.name': providerNameInput?.value || null,
       'memory.curated_memory_char_limit': Number.parseInt(memoryLimitInput?.value || '0', 10),
       'memory.curated_user_char_limit': Number.parseInt(userLimitInput?.value || '0', 10),
       'memory.inject_limit': Number.parseInt(injectLimitInput?.value || '0', 10),

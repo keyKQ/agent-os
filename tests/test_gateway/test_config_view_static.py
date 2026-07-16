@@ -231,6 +231,17 @@ def test_config_memory_help_text_documents_curated_memory_keys() -> None:
     assert "'memory.embedding.local.model':" in source
 
 
+def test_config_memory_help_text_documents_external_provider_keys() -> None:
+    source = CONFIG_JS.read_text(encoding="utf-8")
+
+    assert "'memory.provider.name':" in source
+    assert "'memory.provider.mem0.llm_model':" in source
+    assert "'memory.provider.mem0.embedder_model':" in source
+    # Provider changes are wired at boot, so the help must flag the restart.
+    provider_help = source.split("'memory.provider.name':", 1)[1].split("',", 1)[0]
+    assert "restart" in provider_help.lower()
+
+
 def test_config_field_labels_wrap_long_keys_on_phone_widths() -> None:
     css = CONFIG_CSS.read_text(encoding="utf-8")
     mobile = css.split("@media (max-width: 640px)", 1)[1]

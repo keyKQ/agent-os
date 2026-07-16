@@ -228,6 +228,83 @@ is lost). `MEMORY.md` is rewritten in place as a clean §-delimited list.
 `MEMORY.md` directly. Durable facts about the agent or the user go through
 the `memory` tool described above instead.
 
+## External memory providers
+
+Built-in memory (the index, curated files, and dream consolidation above) is
+always on. On top of it you can enable an **external memory provider** — an
+extra recall/write layer that runs alongside built-in memory rather than
+replacing it. It is **disabled by default**: with no provider selected the
+layer is never imported and adds zero overhead.
+
+When a provider is active it hooks four points:
+
+- **Prompt block** — a recall block is assembled into the system prompt each
+  turn, so relevant prior facts are available to the model up front.
+- **Fenced recall** — recalled provider memories are wrapped in a clear fence
+  in the prompt so they are attributable and cannot be confused with the live
+  conversation.
+- **Per-turn sync** — after each turn the user/assistant exchange is handed to
+  the provider (serialized through one background queue per manager) so it can
+  extract and store durable memories.
+- **Write mirror** — curated `memory` tool writes are mirrored to the provider
+  so both stores stay consistent.
+
+### mem0 (fully local by default)
+
+The bundled provider is [mem0](https://github.com/mem0ai/mem0). Its defaults
+target a **fully local stack** so it works offline with no API keys and no data
+leaving the machine:
+
+- **LLM**: Ollama running `qwen3:4b` at `http://localhost:11434` (used to
+  extract and summarize memories).
+- **Embedder**: Ollama running `embeddinggemma` at the same endpoint.
+- **Vector store**: an on-disk store under the agent state directory
+  (`<agent state dir>/mem0`) when `vector_store_path` is left empty.
+
+Install the optional extra (it is **not** a required dependency — `mem0ai` is
+never imported unless the provider is selected):
+
+```sh
+pip install 'use-agent-os[mem0]'
+```
+
+Make sure Ollama is running and the two models are pulled:
+
+```sh
+ollama pull qwen3:4b
+ollama pull embeddinggemma
+```
+
+### Configuration
+
+Select and tune the provider under `[memory.provider]`:
+
+```toml
+[memory.provider]
+name = "mem0"  # "" (disabled, default) | "mem0"
+
+[memory.provider.mem0]
+llm_provider = "ollama"
+llm_model = "qwen3:4b"
+llm_base_url = "http://localhost:11434"
+embedder_provider = "ollama"
+embedder_model = "embeddinggemma"
+embedder_base_url = "http://localhost:11434"
+vector_store_path = ""  # empty -> <agent state dir>/mem0
+```
+
+The same keys are editable from the Setup view's **Memory** card (the *Memory
+provider* selector) and the Config view's **Memory** tab.
+
+**Restart required.** The provider manager is built once at gateway boot, so
+changing `memory.provider.name` — or any `memory.provider.mem0.*` setting —
+only takes effect after a gateway restart. The Setup and Config UIs surface a
+restart hint when you save these keys.
+
+**Privacy.** With the default stack, everything (LLM, embeddings, vector
+store) stays on the local machine. mem0 telemetry is disabled, so no usage
+data is sent externally.
+
 ## Maintenance and Repair
 
 Refresh the index after editing memory files or changing memory configuration:

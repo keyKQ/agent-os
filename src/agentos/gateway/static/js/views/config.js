@@ -88,6 +88,22 @@ const ConfigView = (() => {
       'Character budget for USER.md, the curated user profile file.',
     'memory.inject_limit':
       'Cap on the combined curated MEMORY.md + USER.md blocks injected into every system prompt. Keep it above the sum of the two char-limit budgets plus roughly 310 chars of header/separator overhead, or the user-profile block is dropped whole to stay under budget.',
+    'memory.provider.name':
+      'Optional external memory provider layered on top of built-in memory. Empty (the default) keeps built-in memory only; "mem0" enables the mem0 provider (prompt recall block, fenced recall, per-turn sync, write mirror). The provider is built once at boot, so changing this requires a gateway restart. mem0 needs the extra: pip install "use-agent-os[mem0]".',
+    'memory.provider.mem0.llm_provider':
+      'Backend the mem0 provider uses for its extraction/summarization LLM. Defaults to "ollama" for a fully local stack. Requires a gateway restart.',
+    'memory.provider.mem0.llm_model':
+      'mem0 extraction/summarization model. Default "qwen3:4b" (a small local Ollama model). Requires a gateway restart.',
+    'memory.provider.mem0.llm_base_url':
+      'Base URL for the mem0 LLM backend. Defaults to the local Ollama endpoint http://localhost:11434. Requires a gateway restart.',
+    'memory.provider.mem0.embedder_provider':
+      'Backend for mem0 embeddings. Defaults to "ollama" so embeddings stay local. Requires a gateway restart.',
+    'memory.provider.mem0.embedder_model':
+      'mem0 embedding model. Default "embeddinggemma" (local via Ollama). Requires a gateway restart.',
+    'memory.provider.mem0.embedder_base_url':
+      'Base URL for the mem0 embedder backend. Defaults to the local Ollama endpoint http://localhost:11434. Requires a gateway restart.',
+    'memory.provider.mem0.vector_store_path':
+      'On-disk directory for the mem0 vector store. Empty resolves to <agent state dir>/mem0 at boot, keeping all data local. Requires a gateway restart.',
     'sandbox.sandbox':
       'Runtime sandbox switch. The out-of-box posture keeps this false; use agentos sandbox on|bypass|full to change sandbox and permission defaults together.',
     'sandbox.security_grading':
