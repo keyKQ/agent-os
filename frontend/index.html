@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>AgentOS Control</title>
+    <link rel="icon" href="{{ base_path }}/static/img/agentos-mark.png?v={{ version }}" type="image/png">
+    <link rel="shortcut icon" href="{{ base_path }}/static/img/agentos-mark.png?v={{ version }}" type="image/png">
+    <link rel="apple-touch-icon" href="{{ base_path }}/static/img/agentos-mark.png?v={{ version }}">
+    <!-- Theme flash prevention: must run BEFORE CSS so the first paint
+         already has the correct `data-theme` value. Mirrors theme.js logic. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('agentos-theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
+</head>
+<body>
+    <noscript>
+        <div style="padding:2rem;font-family:system-ui,-apple-system,sans-serif;color:#333;background:#fff;max-width:560px;margin:2rem auto;border:1px solid #ddd;border-radius:8px">
+            <h2 style="margin:0 0 .5rem">JavaScript required</h2>
+            <p style="margin:0;color:#555">AgentOS Control needs JavaScript to render the chat, sessions, and configuration views. Please enable it in your browser to continue.</p>
+        </div>
+    </noscript>
+    <div id="app"></div>
+
+    <!-- Bootstrap data injected by Jinja2 -->
+    <div id="agentos-data"
+         data-version="{{ version }}"
+         data-ws-url="{{ ws_url }}"
+         data-auth-mode="{{ auth_mode }}"
+         data-base-path="{{ base_path }}"
+         data-config-path="{{ config_path }}"
+         style="display:none"></div>
+
+    <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>

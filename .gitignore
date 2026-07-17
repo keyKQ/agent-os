@@ -48,6 +48,9 @@ GEMINI.md
 # and the WebUI static asset path so the gateway page renders the mark.
 !/assets/*.png
 !/src/agentos/gateway/static/img/*.png
+# Frontend workspace copies of the same brand assets (CSS url() references
+# resolve against these under Vite).
+!/frontend/src/img/*.png
 site/
 /plugins/
 crontab-*
@@ -107,3 +110,6 @@ node_modules/
 # Editable diagram sources (Excalidraw). Publish rendered PNG/SVG under
 # docs/diagrams/ instead; keep the editable source local.
 *.excalidraw
+# React/Vite frontend workspace (Task 1+ webui migration).
+src/agentos/gateway/webui_dist/
+frontend/node_modules/
