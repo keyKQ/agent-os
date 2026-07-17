@@ -41,6 +41,35 @@ def _collect_paths(payload: Any, prefix: str = "") -> set[str]:
     return paths
 
 
+def diff_paths(old: Any, new: Any, prefix: str = "") -> set[str]:
+    """Dotted paths that DIFFER between two nested dicts (added/removed/changed).
+
+    Recurses through matching dict subtrees; a key present in exactly one side,
+    or whose leaf value differs, yields its dotted path. Non-dict values (lists,
+    scalars) are compared by equality — a changed list yields the list's own
+    path, not per-index paths. Used by ``config.apply`` to treat a YAML-mode
+    Save as an edit of only the fields the operator actually changed versus the
+    baseline they were shown (``config.get``), so a field left at its runtime
+    echo is restored while a deliberately edited overridden field persists.
+    """
+    if isinstance(old, dict) and isinstance(new, dict):
+        changed: set[str] = set()
+        for key in old.keys() | new.keys():
+            current = f"{prefix}.{key}" if prefix else key
+            if key not in old or key not in new:
+                changed.add(current)
+                # A whole added/removed subtree: name every leaf inside it too so
+                # nested edits under a newly added section are all explicit.
+                changed.update(_collect_paths(new.get(key), current))
+                changed.update(_collect_paths(old.get(key), current))
+            else:
+                changed.update(diff_paths(old[key], new[key], current))
+        return changed
+    if old != new and prefix:
+        return {prefix}
+    return set()
+
+
 def _align_auto_router_profile_for_provider_patch(
     source_config: Any,
     cfg_dict: dict[str, Any],
@@ -392,7 +421,11 @@ async def _handle_config_set(params: dict | None, ctx: RpcContext) -> dict[str, 
     if _memory_restart_required_for_paths({path}):
         _validate_memory_embedding_semantics(new_config)
     _inherit_runtime_secrets(ctx.config, new_config)
-    explicit_paths = {path} | _collect_paths(value, path)
+    # host/port are never persistable via RPC (bind posture is CLI-only), so a
+    # readonly path echoed inside a nested value must never enter explicit_paths
+    # — otherwise it short-circuits the runtime-override restore in persist_config
+    # and freezes a transient CLI bind. Subtract them unconditionally.
+    explicit_paths = ({path} | _collect_paths(value, path)) - _READONLY_PATHS
     _clear_runtime_secret_paths(new_config, explicit_paths - redacted_paths)
     _sync_provider_selector(ctx, new_config)
     _update_config_in_place(ctx.config, new_config)
@@ -461,6 +494,11 @@ async def _handle_config_patch(params: dict | None, ctx: RpcContext) -> dict[str
     explicit_paths = set(dot_patches.keys()) | _collect_paths(patch_data)
     for path, value in dot_patches.items():
         explicit_paths.update(_collect_paths(value, path))
+    # A UI form can echo the display-only host/port alongside a genuine edit;
+    # they are read-only paths (skipped when applied), so they must not enter
+    # explicit_paths and short-circuit the runtime-override restore. host/port
+    # are never persistable via RPC regardless.
+    explicit_paths -= _READONLY_PATHS
     _align_auto_router_profile_for_provider_patch(ctx.config, cfg_dict, explicit_paths)
 
     from agentos.gateway.config import GatewayConfig
@@ -515,11 +553,14 @@ async def _handle_config_apply(params: dict | None, ctx: RpcContext) -> dict[str
 
     from agentos.gateway.config import GatewayConfig
 
+    baseline_payload: Any = None
     config_payload = params.get("config")
     if config_payload is None and "config_yaml" in params:
         import yaml  # type: ignore[import-untyped]
 
         config_payload = yaml.safe_load(params["config_yaml"]) or {}
+        if "baseline_yaml" in params:
+            baseline_payload = yaml.safe_load(params["baseline_yaml"]) or {}
 
     if not isinstance(config_payload, dict):
         raise ValueError("params.config is required")
@@ -527,15 +568,24 @@ async def _handle_config_apply(params: dict | None, ctx: RpcContext) -> dict[str
     config_payload = dict(config_payload)
     # YAML-mode Save seeds the payload from the RUNNING config (config.get), so
     # every CLI/break-glass override it carries (host/port/debug/auth.mode/
-    # opt-in) is echoed back verbatim and would otherwise count as an explicit
-    # edit. Subtract the full runtime-override key set — mirroring
-    # rpc_onboarding._onboarding_explicit_paths — so persist_config restores
-    # their on-disk originals instead of freezing the transient posture. (A
-    # genuine edit still persists: form-mode config.patch sends only the dirty
-    # keys, which are not in the override map.)
+    # opt-in) is echoed back verbatim.
     from agentos.gateway.config_persist import get_runtime_overrides
 
-    explicit_paths = _collect_paths(config_payload) - set(get_runtime_overrides())
+    if isinstance(baseline_payload, dict):
+        # The client sent the baseline it showed the operator (the config.get
+        # snapshot). A field that DIFFERS from that baseline is a real edit and
+        # must persist even while it carries a runtime override; a field left at
+        # its echo is not an edit and is restored to its on-disk original by
+        # persist_config. Subtract _READONLY_PATHS: host/port are never
+        # persistable via RPC regardless of a diff.
+        explicit_paths = diff_paths(baseline_payload, config_payload) - _READONLY_PATHS
+    else:
+        # Older client (or config= dict payload): no baseline to diff against.
+        # Fall back to the round-2 safe behavior — subtract the full runtime-
+        # override key set (mirroring rpc_onboarding._onboarding_explicit_paths)
+        # so an echoed transient posture never freezes. (A form-mode config.patch
+        # sends only the dirty keys, which are not in the override map.)
+        explicit_paths = _collect_paths(config_payload) - set(get_runtime_overrides())
     if ctx.config is not None and not config_payload.get("config_path"):
         config_payload["config_path"] = getattr(ctx.config, "config_path", None)
     # Full replace preserves the RUNNING bind posture (host/port are CLI-only).

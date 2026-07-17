@@ -165,14 +165,18 @@ def provision_public_bind_auth(
     # --listen / --port / --debug is not frozen in. ``auth`` is NOT in the map,
     # so the new token persists.
     try:
-        persist_config(new_config)
+        # persist_config returns the RESOLVED path (and back-fills config_path);
+        # on a true first run config.config_path is None and the onboarding writer
+        # resolves the home path internally, so emit the returned path — never the
+        # None placeholder.
+        saved_path = persist_config(new_config)
     except OSError as exc:
         emit(
             f"[yellow]WARNING: could not persist the token to the config file ({exc}). "
             "It stays active for this session only.[/yellow]"
         )
     else:
-        emit(f"[green]auth.mode=token enabled; token saved to {new_config.config_path}[/green]")
+        emit(f"[green]auth.mode=token enabled; token saved to {saved_path}[/green]")
     emit(f"[bold]Gateway token:[/bold] {token}")
     emit("[dim]Clients authenticate with: Authorization: Bearer <token>[/dim]")
     return (AuthProvisionOutcome.PROCEED, new_config)

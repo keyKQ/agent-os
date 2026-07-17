@@ -155,6 +155,69 @@ def test_set_and_get_runtime_overrides_round_trip():
     assert get_runtime_overrides() == {}
 
 
+def test_read_raw_bind_overrides_reads_literal_toml_values(tmp_path):
+    from agentos.gateway.config_persist import read_raw_bind_overrides
+
+    cfg_path = tmp_path / "config.toml"
+    with open(cfg_path, "wb") as f:
+        tomli_w.dump({"host": "0.0.0.0", "port": 19999, "debug": True}, f)
+
+    assert read_raw_bind_overrides(str(cfg_path)) == {
+        "host": "0.0.0.0",
+        "port": 19999,
+        "debug": True,
+    }
+
+
+def test_read_raw_bind_overrides_absent_keys_map_to_none(tmp_path, monkeypatch):
+    """A key absent from the TOML is None (dropped on persist) even when an env
+    var would make the EFFECTIVE loaded value non-default — the raw file wins."""
+    from agentos.gateway.config_persist import read_raw_bind_overrides
+
+    monkeypatch.setenv("AGENTOS_GATEWAY_HOST", "0.0.0.0")
+    cfg_path = tmp_path / "config.toml"
+    with open(cfg_path, "wb") as f:
+        tomli_w.dump({"debug": False}, f)  # NO host / port
+
+    got = read_raw_bind_overrides(str(cfg_path))
+    assert got["host"] is None  # absent in TOML -> None, NOT the env 0.0.0.0
+    assert got["port"] is None
+    assert got["debug"] is False
+
+
+def test_read_raw_bind_overrides_missing_file_is_all_none(tmp_path):
+    from agentos.gateway.config_persist import read_raw_bind_overrides
+
+    assert read_raw_bind_overrides(str(tmp_path / "nope.toml")) == {
+        "host": None,
+        "port": None,
+        "debug": None,
+    }
+    assert read_raw_bind_overrides(None) == {"host": None, "port": None, "debug": None}
+
+
+def test_env_supplied_host_is_not_frozen_by_a_later_persist(tmp_path, monkeypatch):
+    """End-to-end: AGENTOS_GATEWAY_HOST=0.0.0.0 makes the effective bind public,
+    but because the raw TOML has no host, the override original is None, so a
+    later persist DROPS host (default/env re-applies) instead of freezing
+    0.0.0.0 into the file."""
+    from agentos.gateway.config_persist import read_raw_bind_overrides
+
+    monkeypatch.setenv("AGENTOS_GATEWAY_HOST", "0.0.0.0")
+    cfg_path = tmp_path / "config.toml"
+    with open(cfg_path, "wb") as f:
+        tomli_w.dump({"debug": False}, f)
+
+    # run_gateway records the RAW originals (host absent -> None).
+    set_runtime_overrides(read_raw_bind_overrides(str(cfg_path)))
+    # The running config carries the effective public bind (from env).
+    runtime = GatewayConfig(host="0.0.0.0", config_path=str(cfg_path))
+    persist_config(runtime)  # unrelated save, host not explicit
+
+    saved = _read(cfg_path)
+    assert saved.get("host", "127.0.0.1") == "127.0.0.1"  # dropped, NOT frozen
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file mode")
 def test_written_config_is_owner_only_0600(tmp_path):
     cfg_path = tmp_path / "config.toml"

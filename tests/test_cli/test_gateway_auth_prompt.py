@@ -222,6 +222,37 @@ def test_choice_1_persists_only_auth_not_one_off_cli_flags(tmp_path) -> None:
     assert persisted.get("debug") is False
 
 
+def test_choice_1_first_run_message_names_resolved_path_not_none(tmp_path) -> None:
+    """[FIX 5] On a TRUE first run config_path is unset; the onboarding writer
+    resolves the home path internally. The success message must name that
+    resolved path, not literally 'None'."""
+    from agentos.onboarding.config_store import resolve_config_path
+
+    # No config_path set -> first-run resolution kicks in (AGENTOS_STATE_DIR from
+    # the _clean_auth_env fixture points home under tmp_path).
+    config = GatewayConfig(host="0.0.0.0", auth=AuthConfig())
+    assert config.config_path is None
+    emitted: list[str] = []
+
+    outcome, result = provision_public_bind_auth(
+        config, interactive=True, prompt=lambda _msg: "1", emit=emitted.append
+    )
+
+    assert outcome is AuthProvisionOutcome.PROCEED
+    resolved = resolve_config_path(None)[0]
+    output = "\n".join(emitted)
+    # The message names the real resolved path...
+    assert str(resolved) in output
+    # ...and never the None placeholder.
+    saved_line = [ln for ln in emitted if "saved to" in ln]
+    assert saved_line, "expected a 'saved to <path>' success line"
+    assert "None" not in saved_line[0]
+    # And the token was actually persisted there.
+    with open(resolved, "rb") as f:
+        persisted = tomllib.load(f)
+    assert persisted["auth"]["token"] == result.auth.token
+
+
 def test_empty_input_defaults_to_token_choice(tmp_path) -> None:
     config = _config(tmp_path)
 

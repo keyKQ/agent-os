@@ -29,6 +29,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from agentos.gateway.config import GatewayConfig
 
 # Process-global map recorded at boot by ``run_gateway`` (and augmented by the
@@ -53,6 +55,40 @@ def set_runtime_overrides(mapping: dict[str, Any] | None) -> None:
 def get_runtime_overrides() -> dict[str, Any]:
     """Return a copy of the current runtime override map."""
     return dict(_RUNTIME_OVERRIDES)
+
+
+def read_raw_bind_overrides(config_path: str | None) -> dict[str, Any]:
+    """Return the RAW on-disk ``host``/``port``/``debug`` for the override map.
+
+    ``run_gateway`` must record the values that are literally in ``config.toml``,
+    NOT the env-merged effective values that ``GatewayConfig.load`` produces
+    (``env_prefix="AGENTOS_GATEWAY_"`` merges ``AGENTOS_GATEWAY_HOST`` etc.).
+    An env-supplied bind posture is itself transient — env vars are per-invocation
+    — so recording the env value as the "on-disk original" would let a later
+    ``config.patch`` freeze it into the file. A key absent from the TOML maps to
+    ``None`` so ``persist_config`` drops it and the load-time default/env applies
+    at the next boot. A missing/unreadable file yields all-``None`` (nothing to
+    restore beyond the defaults).
+    """
+    keys = ("host", "port", "debug")
+    result: dict[str, Any] = {key: None for key in keys}
+    if not config_path:
+        return result
+    try:
+        import tomllib
+
+        with open(config_path, "rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, ValueError):
+        # ValueError covers tomllib.TOMLDecodeError (a subclass); a malformed or
+        # unreadable file leaves every original None so only defaults apply.
+        return result
+    if not isinstance(data, dict):
+        return result
+    for key in keys:
+        if key in data:
+            result[key] = data[key]
+    return result
 
 
 def _set_dotted(data: dict, path: str, value: Any) -> None:
@@ -81,7 +117,7 @@ def persist_config(
     config: Any,
     *,
     explicit_paths: set[str] | None = None,
-) -> None:
+) -> Path:
     """Write config to TOML atomically (0600), restoring any runtime overrides.
 
     The process-global runtime-override map (see :func:`set_runtime_overrides`)
@@ -91,6 +127,12 @@ def persist_config(
     ``--listen``/``--debug``/break-glass posture never persists — UNLESS the
     path is in ``explicit_paths``, meaning the user explicitly changed it this
     write and the new value must persist verbatim.
+
+    Returns the resolved file path the write landed on. On a true first run the
+    caller's ``config.config_path`` is ``None`` and the onboarding writer
+    resolves the home path internally; that resolved path is returned AND
+    back-filled onto ``config.config_path`` so callers can report where the
+    token was saved instead of "None".
     """
     from agentos.onboarding.config_store import persist_config as _store_persist
 
@@ -104,11 +146,19 @@ def persist_config(
         else:
             _set_dotted(data, path, original)
 
-    _store_persist(
+    result = _store_persist(
         cast("GatewayConfig", _TomlDictConfig(data)),
         path=getattr(config, "config_path", None),
         backup=True,
     )
+    # Back-fill the resolved path so a first-run caller (config_path was None)
+    # can name the real file, and subsequent writes target the same one.
+    if not getattr(config, "config_path", None):
+        try:
+            config.config_path = str(result.path)
+        except (AttributeError, TypeError):
+            pass
+    return result.path
 
 
 class _TomlDictConfig:

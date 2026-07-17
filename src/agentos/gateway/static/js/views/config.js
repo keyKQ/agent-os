@@ -722,7 +722,13 @@ const ConfigView = (() => {
   function _save() {
     if (_mode === 'yaml') {
       const text = _el.querySelector('#cfg-yaml-area').value;
-      _rpc.call('config.apply', { config_yaml: text })
+      // Send the YAML baseline (the config.get snapshot the user was shown) so
+      // the server can diff it against the submitted text and persist only the
+      // fields the user actually changed. A field left at its runtime echo
+      // (a CLI --listen / --debug / break-glass posture) is unchanged vs the
+      // baseline, so the server restores its on-disk original instead of
+      // freezing the transient value.
+      _rpc.call('config.apply', { config_yaml: text, baseline_yaml: _yamlText })
         .then(res => { UI.toast(res && res.restartRequired ? 'Config applied. Gateway restart required for the change to take effect.' : 'Config applied', res && res.restartRequired ? 'info' : 'ok'); _dirty = {}; _invalidJson = {}; _jsonDrafts = {}; _yamlDirty = false; _yamlDraft = ''; _loadData(); })
         .catch(err => UI.toast('Apply failed: ' + err.message, 'err'));
     } else {

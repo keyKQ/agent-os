@@ -320,6 +320,19 @@ def test_config_form_labels_strip_group_prefix_but_keep_full_key_for_save() -> N
     assert "test(k)" in sensitive_line
 
 
+def test_config_yaml_save_sends_baseline_yaml_for_snapshot_diff() -> None:
+    source = CONFIG_JS.read_text(encoding="utf-8")
+
+    # YAML-mode Save must send the baseline snapshot (_yamlText) so the server
+    # diffs it against the submitted text and persists only real edits, leaving
+    # runtime-echoed fields (CLI --listen/--debug/break-glass) to restore.
+    save_block = source.split("function _save(", 1)[1].split("function ", 1)[0]
+    assert "config.apply" in save_block
+    apply_call = save_block.split("config.apply", 1)[1].split(")", 1)[0]
+    assert "config_yaml: text" in apply_call
+    assert "baseline_yaml: _yamlText" in apply_call
+
+
 def test_config_form_reads_dirty_baseline_via_dotted_path_getter() -> None:
     source = CONFIG_JS.read_text(encoding="utf-8")
 
