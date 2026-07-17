@@ -18,10 +18,19 @@ from agentos.gateway.config import (
 from agentos.gateway.scopes import is_loopback_bind
 
 
-def _config(host: str, auth_mode: str = "none", allow_public: bool = False) -> GatewayConfig:
+def _config(
+    host: str,
+    auth_mode: str = "none",
+    allow_public: bool = False,
+    trusted_proxy: str | None = None,
+) -> GatewayConfig:
     return GatewayConfig(
         host=host,
-        auth=AuthConfig(mode=auth_mode, allow_unauthenticated_public=allow_public),
+        auth=AuthConfig(
+            mode=auth_mode,
+            allow_unauthenticated_public=allow_public,
+            trusted_proxy=trusted_proxy,
+        ),
     )
 
 
@@ -70,16 +79,30 @@ class TestEnforcePublicBindAuthGuard:
 
     @pytest.mark.parametrize("mode", ["password", "trusted-proxy", "tokenn", "on", ""])
     def test_refuses_public_bind_with_unenforced_auth_mode(self, mode: str) -> None:
-        """[P1b] Only modes actually enforced end-to-end (token) count as
-        "authenticated". password/trusted-proxy are not enforced on the HTTP
-        surface, and a typo must never be read as "auth is on"."""
+        """[P1b] Only token is enforced end-to-end. password/trusted-proxy are
+        not enforced on the HTTP surface, and a typo must never be read as
+        "auth is on"."""
         with pytest.raises(ValueError, match="auth.mode"):
             enforce_public_bind_auth_guard(_config("0.0.0.0", auth_mode=mode))
 
-    def test_error_message_does_not_recommend_unimplemented_password(self) -> None:
+    def test_refuses_trusted_proxy_even_with_proxy_configured(self) -> None:
+        """[P1] AuthMiddleware only string-matches the client-controlled
+        X-Forwarded-For header — trivially spoofable — and resolve_auth has no
+        trusted-proxy resolver, so the mode is not enforced end-to-end. It must
+        not pass the public-bind guard until real peer-IP validation lands."""
+        with pytest.raises(ValueError, match="auth.mode"):
+            enforce_public_bind_auth_guard(
+                _config("0.0.0.0", auth_mode="trusted-proxy", trusted_proxy="10.0.0.1")
+            )
+
+    def test_error_message_only_recommends_enforced_modes(self) -> None:
         with pytest.raises(ValueError) as exc_info:
             enforce_public_bind_auth_guard(_config("0.0.0.0"))
-        assert '"password"' not in str(exc_info.value)
+        message = str(exc_info.value)
+        # Neither unimplemented/spoofable mode should be recommended.
+        assert '"password"' not in message
+        assert "trusted-proxy" not in message
+        assert '"token"' in message
 
     def test_explicit_opt_in_allows_unauthenticated_public_bind(self) -> None:
         enforce_public_bind_auth_guard(_config("0.0.0.0", allow_public=True))
