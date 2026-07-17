@@ -11,11 +11,39 @@ import shutil
 import subprocess
 import venv
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The wheel build hook (hatch_build.py) aborts a standard wheel build when the
+# Vite web UI output is missing. These tests exercise migration packaging, not
+# the web UI, and run in environments without Node — so provide a stub dist to
+# satisfy the guard when a real ``frontend`` build has not been produced.
+_WEBUI_DIST_INDEX = REPO_ROOT / "src" / "agentos" / "gateway" / "webui_dist" / "index.html"
+
+
+@pytest.fixture(autouse=True)
+def _ensure_webui_dist_stub() -> Iterator[None]:
+    """Guarantee ``webui_dist/index.html`` exists for standard wheel builds.
+
+    A real ``npm run build`` output takes precedence and is left untouched; only
+    a stub we create is removed afterwards.
+    """
+    created = False
+    if not _WEBUI_DIST_INDEX.exists():
+        _WEBUI_DIST_INDEX.parent.mkdir(parents=True, exist_ok=True)
+        _WEBUI_DIST_INDEX.write_text(
+            "<!doctype html><title>agentos webui stub</title>", encoding="utf-8"
+        )
+        created = True
+    try:
+        yield
+    finally:
+        if created:
+            _WEBUI_DIST_INDEX.unlink(missing_ok=True)
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")

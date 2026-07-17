@@ -148,6 +148,7 @@ def test_ci_change_classifier_allows_root_and_docs_markdown_only(tmp_path: Path)
         "ci_changed": "false",
         "dependency_changed": "false",
         "release_changed": "false",
+        "frontend_changed": "false",
     }
 
 
