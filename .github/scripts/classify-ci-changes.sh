@@ -10,6 +10,7 @@ test_changed=false
 ci_changed=false
 dependency_changed=false
 release_changed=false
+frontend_changed=false
 seen_file=false
 
 mark_runtime_changed() {
@@ -38,6 +39,11 @@ mark_release_changed() {
   release_changed=true
 }
 
+mark_frontend_changed() {
+  docs_only=false
+  frontend_changed=true
+}
+
 while IFS= read -r path || [[ -n "${path}" ]]; do
   path="${path%$'\r'}"
   [[ -z "${path}" ]] && continue
@@ -51,6 +57,10 @@ while IFS= read -r path || [[ -n "${path}" ]]; do
       ci_changed=true
       dependency_changed=true
       release_changed=true
+      frontend_changed=true
+      ;;
+    frontend/*)
+      mark_frontend_changed
       ;;
     pyproject.toml | uv.lock)
       mark_dependency_changed
@@ -97,6 +107,7 @@ if [[ "${seen_file}" == "false" ]]; then
   ci_changed=true
   dependency_changed=true
   release_changed=true
+  frontend_changed=true
 fi
 
 {
@@ -106,4 +117,5 @@ fi
   printf 'ci_changed=%s\n' "${ci_changed}"
   printf 'dependency_changed=%s\n' "${dependency_changed}"
   printf 'release_changed=%s\n' "${release_changed}"
+  printf 'frontend_changed=%s\n' "${frontend_changed}"
 } >> "${output_file}"

@@ -25,6 +25,7 @@ jobs:
       ci_changed: ${{ steps.classify.outputs.ci_changed }}
       dependency_changed: ${{ steps.classify.outputs.dependency_changed }}
       release_changed: ${{ steps.classify.outputs.release_changed }}
+      frontend_changed: ${{ steps.classify.outputs.frontend_changed }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -71,9 +72,61 @@ jobs:
       - name: Run actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color=false
 
+  frontend-quality:
+    name: Frontend lint, test, and build (${{ matrix.os }})
+    needs: classify-changes
+    if: needs.classify-changes.outputs.docs_only != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        shell: bash
+        run: npm ci --prefix frontend
+
+      - name: Lint
+        shell: bash
+        run: npm --prefix frontend run lint
+
+      - name: Type check
+        shell: bash
+        run: cd frontend && npx tsc --noEmit
+
+      - name: Test
+        shell: bash
+        run: npm --prefix frontend run test -- --run
+
+      - name: Build
+        shell: bash
+        run: npm --prefix frontend run build
+
+      - name: Upload webui dist
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webui-dist
+          path: src/agentos/gateway/webui_dist/
+
   ubuntu-quality:
     name: Lint, test, and build (ubuntu-latest, 3.12)
-    needs: classify-changes
+    needs:
+      - classify-changes
+      - frontend-quality
     if: needs.classify-changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -137,6 +190,12 @@ jobs:
         shell: bash
         run: |
           uv run python -m pytest tests/test_gateway/test_task_runtime_terminal_cleanup.py::test_no_leak_under_load -v
+
+      - name: Download webui dist
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: src/agentos/gateway/webui_dist/
 
       - name: Build wheel
         shell: bash
@@ -232,6 +291,7 @@ jobs:
     needs:
       - classify-changes
       - workflow-lint
+      - frontend-quality
       - ubuntu-quality
       - windows-compat
       - release-packaging
@@ -246,6 +306,7 @@ jobs:
 
           classify_result="${{ needs.classify-changes.result }}"
           workflow_lint_result="${{ needs.workflow-lint.result }}"
+          frontend_result="${{ needs.frontend-quality.result }}"
           ubuntu_result="${{ needs.ubuntu-quality.result }}"
           windows_result="${{ needs.windows-compat.result }}"
           release_result="${{ needs.release-packaging.result }}"
@@ -255,14 +316,16 @@ jobs:
           ci_changed="${{ needs.classify-changes.outputs.ci_changed }}"
           dependency_changed="${{ needs.classify-changes.outputs.dependency_changed }}"
           release_changed="${{ needs.classify-changes.outputs.release_changed }}"
+          frontend_changed="${{ needs.classify-changes.outputs.frontend_changed }}"
 
           printf 'classify-changes: %s\n' "${classify_result}"
           printf 'workflow-lint: %s\n' "${workflow_lint_result}"
+          printf 'frontend-quality: %s\n' "${frontend_result}"
           printf 'ubuntu-quality: %s\n' "${ubuntu_result}"
           printf 'windows-compat: %s\n' "${windows_result}"
           printf 'release-packaging: %s\n' "${release_result}"
-          printf 'docs_only=%s runtime_changed=%s test_changed=%s ci_changed=%s dependency_changed=%s release_changed=%s\n' \
-            "${docs_only}" "${runtime_changed}" "${test_changed}" "${ci_changed}" "${dependency_changed}" "${release_changed}"
+          printf 'docs_only=%s runtime_changed=%s test_changed=%s ci_changed=%s dependency_changed=%s release_changed=%s frontend_changed=%s\n' \
+            "${docs_only}" "${runtime_changed}" "${test_changed}" "${ci_changed}" "${dependency_changed}" "${release_changed}" "${frontend_changed}"
 
           if [[ "${classify_result}" != "success" ]]; then
             echo "Classify changed files must succeed."
@@ -271,6 +334,11 @@ jobs:
 
           if [[ "${workflow_lint_result}" != "success" ]]; then
             echo "Workflow lint must succeed."
+            exit 1
+          fi
+
+          if [[ "${docs_only}" != "true" && "${frontend_result}" != "success" ]]; then
+            echo "Frontend quality gate must succeed for non-documentation changes."
             exit 1
           fi
 
