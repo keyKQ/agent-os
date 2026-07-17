@@ -72,7 +72,12 @@ def origin_in_allowlist(origin: str, allowed: list[str]) -> bool:
     return any(_origin_key(entry) == key for entry in allowed)
 
 
-def is_allowed_ws_origin(origin: str | None, config: GatewayConfig) -> bool:
+def is_allowed_ws_origin(
+    origin: str | None,
+    config: GatewayConfig,
+    *,
+    bind_is_loopback: bool | None = None,
+) -> bool:
     """Return True if a WebSocket handshake ``Origin`` may be accepted.
 
     The WS upgrade skips ``AuthMiddleware`` and a loopback peer is
@@ -107,7 +112,14 @@ def is_allowed_ws_origin(origin: str | None, config: GatewayConfig) -> bool:
 
     from agentos.gateway.scopes import is_loopback_address, is_loopback_bind
 
-    if not is_loopback_bind(config.host):
+    # Prefer the bind posture captured when the app was built: config.host is
+    # mutated in place by config.apply without rebinding the live socket, so
+    # reading it here would let a runtime host change silently disable the
+    # guard while the process still listens on loopback (P2).
+    on_loopback = (
+        bind_is_loopback if bind_is_loopback is not None else is_loopback_bind(config.host)
+    )
+    if not on_loopback:
         return True
 
     if origin_in_allowlist(origin, config.control_ui.allowed_origins):
@@ -628,6 +640,7 @@ async def handle_ws_connection(
     memory_managers: dict[str, Any] | None = None,
     memory_stores: dict[str, Any] | None = None,
     memory_retrievers: dict[str, Any] | None = None,
+    bind_is_loopback: bool | None = None,
 ) -> None:
     """Main WebSocket connection handler."""
     conn_id = str(uuid.uuid4())
@@ -638,9 +651,10 @@ async def handle_ws_connection(
     # whose Origin is neither loopback nor an explicitly allowed UI origin,
     # before accept(). A cross-site page cannot forge Origin, so this stops it
     # from opening a socket to the loopback gateway and inheriting operator
-    # scopes. Starlette Headers.get is case-insensitive.
+    # scopes. Starlette Headers.get is case-insensitive. bind_is_loopback is
+    # the posture captured at app-build time (P2) — see is_allowed_ws_origin.
     origin = ws.headers.get("origin")
-    if not is_allowed_ws_origin(origin, config):
+    if not is_allowed_ws_origin(origin, config, bind_is_loopback=bind_is_loopback):
         log.warning("ws.origin_rejected", conn_id=conn_id, origin=origin)
         await ws.close(code=1008)  # policy violation
         return

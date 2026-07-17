@@ -481,6 +481,13 @@ def create_gateway_app(
             status_code=_rpc_status_code(result),
         )
 
+    # Capture the bind posture once, at app-build time. config.apply mutates
+    # config.host in place without rebinding the live socket, so the guards
+    # must not re-read it per request (P2).
+    from agentos.gateway.scopes import is_loopback_bind
+
+    bind_is_loopback = is_loopback_bind(config.host)
+
     async def ws_endpoint(ws: WebSocket) -> None:
         await handle_ws_connection(
             ws,
@@ -504,6 +511,7 @@ def create_gateway_app(
             memory_managers=memory_managers,
             memory_stores=memory_stores,
             memory_retrievers=memory_retrievers,
+            bind_is_loopback=bind_is_loopback,
         )
 
     # ── Routes ───────────────────────────────────────────────────────────────
@@ -549,7 +557,11 @@ def create_gateway_app(
         # Origins before CORS can reflect them (same predicate as the WS
         # handshake guard). No-op without an Origin header, and on
         # non-loopback (auth-gated) binds.
-        Middleware(LoopbackOriginMiddleware, config=config),
+        Middleware(
+            LoopbackOriginMiddleware,
+            config=config,
+            bind_is_loopback=bind_is_loopback,
+        ),
         Middleware(
             CORSMiddleware,
             allow_origins=config.cors.allowed_origins,

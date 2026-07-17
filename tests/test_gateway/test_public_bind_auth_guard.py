@@ -68,8 +68,18 @@ class TestEnforcePublicBindAuthGuard:
     def test_allows_wildcard_bind_with_token_auth(self) -> None:
         enforce_public_bind_auth_guard(_config("0.0.0.0", auth_mode="token"))
 
-    def test_allows_wildcard_bind_with_password_auth(self) -> None:
-        enforce_public_bind_auth_guard(_config("0.0.0.0", auth_mode="password"))
+    @pytest.mark.parametrize("mode", ["password", "trusted-proxy", "tokenn", "on", ""])
+    def test_refuses_public_bind_with_unenforced_auth_mode(self, mode: str) -> None:
+        """[P1b] Only modes actually enforced end-to-end (token) count as
+        "authenticated". password/trusted-proxy are not enforced on the HTTP
+        surface, and a typo must never be read as "auth is on"."""
+        with pytest.raises(ValueError, match="auth.mode"):
+            enforce_public_bind_auth_guard(_config("0.0.0.0", auth_mode=mode))
+
+    def test_error_message_does_not_recommend_unimplemented_password(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            enforce_public_bind_auth_guard(_config("0.0.0.0"))
+        assert '"password"' not in str(exc_info.value)
 
     def test_explicit_opt_in_allows_unauthenticated_public_bind(self) -> None:
         enforce_public_bind_auth_guard(_config("0.0.0.0", allow_public=True))

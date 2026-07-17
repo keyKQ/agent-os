@@ -28,11 +28,12 @@ def _config(
     allow_public: bool = False,
     ui_origins: list[str] | None = None,
     cors_origins: list[str] | None = None,
+    base_path: str = "/control",
 ) -> GatewayConfig:
     return GatewayConfig(
         host=host,
         auth=AuthConfig(mode=auth_mode, allow_unauthenticated_public=allow_public),
-        control_ui=ControlUiConfig(allowed_origins=ui_origins or []),
+        control_ui=ControlUiConfig(allowed_origins=ui_origins or [], base_path=base_path),
         cors=CorsConfig(allowed_origins=cors_origins)
         if cors_origins is not None
         else CorsConfig(),
@@ -232,3 +233,17 @@ class TestLoopbackOriginGuardHttp:
         client = self._client()
         resp = client.get("/control/", headers={"origin": "http://evil.com"})
         assert resp.status_code != 403
+
+    @pytest.mark.parametrize("base_path", ["/", "/api", "/api/v1"])
+    def test_root_or_api_base_path_does_not_disable_guard(self, base_path: str) -> None:
+        """[P1a] A UI base_path of "/" (normalized to "") or one overlapping the
+        API surface must NOT wholesale-exempt /api/* from the Origin guard."""
+        from agentos.gateway.app import create_gateway_app
+
+        client = TestClient(
+            create_gateway_app(_config(base_path=base_path)),
+            base_url="http://localhost",
+        )
+        resp = client.get("/api/config", headers={"origin": "http://evil.com"})
+        assert resp.status_code == 403
+        assert "access-control-allow-origin" not in resp.headers

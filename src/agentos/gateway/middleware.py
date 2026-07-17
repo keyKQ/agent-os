@@ -20,6 +20,28 @@ from agentos.gateway.scopes import is_loopback_address
 # guard (defined before AuthMiddleware) and AuthMiddleware share one source.
 _PUBLIC_PATHS = frozenset({"/health", "/healthz", "/ready", "/readyz"})
 
+# The RPC/API surface the cross-origin guard exists to protect. A UI base_path
+# that overlaps this must NOT be trusted as an exemption prefix.
+_API_PREFIX = "/api"
+
+
+def _safe_ui_exempt_prefix(base_path: str) -> str | None:
+    """Return the Control UI prefix safe to exempt from the Origin guard, or None.
+
+    The UI shell/static routes are served content, not RPC sinks, so exempting
+    them is fine — but only when the prefix is a real, non-empty path that does
+    not overlap ``/api``. ``base_path="/"`` (normalized to "") or ``"/api"``
+    would otherwise wholesale-exempt every request, disabling the guard; those
+    fail closed to None (the shell is a top-level navigation and sends no
+    Origin, so gating it costs nothing).
+    """
+    prefix = base_path.rstrip("/")
+    if not prefix:
+        return None
+    if prefix == _API_PREFIX or prefix.startswith(_API_PREFIX + "/"):
+        return None
+    return prefix
+
 
 class LoopbackHostMiddleware(BaseHTTPMiddleware):
     """Reject requests whose ``Host`` header is neither loopback nor allowlisted.
@@ -91,16 +113,29 @@ class LoopbackOriginMiddleware(BaseHTTPMiddleware):
     RPC surface — the drive-by target — is gated.
     """
 
-    def __init__(self, app: ASGIApp, config: GatewayConfig) -> None:
+    def __init__(
+        self, app: ASGIApp, config: GatewayConfig, bind_is_loopback: bool
+    ) -> None:
         super().__init__(app)
         self._config = config
         self._cors_origins = [o for o in config.cors.allowed_origins if o != "*"]
+        self._ui_prefix = _safe_ui_exempt_prefix(config.control_ui.base_path)
+        # Passed in from create_gateway_app, computed eagerly at build time.
+        # Starlette instantiates BaseHTTPMiddleware lazily (first request), so
+        # capturing here would read an already-mutated config.host; the caller
+        # captures the posture before config.apply can change it (P2).
+        self._bind_is_loopback = bind_is_loopback
+
+    def _is_ui_path(self, path: str) -> bool:
+        if self._ui_prefix is None:
+            return False
+        # Exact shell ("/control") or anything under it ("/control/..."),
+        # never a bare-prefix match that would swallow sibling routes.
+        return path == self._ui_prefix or path.startswith(self._ui_prefix + "/")
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith(
-            self._config.control_ui.base_path
-        ):
+        if path in _PUBLIC_PATHS or self._is_ui_path(path):
             return await call_next(request)  # type: ignore[no-any-return]
         origin = request.headers.get("origin")
         if origin:
@@ -112,7 +147,9 @@ class LoopbackOriginMiddleware(BaseHTTPMiddleware):
             )
 
             if not (
-                is_allowed_ws_origin(origin, self._config)
+                is_allowed_ws_origin(
+                    origin, self._config, bind_is_loopback=self._bind_is_loopback
+                )
                 or origin_in_allowlist(origin, self._cors_origins)
             ):
                 return PlainTextResponse("Origin not allowed", status_code=403)

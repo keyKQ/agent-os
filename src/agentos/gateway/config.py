@@ -2020,6 +2020,23 @@ def is_public_bind(host: str) -> bool:
     return host in PUBLIC_BIND_ADDRESSES
 
 
+def _mode_protects_public_bind(auth: AuthConfig) -> bool:
+    """True if ``auth.mode`` actually enforces credentials end-to-end.
+
+    Only these count as "authenticated" for the public-bind guard:
+    ``token`` (validated in AuthMiddleware and resolve_auth), and
+    ``trusted-proxy`` *when a proxy is configured* (AuthMiddleware checks
+    ``x-forwarded-for`` against it). ``password`` has no HTTP-surface
+    enforcement yet, and an unknown/typo mode has no resolver — both must be
+    treated as unauthenticated so they cannot open a public port.
+    """
+    if auth.mode == "token":
+        return True
+    if auth.mode == "trusted-proxy" and auth.trusted_proxy:
+        return True
+    return False
+
+
 def enforce_public_bind_auth_guard(config: GatewayConfig) -> None:
     """Refuse to serve when ``auth.mode="none"`` on a non-loopback bind.
 
@@ -2033,10 +2050,17 @@ def enforce_public_bind_auth_guard(config: GatewayConfig) -> None:
     (``scopes.is_loopback_bind``) so the set of binds the guard allows is
     exactly the set ownership treats as local. Raises ``ValueError`` — the
     CLI boundary surfaces that as a startup error with recovery guidance.
+
+    A mode "protects" a public bind only when it is actually enforced
+    end-to-end (HTTP + WS). Today that is ``token`` (auto-generated at
+    startup) and ``trusted-proxy`` *with a proxy configured*. Any other
+    value — ``password`` (not yet implemented on the HTTP surface),
+    ``trusted-proxy`` without a proxy, or a typo — is treated as *not*
+    authenticated, so it cannot silently open a public port.
     """
     from agentos.gateway.scopes import is_loopback_bind
 
-    if config.auth.mode != "none":
+    if _mode_protects_public_bind(config.auth):
         return
     if is_loopback_bind(config.host):
         return
@@ -2051,11 +2075,13 @@ def enforce_public_bind_auth_guard(config: GatewayConfig) -> None:
         )
         return
     raise ValueError(
-        f'Refusing to serve: auth.mode="none" with non-loopback bind {config.host!r}. '
+        f"Refusing to serve: auth.mode={config.auth.mode!r} does not enforce "
+        f"credentials on a non-loopback bind {config.host!r}. "
         "Anyone who can reach this port would get full access to chat, sessions, "
         "and config with your provider credentials. Fix one of these: "
-        '(1) enable auth — set auth.mode="token" or "password" in agentos.toml '
-        "(a token is auto-generated at startup when unset); "
+        '(1) enable enforced auth — set auth.mode="token" in agentos.toml '
+        "(a token is auto-generated at startup when unset), or "
+        'auth.mode="trusted-proxy" with auth.trusted_proxy set; '
         '(2) bind loopback — remove the --listen/--bind flag or set host = "127.0.0.1"; '
         "(3) explicit break-glass opt-in — set auth.allow_unauthenticated_public = true "
         "(or AGENTOS_AUTH_ALLOW_UNAUTHENTICATED_PUBLIC=true) only if an external "

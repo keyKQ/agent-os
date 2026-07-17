@@ -240,3 +240,30 @@ class TestRealAppHandshake:
         with client.websocket_connect("/ws") as ws:
             frame = ws.receive_json()
             assert frame["event"] == "connect.challenge"
+
+
+class TestBindPostureIsCaptured:
+    """[P2] The guards must key off the bind posture captured when the app is
+    built, not a mutable ``config.host`` read at request time. ``config.apply``
+    mutates the config in place without rebinding the live socket; a host
+    change to a public address must NOT silently disable the Origin/Host
+    guards while the process still listens on loopback."""
+
+    def test_ws_origin_guard_survives_runtime_host_mutation(self) -> None:
+        from agentos.gateway.app import create_gateway_app
+
+        cfg = GatewayConfig()  # loopback bind, socket built now
+        client = TestClient(create_gateway_app(cfg), base_url="http://localhost")
+        cfg.host = "0.0.0.0"  # config.apply-style in-place mutation, no rebind
+        resp = client.get("/api/config", headers={"origin": "http://evil.com"})
+        assert resp.status_code == 403
+        assert "access-control-allow-origin" not in resp.headers
+
+    def test_host_guard_survives_runtime_host_mutation(self) -> None:
+        from agentos.gateway.app import create_gateway_app
+
+        cfg = GatewayConfig()
+        client = TestClient(create_gateway_app(cfg), base_url="http://localhost")
+        cfg.host = "0.0.0.0"
+        # Host allowlist must still reject a rebound foreign Host.
+        assert client.get("/ready", headers={"host": "attacker.com"}).status_code == 400
