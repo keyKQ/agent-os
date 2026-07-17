@@ -60,6 +60,15 @@ class AuthConfig(BaseSettings):
     trusted_proxy: str | None = None
     token_scopes: list[str] = Field(default_factory=lambda: ["operator.admin"])
     allowed_roles: list[str] = Field(default_factory=lambda: ["operator", "node"])
+    allow_unauthenticated_public: bool = False
+    """Break-glass opt-in: serve with ``mode="none"`` on a non-loopback bind.
+
+    Off by default — ``enforce_public_bind_auth_guard`` refuses that
+    combination at startup because it hands the chat/sessions/config
+    surfaces (and the operator's provider credentials) to anyone who can
+    reach the port. Only set this behind an external auth layer or a
+    network boundary you trust (reverse proxy auth, VPN, firewall).
+    """
 
 
 class CorsConfig(BaseSettings):
@@ -2009,6 +2018,49 @@ PUBLIC_BIND_ADDRESSES: frozenset[str] = frozenset({"0.0.0.0", "::"})
 def is_public_bind(host: str) -> bool:
     """Return True if ``host`` resolves to an IPv4/IPv6 wildcard."""
     return host in PUBLIC_BIND_ADDRESSES
+
+
+def enforce_public_bind_auth_guard(config: GatewayConfig) -> None:
+    """Refuse to serve when ``auth.mode="none"`` on a non-loopback bind.
+
+    "No auth by default" is only safe while the gateway stays on loopback,
+    where ownership checks already require a loopback peer. On a wildcard
+    or LAN bind it hands the chat/sessions/config surfaces to anyone who
+    can reach the port, so startup fails closed unless the operator sets
+    ``auth.allow_unauthenticated_public = true`` (issue #18, V3).
+
+    Uses the same loopback predicate as the ownership check
+    (``scopes.is_loopback_bind``) so the set of binds the guard allows is
+    exactly the set ownership treats as local. Raises ``ValueError`` — the
+    CLI boundary surfaces that as a startup error with recovery guidance.
+    """
+    from agentos.gateway.scopes import is_loopback_bind
+
+    if config.auth.mode != "none":
+        return
+    if is_loopback_bind(config.host):
+        return
+    if config.auth.allow_unauthenticated_public:
+        import structlog
+
+        structlog.get_logger(__name__).warning(
+            "gateway.unauthenticated_public_bind_opt_in",
+            host=config.host,
+            hint="auth.allow_unauthenticated_public=true — every peer that "
+            "can reach this port has full operator access",
+        )
+        return
+    raise ValueError(
+        f'Refusing to serve: auth.mode="none" with non-loopback bind {config.host!r}. '
+        "Anyone who can reach this port would get full access to chat, sessions, "
+        "and config with your provider credentials. Fix one of these: "
+        '(1) enable auth — set auth.mode="token" or "password" in agentos.toml '
+        "(a token is auto-generated at startup when unset); "
+        '(2) bind loopback — remove the --listen/--bind flag or set host = "127.0.0.1"; '
+        "(3) explicit break-glass opt-in — set auth.allow_unauthenticated_public = true "
+        "(or AGENTOS_AUTH_ALLOW_UNAUTHENTICATED_PUBLIC=true) only if an external "
+        "layer (reverse proxy auth, VPN, firewall) already protects this port."
+    )
 
 
 def resolve_listen_address(
