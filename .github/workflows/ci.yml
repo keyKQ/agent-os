@@ -170,6 +170,16 @@ jobs:
         shell: bash
         run: uv run mypy src/agentos --show-error-codes
 
+      # Stage the built web UI before the test suite: some tests perform a
+      # standard `uv build --wheel` / `docker build` (a real wheel build) that
+      # the hatch_build.py guard blocks unless webui_dist/index.html exists.
+      # This also covers the "Build wheel" step further below.
+      - name: Download webui dist
+        uses: actions/download-artifact@v4
+        with:
+          name: webui-dist
+          path: src/agentos/gateway/webui_dist/
+
       - name: Test
         shell: bash
         run: uv run pytest tests -q
@@ -190,12 +200,6 @@ jobs:
         shell: bash
         run: |
           uv run python -m pytest tests/test_gateway/test_task_runtime_terminal_cleanup.py::test_no_leak_under_load -v
-
-      - name: Download webui dist
-        uses: actions/download-artifact@v4
-        with:
-          name: webui-dist
-          path: src/agentos/gateway/webui_dist/
 
       - name: Build wheel
         shell: bash
