@@ -12,6 +12,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      // Lets the dev app fetch bootstrap via /control/bootstrap.json; the
+      // control-UI base_path is auth-exempt, so the dev flow needs no token.
+      '/control': {
+        target: 'http://127.0.0.1:18791',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://127.0.0.1:18791',
         changeOrigin: true,

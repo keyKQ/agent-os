@@ -117,6 +117,17 @@ gateway = "agentos.cli.main:gateway_app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+# Vite build output (index.html + hashed assets/) lives outside the package's
+# git-tracked source (webui_dist/ is gitignored) but must ship in the wheel so
+# the gateway can serve the React console.
+artifacts = ["src/agentos/gateway/webui_dist/**"]
+
+# Fail the build early — with the exact `npm ... run build` command — if the
+# web UI bundle is missing, rather than shipping a Control UI that 503s.
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentos"]
 exclude = [
