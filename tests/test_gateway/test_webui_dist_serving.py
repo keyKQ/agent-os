@@ -203,6 +203,61 @@ def test_wheel_guard_passes_when_index_present(tmp_path: Path) -> None:
     ensure_webui_dist_built(dist)
 
 
+# --- editable installs must not trip the wheel guard ------------------------
+#
+# Hatchling runs build hooks for editable installs too (``uv sync`` performs
+# one), invoking ``initialize`` with ``version == "editable"``. Without a
+# skip, a fresh checkout with no frontend build (e.g. Windows CI, or any
+# Python-only contributor) fails `uv sync` entirely, even though the gateway
+# already 503s with the build hint at runtime when the dist is missing.
+
+
+def test_should_enforce_skips_editable_version() -> None:
+    from hatch_build import _should_enforce
+
+    assert _should_enforce("editable") is False
+
+
+def test_should_enforce_requires_standard_version() -> None:
+    from hatch_build import _should_enforce
+
+    assert _should_enforce("standard") is True
+
+
+def test_initialize_skips_missing_dist_check_for_editable_build(
+    tmp_path: Path,
+) -> None:
+    """initialize() must not raise for an editable build with no dist.
+
+    ``WebUiBuildHook`` subclasses hatchling's ``BuildHookInterface``, whose
+    ``__init__`` requires real ``ProjectMetadata``/``BuilderConfig``
+    instances that are awkward to construct in a unit test. ``initialize``
+    only reads ``self.root``, so exercise the bound method directly against
+    a bare object carrying just that attribute rather than instantiating the
+    full hatchling hook.
+    """
+    from hatch_build import WebUiBuildHook
+
+    class _StubHook:
+        root = str(tmp_path)  # no src/agentos/gateway/webui_dist/index.html here
+
+    # Must not raise, unlike the "standard" version (test_wheel_guard_raises_*).
+    WebUiBuildHook.initialize(_StubHook(), "editable", {})  # type: ignore[arg-type]
+
+
+def test_initialize_still_raises_for_standard_build_with_missing_dist(
+    tmp_path: Path,
+) -> None:
+    """A real ("standard") wheel build must still be guarded."""
+    from hatch_build import WebUiBuildHook
+
+    class _StubHook:
+        root = str(tmp_path)  # no src/agentos/gateway/webui_dist/index.html here
+
+    with pytest.raises(FileNotFoundError):
+        WebUiBuildHook.initialize(_StubHook(), "standard", {})  # type: ignore[arg-type]
+
+
 # --- missing dist at request time → 503 ------------------------------------
 
 

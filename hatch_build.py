@@ -32,10 +32,31 @@ def _ensure_webui_dist_built(root: Path) -> None:
         )
 
 
+def _should_enforce(version: str) -> bool:
+    """Only real distribution builds ("standard") need the dist present.
+
+    Hatchling's ``WheelBuilder.get_targets`` maps the string ``"editable"``
+    to ``build_editable`` and ``"standard"`` to ``build_standard``; whichever
+    key is selected is passed straight through as ``versions=[key]`` to
+    ``BuilderInterface.build``, which calls ``build_hook.initialize(version,
+    build_data)`` once per version with that same string (see
+    ``hatchling/builders/wheel.py`` and
+    ``hatchling/builders/plugin/interface.py`` in the installed hatchling).
+    So an editable install (what ``uv sync`` performs) invokes this hook with
+    ``version == "editable"``. Skip the guard in that case: the gateway
+    already 503s with the build hint at runtime when the dist is missing, so
+    Python-only contributors and CI jobs without a frontend build can still
+    install the package editable.
+    """
+    return version != "editable"
+
+
 class WebUiBuildHook(BuildHookInterface):
-    """Abort the build when the Vite ``webui_dist`` bundle is missing."""
+    """Abort real (non-editable) builds when ``webui_dist`` is missing."""
 
     PLUGIN_NAME = "webui-guard"
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
+        if not _should_enforce(version):
+            return
         _ensure_webui_dist_built(Path(self.root))
