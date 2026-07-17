@@ -94,6 +94,16 @@ class TestLoopbackHostMiddlewareIntegration:
         resp = client.get("/probe", headers={"host": "attacker.com"})
         assert resp.status_code == 400
 
+    def test_rejected_host_message_points_to_the_config_fix(self) -> None:
+        """A user reaching the gateway via a custom loopback hostname (e.g.
+        /etc/hosts) is a legitimate false-positive; the 400 body must name the
+        config key that unblocks them instead of a bare 'Invalid host'."""
+        client = TestClient(self._app(_config(host="127.0.0.1")))
+        resp = client.get("/probe", headers={"host": "myagent.local"})
+        assert resp.status_code == 400
+        assert "control_ui.allowed_origins" in resp.text
+        assert "myagent.local" in resp.text
+
     def test_loopback_host_header_allowed(self) -> None:
         client = TestClient(self._app(_config(host="127.0.0.1")))
         resp = client.get("/probe", headers={"host": "127.0.0.1"})

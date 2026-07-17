@@ -84,7 +84,16 @@ class LoopbackHostMiddleware(BaseHTTPMiddleware):
             host = ""
         if host in self._allowed or is_loopback_address(host):
             return await call_next(request)  # type: ignore[no-any-return]
-        return PlainTextResponse("Invalid host header", status_code=400)
+        # A non-loopback Host on a loopback bind is usually DNS rebinding, but
+        # it can also be a legitimate user reaching the gateway via a custom
+        # hostname (e.g. an /etc/hosts alias to 127.0.0.1). Name the config key
+        # that unblocks that case instead of a bare rejection.
+        return PlainTextResponse(
+            f"Rejected Host header {host!r}: only loopback hosts are accepted on a "
+            "loopback bind (DNS-rebinding guard). If you reach this gateway via a "
+            "custom hostname, add its origin to control_ui.allowed_origins.",
+            status_code=400,
+        )
 
 
 class LoopbackOriginMiddleware(BaseHTTPMiddleware):
