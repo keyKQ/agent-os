@@ -1,0 +1,60 @@
+{
+  "dataset_id": "allenai/WildChat-1M",
+  "dataset_revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f",
+  "filter_model": "deepseek/deepseek-v4-flash",
+  "filter_temperature": 0.0,
+  "filter_prompt_version": "SELF_CONTAINMENT_PROMPT_V1",
+  "seed": 42,
+  "split_fractions": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "dedup_threshold": 0.85,
+  "minhash_num_perm": 64,
+  "target_turns": 8000,
+  "screen_cap": 40000,
+  "stage_counts": {
+    "screened": 40000,
+    "english": 16890,
+    "redaction_clean": 16795,
+    "substantive": 16503,
+    "deduped": 14318,
+    "llm_screened": 14318,
+    "self_contained": 4675,
+    "final": 4675
+  },
+  "category_counts": {
+    "chitchat": 388,
+    "factual_qa": 3088,
+    "writing": 347,
+    "coding": 625,
+    "math_reasoning": 204,
+    "tool_use": 23
+  },
+  "split_sizes": {
+    "train": {
+      "conversations": 2235,
+      "turns": 3348
+    },
+    "val": {
+      "conversations": 430,
+      "turns": 642
+    },
+    "test": {
+      "conversations": 439,
+      "turns": 685
+    }
+  },
+  "corpus_files": {
+    "corpus.jsonl": "a8bbcae6c078f2f8709ad7838690244ecf4b0ebafc95d0a263ca891834eb7b4d"
+  },
+  "filter_usage": {
+    "llm_calls_this_run": 1,
+    "llm_calls_total_pass": 14318,
+    "note": "This meta was written by a resume run that reused 14317 cached self-containment verdicts and made 1 remaining call; llm_calls_total_pass is the true number of model calls across the whole filter pass (one per unique deduped turn).",
+    "provider": "AkashML",
+    "measured_cost_per_call_usd": 1.68e-06,
+    "estimated_total_cost_usd": 0.024
+  }
+}

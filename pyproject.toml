@@ -233,4 +233,10 @@ pilot-train = [
     "transformers>=4.40",
     "scikit-learn>=1.8,<1.9",
     "skl2onnx>=1.17",
+    # T5 corpus sampler: HF streaming, MinHash near-dup dedupe, language
+    # detection (WildChat carries language metadata; langdetect is the cheap
+    # fallback only). OpenRouter filter calls use the base-dep httpx.
+    "datasets>=2.19",
+    "datasketch>=1.6",
+    "langdetect>=1.0.9",
 ]
