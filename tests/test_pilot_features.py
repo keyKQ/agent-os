@@ -165,7 +165,7 @@ def test_no_traceback():
         "open ./relative/path/module.ts",
         "check config.toml",
         "the file data.yaml is broken",
-        r"look at C:\Users\me\script.py",
+        r"look at C:\projects\demo\script.py",
         r"windows path D:/proj/app.rs here",
         "README.md has the answer",
     ],
