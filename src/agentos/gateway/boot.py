@@ -1399,7 +1399,10 @@ async def preload_agentos_router_runtime(config: GatewayConfig) -> None:
             router_cfg,
             getattr(config, "llm", None),
         )
-        if strategy_name != "v4_phase3":
+        from agentos.router_strategies import get_strategy_info
+
+        info = get_strategy_info(strategy_name)
+        if info is not None and info.uses_judge:
             _log_resolved_judge(config, router_cfg)
     except Exception as exc:  # noqa: BLE001
         log.warning(
