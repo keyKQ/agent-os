@@ -3,10 +3,18 @@
 Go/no-go stop-gate report for the Pilot router (spec
 `docs/superpowers/specs/2026-07-17-pilot-router-design.md`, §6.5).
 
-**Verdict: GO.** Warm p50 at the 2048-char case is **8.26 ms**, well under the
+**Verdict: GO.** Warm p50 at the 2048-char case is **7.42 ms**, well under the
 50 ms hard ceiling. INT8-vs-FP32 cosine is **0.9978** (≥ 0.99). The pathological
 100k-char paste is bounded to 8192 chars at the tokenizer and completes without
 crash or unbounded allocation.
+
+*Re-measured after fixing a review finding: the pre-truncation counting
+tokenizer (`MiniLMEncoder._count_tok`) now explicitly calls `.no_truncation()`
+(the vendored `tokenizer.json` bakes in a 128-token truncation config that
+otherwise silently capped `token_count_pretrunc_8k` at 128 for any input
+tokenizing past that). Latency moved slightly (a true count on longer inputs
+does marginally more tokenizer work than the old capped-at-128 count); the
+verdict is unchanged.*
 
 ## 1. Export
 
@@ -52,7 +60,7 @@ uv run --group pilot-train --extra recommended python scripts/pilot_router/expor
 - **Threads:** single thread — `intra_op_num_threads=1` enforced via
   `OMP/ORT/OPENBLAS/MKL_NUM_THREADS=1` set before session creation.
 - **INT8 model.onnx size:** 22.97 MB.
-- **Peak RSS after full run (incl. 100k paste):** ~174 MB.
+- **Peak RSS after full run (incl. 100k paste):** ~171-176 MB.
 - **Classify stage:** does not exist yet; it is measured at a later task
   (spec §11). Only feature-extraction and embed are measured here.
 
@@ -61,15 +69,16 @@ that length (includes any lazy per-length work).
 
 | length (chars) | cold total ms | feat p50/p99 ms | embed p50/p99 ms | total p50/p99 ms | max tokenizer input chars |
 |---|---|---|---|---|---|
-| 32 | 1.46 | 0.017 / 0.031 | 0.73 / 1.14 | 0.76 / 1.20 | 32 |
-| 256 | 4.41 | 0.068 / 0.084 | 3.56 / 4.64 | 3.70 / 4.41 | 256 |
-| 2048 | 8.30 | 0.661 / 1.114 | 7.62 / 8.85 | **8.26 / 9.98** | 2048 |
-| 100000 (pathological) | 12.03 | 2.200 / 2.318 | 9.21 / 9.57 | 11.60 / 12.25 | **8192** |
+| 32 | 1.34 | 0.014 / 0.027 | 0.66 / 0.76 | 0.68 / 0.84 | 32 |
+| 256 | 4.01 | 0.065 / 0.072 | 3.46 / 3.69 | 3.54 / 3.90 | 256 |
+| 2048 | 7.96 | 0.469 / 0.760 | 7.02 / 11.83 | **7.59 / 11.01** | 2048 |
+| 100000 (pathological) | 10.83 | 1.897 / 1.952 | 8.54 / 8.93 | 10.62 / 11.17 | **8192** |
 
 Notes:
-- Numbers are stable across runs (2048-char warm p50 measured 8.26–8.54 ms
-  across repeat runs). Absolute values are hardware-specific; the slow test
-  asserts only the invariants (8192 bound + 50 ms ceiling), not exact timings.
+- Numbers are stable across runs (2048-char warm p50 measured 7.42–7.59 ms
+  across repeat runs after the counting-tokenizer truncation fix). Absolute
+  values are hardware-specific; the slow test asserts only the invariants
+  (8192 bound + 50 ms ceiling), not exact timings.
 - Feature-extraction (the pure scalar/regex path) is sub-millisecond up to
   2048 chars; embed dominates end-to-end latency, as expected.
 - The pathological 100k paste's cost is bounded because both the encoder and
@@ -80,8 +89,8 @@ Notes:
 
 - **Hard ceiling (spec §6.5):** warm p50 ≤ 50 ms at 2048 chars on the reference
   laptop.
-- **Measured:** 8.26 ms.
-- **Verdict: GO (PASS)** — ~6x margin under the ceiling.
+- **Measured:** 7.42 ms.
+- **Verdict: GO (PASS)** — ~6.7x margin under the ceiling.
 
 The ≤ 15 ms p50 figure from spec Rev 1 is a working hypothesis, not a criterion;
 the measured budget (with owner-approved slack) is set from these numbers before
@@ -95,6 +104,19 @@ uv run --extra recommended pytest -m slow tests/test_pilot_benchmark.py
 
 ## 5. Concerns / follow-ups
 
+- **Review fix round 1:** the pre-truncation counting tokenizer previously
+  inherited the vendored `tokenizer.json`'s baked-in 128-token truncation
+  config, silently capping `token_count_pretrunc_8k` at 128 for any input
+  tokenizing past that (verified: 500-token input returned 128). Fixed by
+  calling `.no_truncation()` / `.no_padding()` on `MiniLMEncoder._count_tok`
+  in `scripts/pilot_router/benchmark_features.py`. All numbers in this report
+  are re-measured post-fix.
+- **Review fix round 1:** `build_features` previously defaulted
+  `token_count_pretrunc_8k` to `0` when the encoder lacked
+  `count_tokens_pretrunc` (`getattr(..., None)` fallback), which would have
+  silently zeroed that scalar for a bare `LocalEmbeddingProvider`.
+  `count_tokens_pretrunc` is now a required member of the `PilotEncoder`
+  protocol; an encoder missing it raises `AttributeError` instead.
 - Runtime inference deps (`onnxruntime`, `numpy`, `tokenizers`) intentionally
   stay in the `recommended`/`ml-router` extras; promoting them and the
   release-workflow/wheel guards for the new embeddings path are explicitly

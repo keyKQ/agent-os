@@ -83,7 +83,12 @@ class MiniLMEncoder:
         self._provider = LocalEmbeddingProvider(features.MINILM_MODEL_ID, onnx_dir=onnx_dir)
         # Separate tokenizer for the pre-truncation count (no truncation),
         # kept distinct from the provider's own truncation/padding-enabled one.
+        # The vendored tokenizer.json bakes in a 128-token truncation config;
+        # without explicitly disabling it here, .encode() silently caps the
+        # count at 128 regardless of the true token count.
         self._count_tok = Tokenizer.from_file(str(onnx_dir / "tokenizer.json"))
+        self._count_tok.no_truncation()
+        self._count_tok.no_padding()
 
     def encode_sync(self, texts: list[str]) -> Any:
         return self._provider.encode_sync(texts)

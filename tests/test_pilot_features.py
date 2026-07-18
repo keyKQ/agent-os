@@ -11,6 +11,7 @@ benchmark test drives the real ONNX export.
 from __future__ import annotations
 
 import math
+from typing import Protocol, runtime_checkable
 
 import numpy as np
 import pytest
@@ -31,16 +32,39 @@ class _StubEncoder:
     Mimics ``LocalEmbeddingProvider.encode_sync``: takes a list of texts and
     returns a raw (un-normalised) ``(N, 384)`` float32 array. The returned
     vector is deliberately un-normalised so the feature builder's L2 step is
-    observable.
+    observable. Implements ``count_tokens_pretrunc`` (required by the
+    ``PilotEncoder`` protocol) with a simple whitespace-split count so tests
+    that don't pass an explicit ``token_count_pretrunc_8k`` still exercise
+    protocol-driven counting.
     """
 
     def __init__(self, dim: int = 384) -> None:
         self.dim = dim
         self.seen: list[list[str]] = []
+        self.count_calls: list[str] = []
 
     def encode_sync(self, texts, **_kwargs):
         self.seen.append(list(texts))
         # Constant non-unit vector: L2 norm is sqrt(dim) * 3, clearly != 1.
+        return np.full((len(texts), self.dim), 3.0, dtype=np.float32)
+
+    def count_tokens_pretrunc(self, text: str) -> int:
+        self.count_calls.append(text)
+        return len(text.split())
+
+
+class _EncoderMissingCounter:
+    """A bare encoder lacking ``count_tokens_pretrunc`` entirely.
+
+    Simulates a caller passing e.g. a raw ``LocalEmbeddingProvider`` that
+    doesn't implement the Pilot-specific counting method. ``build_features``
+    must fail loudly rather than silently default the count to 0.
+    """
+
+    def __init__(self, dim: int = 384) -> None:
+        self.dim = dim
+
+    def encode_sync(self, texts, **_kwargs):
         return np.full((len(texts), self.dim), 3.0, dtype=np.float32)
 
 
@@ -208,3 +232,44 @@ def test_char_count_full_survives_bound_in_full_vector():
     long_msg = "x" * (MAX_INPUT_CHARS + 123)
     vec = build_features(long_msg, encoder=encoder)
     assert vec[384] == pytest.approx(math.log1p(MAX_INPUT_CHARS + 123))
+
+
+# --- count_tokens_pretrunc is required, not an optional silent fallback -----
+
+
+def test_build_features_uses_protocol_counting_when_count_not_supplied():
+    """When token_count_pretrunc_8k is omitted, build_features must call the
+    encoder's count_tokens_pretrunc — not silently default to 0."""
+    encoder = _StubEncoder()
+    msg = "one two three four five"
+    vec = build_features(msg, encoder=encoder)
+    assert encoder.count_calls == [msg[:MAX_INPUT_CHARS]]
+    token_scalar = vec[384 + 1]  # log1p_token_count_pretrunc_8k
+    expected = math.log1p(len(msg.split()))
+    assert token_scalar == pytest.approx(expected)
+    assert token_scalar != pytest.approx(math.log1p(0))
+
+
+def test_build_features_raises_loudly_when_encoder_lacks_counting():
+    """An encoder without count_tokens_pretrunc must cause a loud failure,
+    not a silent log1p(0) for every message."""
+    encoder = _EncoderMissingCounter()
+    with pytest.raises(AttributeError):
+        build_features("hello world", encoder=encoder)
+
+
+def test_pilot_encoder_protocol_requires_count_tokens_pretrunc():
+    """count_tokens_pretrunc is a required member of the PilotEncoder
+    protocol, not an optional/duck-typed extra: a class that implements only
+    encode_sync must not satisfy the protocol at runtime."""
+    assert hasattr(features.PilotEncoder, "count_tokens_pretrunc")
+
+    @runtime_checkable
+    class _CheckableEncoder(features.PilotEncoder, Protocol):
+        pass
+
+    class _EncodeOnly:
+        def encode_sync(self, texts, **_kwargs):
+            return np.zeros((len(texts), 384), dtype=np.float32)
+
+    assert not isinstance(_EncodeOnly(), _CheckableEncoder)

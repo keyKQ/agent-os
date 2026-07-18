@@ -69,3 +69,25 @@ def test_warm_p50_meets_hard_ceiling_at_2048(benchmark_result):
     assert benchmark_result.passes_ceiling(), (
         f"warm p50 at 2048 chars = {p50:.2f} ms exceeds the 50 ms hard ceiling"
     )
+
+
+def test_count_tokens_pretrunc_is_not_capped_by_baked_in_truncation():
+    """The vendored tokenizer.json bakes in a 128-token truncation config.
+
+    ``MiniLMEncoder`` keeps a *separate* tokenizer instance for the
+    pre-truncation count and must disable truncation on it explicitly
+    (``.no_truncation()``); otherwise ``count_tokens_pretrunc`` silently
+    caps at 128 regardless of how many tokens the text actually contains,
+    corrupting ``token_count_pretrunc_8k`` for anything over that length.
+    """
+    from scripts.pilot_router.benchmark_features import MiniLMEncoder
+
+    encoder = MiniLMEncoder()
+    # ~500 distinct words -> well over 128 tokens, comfortably under 8192 chars.
+    text = " ".join(f"word{i}" for i in range(500))
+    assert len(text) < 8192
+    count = encoder.count_tokens_pretrunc(text)
+    assert count > 128, (
+        f"count_tokens_pretrunc returned {count}, expected > 128 "
+        "(truncation must be disabled on the counting tokenizer)"
+    )

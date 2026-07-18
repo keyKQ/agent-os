@@ -83,9 +83,18 @@ class PilotEncoder(Protocol):
     vectors — the same shape/contract as
     ``LocalEmbeddingProvider.encode_sync``. L2 normalization is applied by
     the feature builder, not the encoder.
+
+    ``count_tokens_pretrunc`` is a *required* member, not an optional extra:
+    it is the only way to obtain the pinned-tokenizer,
+    truncation-disabled count that ``token_count_pretrunc_8k`` demands. A
+    bare ``LocalEmbeddingProvider`` does not implement it; callers must use
+    an encoder that does (e.g. ``MiniLMEncoder``), or pass
+    ``token_count_pretrunc_8k`` explicitly to ``build_features``.
     """
 
     def encode_sync(self, texts: list[str]) -> np.ndarray: ...
+
+    def count_tokens_pretrunc(self, text: str) -> int: ...
 
 
 def _has_code_fence(scan_text: str) -> bool:
@@ -172,7 +181,11 @@ def build_features(
 
     ``token_count_pretrunc_8k`` may be supplied by the caller (e.g. a
     ``MiniLMEncoder`` that already tokenised ``scan_text`` truncation-off);
-    when ``None`` the encoder is asked for it via ``count_tokens_pretrunc``.
+    when ``None`` the encoder's ``count_tokens_pretrunc`` is used instead.
+    ``count_tokens_pretrunc`` is a required member of ``PilotEncoder`` — an
+    encoder that lacks it raises ``AttributeError`` here rather than
+    silently defaulting the count to 0 (which would corrupt
+    ``log1p_token_count_pretrunc_8k`` for every message).
     """
     scan_text = message[:MAX_INPUT_CHARS]
 
@@ -180,8 +193,7 @@ def build_features(
     embedding = _l2_normalize(np.asarray(raw[0], dtype=np.float32))
 
     if token_count_pretrunc_8k is None:
-        counter = getattr(encoder, "count_tokens_pretrunc", None)
-        token_count_pretrunc_8k = counter(scan_text) if counter is not None else 0
+        token_count_pretrunc_8k = encoder.count_tokens_pretrunc(scan_text)
 
     scalars = extract_scalars(message, token_count_pretrunc_8k=token_count_pretrunc_8k)
     return np.concatenate([embedding, scalars]).astype(np.float32)
