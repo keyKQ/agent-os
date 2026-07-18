@@ -3805,6 +3805,7 @@ ml-router = [
     { name = "numpy" },
     { name = "onnxruntime" },
     { name = "scikit-learn" },
+    { name = "tokenizers" },
 ]
 recommended = [
     { name = "jieba" },
@@ -3889,6 +3890,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.0" },
     { name = "tiktoken", marker = "extra == 'memory'", specifier = ">=0.5" },
     { name = "tiktoken", marker = "extra == 'recommended'", specifier = ">=0.5" },
+    { name = "tokenizers", marker = "extra == 'ml-router'", specifier = ">=0.15" },
     { name = "tokenizers", marker = "extra == 'recommended'", specifier = ">=0.15" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "typer", specifier = ">=0.12" },

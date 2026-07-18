@@ -374,11 +374,20 @@ class RoutingDecision:
 
 
 class _UnavailableJudgeStrategy:
-    source = "judge_unavailable"
+    """Construction-time degrade stand-in for a strategy that failed to build.
+
+    Emits the caller-supplied degraded ``routing_source`` tag so a build failure
+    reports the right telemetry: the LLM judge and v4 builders leave the default
+    ``"judge_unavailable"`` / their own tag, while the Pilot builder passes
+    ``"pilot_unavailable"`` (spec §4.5) — otherwise a missing-deps Pilot install
+    would mislabel every turn as a judge failure.
+    """
+
     requires_history = True
 
-    def __init__(self, error: Exception) -> None:
+    def __init__(self, error: Exception, source: str = "judge_unavailable") -> None:
         self.error = error
+        self.source = source
 
     async def classify(
         self,
@@ -395,11 +404,11 @@ class _UnavailableJudgeStrategy:
         route_class = _TIER_TO_ROUTE_CLASS.get(tier, "R1")
         # Match the D3 stable extra shape emitted by
         # LLMJudgeStrategy._build_extra so logs/replay see one consistent dict
-        # across both judge-unavailable paths (construction failure vs runtime).
+        # across the degrade paths (construction failure vs runtime).
         return (
             tier,
             0.0,
-            "judge_unavailable",
+            self.source,
             {
                 "route_class": route_class,
                 "top1_label": route_class,
@@ -408,7 +417,7 @@ class _UnavailableJudgeStrategy:
                 "thinking_mode": "T1",
                 "prompt_policy": "P1",
                 "flags": {},
-                "reason": f"judge_unavailable: {self.error}",
+                "reason": f"{self.source}: {self.error}",
                 "probabilities": None,
                 "margin": None,
                 "difficulty": None,
@@ -563,12 +572,23 @@ def _build_pilot_strategy(config: object) -> RouterStrategy:
     A missing/broken bundle degrades to the default tier unless
     ``require_router_runtime`` is set, matching v4.
     """
-    from agentos.agentos_router.pilot import PilotStrategy
+    from agentos.router_strategies import PILOT_STRATEGY_ID, get_strategy_info
 
     pilot_cfg = getattr(config, "pilot", None)
     artifact_dir = getattr(pilot_cfg, "pilot_artifact_dir", None)
     safety_net_threshold = getattr(pilot_cfg, "safety_net_threshold", 0.5)
+    info = get_strategy_info(PILOT_STRATEGY_ID)
+    degraded_source = info.degraded_source if info is not None else "pilot_unavailable"
     try:
+        # Import inside the try: the pilot package imports numpy/onnxruntime/
+        # tokenizers at module top, which live in extras only. On a minimal
+        # (core-only) install with strategy="pilot-v1" that import raises
+        # ImportError — it MUST land here so Pilot degrades exactly like a
+        # missing bundle (spec §4.4) instead of escaping into the generic
+        # pipeline fail-open (which records routing_source="none" every turn and
+        # never populates the cache, re-raising the import per turn).
+        from agentos.agentos_router.pilot import PilotStrategy
+
         return cast(
             RouterStrategy,
             PilotStrategy(
@@ -580,7 +600,7 @@ def _build_pilot_strategy(config: object) -> RouterStrategy:
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("agentos_router.pilot_strategy_unavailable", error=str(exc))
-        return _UnavailableJudgeStrategy(exc)
+        return _UnavailableJudgeStrategy(exc, source=degraded_source)
 
 
 def _build_v4_phase3_strategy(config: object) -> RouterStrategy:

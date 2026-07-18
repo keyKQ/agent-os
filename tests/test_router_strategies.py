@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from agentos.agentos_router.pilot.features import MINILM_MODEL_ID
 from agentos.agentos_router.pilot.strategy import (
     SOURCE_HEALTHY,
@@ -85,6 +87,60 @@ def test_pilot_asset_probe_reports_missing_bundle(tmp_path: Path) -> None:
     missing = pilot_asset_probe(cfg)
     assert any("model.onnx" in m for m in missing)
     assert any("manifest.json" in m for m in missing)
+
+
+def test_pilot_asset_probe_reports_partial_minilm_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A present-but-partial MiniLM dir (LFS not smudged: tokenizer.json missing)
+    # must be reported per-file, not passed off as ready — otherwise boot/doctor
+    # say ready while _MiniLMEncoder degrades on every turn.
+    from agentos import router_strategies
+
+    bundle = tmp_path / "pilot_v1"
+    bundle.mkdir()
+    (bundle / "model.onnx").write_bytes(b"")
+    (bundle / "manifest.json").write_text("{}")
+
+    partial_minilm = tmp_path / "all-MiniLM-L6-v2-int8"
+    partial_minilm.mkdir()
+    (partial_minilm / "model.onnx").write_bytes(b"")  # tokenizer.json absent
+
+    monkeypatch.setattr(
+        router_strategies, "_minilm_onnx_dir", lambda: partial_minilm
+    )
+
+    cfg = type("Cfg", (), {"pilot_artifact_dir": str(bundle)})()
+    missing = router_strategies.pilot_asset_probe(cfg)
+
+    # Pilot bundle files are present; only the missing MiniLM tokenizer.json is
+    # reported (by its concrete path).
+    assert not [m for m in missing if "manifest.json" in m]
+    assert any(m.endswith("tokenizer.json") for m in missing)
+    assert not any(m.endswith("model.onnx") and "MiniLM" not in m and "pilot" in m for m in missing)
+
+
+def test_pilot_asset_probe_passes_for_complete_minilm_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A complete MiniLM dir (both required files present) adds nothing to the
+    # missing list.
+    from agentos import router_strategies
+
+    bundle = tmp_path / "pilot_v1"
+    bundle.mkdir()
+    (bundle / "model.onnx").write_bytes(b"")
+    (bundle / "manifest.json").write_text("{}")
+
+    minilm = tmp_path / "all-MiniLM-L6-v2-int8"
+    minilm.mkdir()
+    (minilm / "model.onnx").write_bytes(b"")
+    (minilm / "tokenizer.json").write_text("{}")
+
+    monkeypatch.setattr(router_strategies, "_minilm_onnx_dir", lambda: minilm)
+
+    cfg = type("Cfg", (), {"pilot_artifact_dir": str(bundle)})()
+    assert router_strategies.pilot_asset_probe(cfg) == []
 
 
 def test_pilot_asset_probe_passes_for_fixture_bundle() -> None:

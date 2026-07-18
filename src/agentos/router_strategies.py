@@ -50,6 +50,13 @@ _MINILM_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 #: Files the Pilot production bundle must carry alongside the MiniLM dir.
 _PILOT_REQUIRED_FILES = ("model.onnx", "manifest.json")
 
+#: Files the ``_MiniLMEncoder`` needs inside the resolved MiniLM ONNX dir:
+#: ``model.onnx`` for the embedding provider and ``tokenizer.json`` for the
+#: pre-truncation token counter. A partial dir (e.g. an un-smudged LFS
+#: checkout missing one of these) must be reported the same as a missing dir,
+#: or boot/doctor report ready while every turn degrades.
+_MINILM_REQUIRED_FILES = ("model.onnx", "tokenizer.json")
+
 #: Files the v4 bundle must carry.
 _V4_REQUIRED_FILES = ("runtime_src", "router.runtime.yaml")
 
@@ -107,6 +114,17 @@ def pilot_asset_probe(config: object | None = None) -> list[str]:
     minilm_dir = _minilm_onnx_dir()
     if minilm_dir is None or not Path(minilm_dir).is_dir():
         missing.append(f"MiniLM embedder dir ({_MINILM_MODEL_ID})")
+    else:
+        # A present dir is not enough: a partial checkout (missing model.onnx or
+        # an un-smudged LFS tokenizer.json) makes the encoder degrade at every
+        # turn. Probe per-file so boot/doctor report the same paths the pilot
+        # bundle files are reported with.
+        minilm_path = Path(minilm_dir)
+        missing.extend(
+            str(minilm_path / name)
+            for name in _MINILM_REQUIRED_FILES
+            if not (minilm_path / name).exists()
+        )
     return missing
 
 

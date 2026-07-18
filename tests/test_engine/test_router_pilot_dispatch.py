@@ -8,6 +8,7 @@ hot edits to the pilot thresholds rebuild the cached strategy.
 
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,46 @@ def test_cache_key_stable_for_unrelated_edit() -> None:
         judge_input_max_chars=9999,
     )
     assert step._strategy_cache_key(unrelated) == key_base
+
+
+@pytest.mark.asyncio
+async def test_pilot_import_error_degrades_to_pilot_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A minimal (core-only) install lacks numpy/onnxruntime/tokenizers, so the
+    pilot package import raises ImportError. Spec §4.4 promises Pilot degrades
+    exactly like v4 — the router step must NOT let that ImportError escape into
+    the generic pipeline fail-open (which would record routing_source="none").
+    Instead it must land on the pilot_unavailable degrade path, and the cached
+    stand-in must NOT re-raise per turn.
+    """
+    real_import = builtins.__import__
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "agentos.agentos_router.pilot" or name.startswith(
+            "agentos.agentos_router.pilot."
+        ):
+            raise ImportError("No module named 'numpy' (simulated minimal install)")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    cfg = AgentOSRouterConfig(strategy="pilot-v1")
+
+    # First build: the import failure must be caught, not raised.
+    strategy = step._get_strategy(cfg)
+    assert not isinstance(strategy, PilotStrategy)
+    assert getattr(strategy, "source", None) == "pilot_unavailable"
+
+    # Classify degrades to the default tier with pilot_unavailable telemetry.
+    tier, confidence, source, extra = await strategy.classify("hi", ["c0", "c1"])
+    assert source == "pilot_unavailable"
+    assert confidence == 0.0
+
+    # Second call must hit the populated cache, not re-run (and re-raise) the
+    # failed import — matching v4's cached-degrade contract.
+    again = step._get_strategy(cfg)
+    assert again is strategy
 
 
 def test_cache_key_rebuild_swaps_cached_pilot_instance() -> None:
