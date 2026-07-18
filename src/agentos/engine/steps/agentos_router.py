@@ -1111,6 +1111,35 @@ def _attachments_include_image(attachments: list[dict[str, Any]] | None) -> bool
     return False
 
 
+def _degrade_model_for_local_provider(
+    ctx: TurnContext,
+    *,
+    tier_cfg: dict,
+    routed_model: str,
+) -> str:
+    """Collapse a mismatched-provider tier model to the configured local model.
+
+    Local providers (ollama / lm_studio / ovms) always run through the single
+    configured ``llm.provider`` — the runtime never builds a per-tier provider
+    client. So a tier whose ``provider`` differs from the configured local
+    provider names a model the local server does not have. Pin such a route to
+    ``llm.model`` instead, and mark ``ctx.metadata['routing_degraded']``. A tier
+    whose ``provider`` matches the local provider is an intentional local
+    multi-model setup and is left untouched.
+    """
+    from agentos.provider.registry import is_local_provider
+
+    llm_cfg = getattr(ctx.config, "llm", None) if ctx.config else None
+    provider = str(getattr(llm_cfg, "provider", "") or "").strip().lower()
+    if not is_local_provider(provider):
+        return routed_model
+    tier_provider = str(tier_cfg.get("provider") or "").strip().lower()
+    if tier_provider and tier_provider != provider:
+        ctx.metadata["routing_degraded"] = True
+        return str(getattr(llm_cfg, "model", "") or routed_model)
+    return routed_model
+
+
 async def apply_agentos_router(ctx: TurnContext) -> TurnContext:
     router_cfg = getattr(ctx.config, "agentos_router", None) if ctx.config else None
     if not router_cfg or not getattr(router_cfg, "enabled", False):
@@ -1162,7 +1191,9 @@ async def apply_agentos_router(ctx: TurnContext) -> TurnContext:
         routing_applied = True
         ctx.metadata["baseline_model"] = ctx.model
         if routing_applied:
-            ctx.model = decision.model
+            ctx.model = _degrade_model_for_local_provider(
+                ctx, tier_cfg=image_tiers[tier_name], routed_model=decision.model
+            )
         ctx.metadata["routed_tier"] = decision.tier
         ctx.metadata["routed_model"] = decision.model
         ctx.metadata["routing_applied"] = routing_applied
@@ -1201,7 +1232,9 @@ async def apply_agentos_router(ctx: TurnContext) -> TurnContext:
                 source="router_control_hold",
             )
             ctx.metadata["baseline_model"] = ctx.model
-            ctx.model = decision.model
+            ctx.model = _degrade_model_for_local_provider(
+                ctx, tier_cfg=tiers.get(hold.tier, {}), routed_model=decision.model
+            )
             ctx.metadata["routed_tier"] = decision.tier
             ctx.metadata["routed_model"] = decision.model
             ctx.metadata["routing_applied"] = True
@@ -1362,7 +1395,9 @@ async def apply_agentos_router(ctx: TurnContext) -> TurnContext:
 
     routing_applied = rollout_phase != "observe"
     if routing_applied:
-        ctx.model = decision.model
+        ctx.model = _degrade_model_for_local_provider(
+            ctx, tier_cfg=tiers.get(decision.tier, {}), routed_model=decision.model
+        )
     ctx.metadata["routed_tier"] = decision.tier
     ctx.metadata["routed_model"] = decision.model
     ctx.metadata["routing_applied"] = routing_applied
