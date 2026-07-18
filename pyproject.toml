@@ -149,6 +149,7 @@ markers = [
     "local_golden: local opt-in synthetic complex-task golden tests",
     "webui_browser: real browser Web UI tests driven by Playwright",
     "live_channel: marks tests that hit a real channel platform (deselect with '-m \"not live_channel\"')",
+    "slow: slow benchmark/perf tests, opt-in (deselect with '-m \"not slow\"')",
 ]
 
 [tool.ruff]
@@ -215,4 +216,14 @@ ignore_missing_imports = true
 dev = [
     "laboratory>=1.0.2",
     "syrupy>=5.1.0",
+]
+# Pilot router export/training deps. Dev-time only — used by
+# scripts/pilot_router/* to download and INT8-export the locked MiniLM
+# backbone. Runtime inference deps (onnxruntime, numpy, tokenizers) stay in
+# the `recommended`/`ml-router` extras; promoting them is a later task.
+# Later Pilot tasks extend this group with labeling/training libraries.
+pilot-train = [
+    "optimum[onnxruntime]>=1.20",
+    "torch>=2.2",
+    "transformers>=4.40",
 ]
