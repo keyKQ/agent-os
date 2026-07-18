@@ -503,24 +503,36 @@ def _strategy_cache_key(config: object, llm_cfg: object | None = None) -> tuple:
             getattr(config, "v4_use_aux_head", None),
             getattr(config, "require_router_runtime", False),
         )
+    if strategy_name == "pilot-v1":
+        # PilotStrategy snapshots safety_net_threshold, confidence_threshold
+        # (already keyed above via `confidence`), the artifact dir, and the
+        # runtime flag in __init__. A hot edit to [agentos_router.pilot] (or
+        # router.confidence_threshold) must rebuild the cached strategy, else
+        # the new thresholds silently no-op until process restart.
+        pilot_cfg = getattr(config, "pilot", None)
+        key = (
+            *key,
+            getattr(pilot_cfg, "safety_net_threshold", None),
+            getattr(pilot_cfg, "pilot_artifact_dir", None),
+            getattr(config, "require_router_runtime", False),
+        )
     return key
 
 
-_KNOWN_STRATEGIES = frozenset({"llm_judge", "v4_phase3"})
-
-
 def _strategy_name(config: object) -> str:
+    from agentos.router_strategies import is_known_strategy, resolve_strategy_id
+
     configured = str(
         getattr(config, "strategy", DEFAULT_ROUTER_STRATEGY) or DEFAULT_ROUTER_STRATEGY
     ).strip()
-    if configured in _KNOWN_STRATEGIES:
-        return configured
-    log.warning(
-        "agentos_router.unknown_strategy_ignored",
-        strategy=configured,
-        using=DEFAULT_ROUTER_STRATEGY,
-    )
-    return DEFAULT_ROUTER_STRATEGY
+    resolved = resolve_strategy_id(configured)
+    if configured and not is_known_strategy(configured):
+        log.warning(
+            "agentos_router.unknown_strategy_ignored",
+            strategy=configured,
+            using=resolved,
+        )
+    return resolved
 
 
 def _requires_history(strategy: object) -> bool:
@@ -539,6 +551,35 @@ def _build_llm_judge_strategy(config: object, llm_cfg: object | None) -> RouterS
         return cast(RouterStrategy, LLMJudgeStrategy(router_cfg=config, llm_cfg=llm_cfg))
     except Exception as exc:  # noqa: BLE001
         log.warning("agentos_router.judge_strategy_unavailable", error=str(exc))
+        return _UnavailableJudgeStrategy(exc)
+
+
+def _build_pilot_strategy(config: object) -> RouterStrategy:
+    """Build the Pilot local ML router strategy (strategy="pilot-v1").
+
+    Thresholds come from live config: ``safety_net_threshold`` from the
+    ``[agentos_router.pilot]`` sub-table and ``confidence_threshold`` from
+    ``router.confidence_threshold`` (the strategy couples them into ``t_eff``).
+    A missing/broken bundle degrades to the default tier unless
+    ``require_router_runtime`` is set, matching v4.
+    """
+    from agentos.agentos_router.pilot import PilotStrategy
+
+    pilot_cfg = getattr(config, "pilot", None)
+    artifact_dir = getattr(pilot_cfg, "pilot_artifact_dir", None)
+    safety_net_threshold = getattr(pilot_cfg, "safety_net_threshold", 0.5)
+    try:
+        return cast(
+            RouterStrategy,
+            PilotStrategy(
+                artifact_dir=artifact_dir,
+                safety_net_threshold=safety_net_threshold,
+                confidence_threshold=getattr(config, "confidence_threshold", 0.5),
+                require_router_runtime=getattr(config, "require_router_runtime", False),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("agentos_router.pilot_strategy_unavailable", error=str(exc))
         return _UnavailableJudgeStrategy(exc)
 
 
@@ -579,6 +620,8 @@ def _get_strategy(config: object, llm_cfg: object | None = None) -> RouterStrate
         strategy_name = _strategy_name(config)
         if strategy_name == "v4_phase3":
             strategy = _build_v4_phase3_strategy(config)
+        elif strategy_name == "pilot-v1":
+            strategy = _build_pilot_strategy(config)
         else:
             strategy = _build_llm_judge_strategy(config, llm_cfg)
         _strategy = strategy
