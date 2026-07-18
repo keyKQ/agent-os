@@ -433,3 +433,136 @@ full-run stats, both cost figures, and `gate.pass = true` (owner relaxation).
   under `scripts/pilot_router/data/`).
 - Committed: `rubric.md`, `label_corpus.py`, `labels_meta.json` (counts,
   rates, cost, provider + model pin, rubric sha256). **No label rows.**
+
+---
+
+## 7. Training (T7, spec §6.6) — the locked `pilot-v1` artifact
+
+The shipped model is built by **one command** ([`train.py`](train.py)); its
+pure, encoder-agnostic half lives in [`train_lib.py`](train_lib.py) and the
+skl2onnx export in [`export_model.py`](export_model.py):
+
+```sh
+uv run --group pilot-train --extra recommended \
+    python scripts/pilot_router/train.py
+```
+
+Everything below the pipeline is **locked** — no backbone/pooling/feature/head/
+hyperparameter search of any kind. Evaluation (T9) decides ship-or-stop; T7 only
+produces the artifact.
+
+### Locked recipe
+
+| Item | Value |
+|---|---|
+| Architecture | `Pipeline(StandardScaler, MLPClassifier(hidden_layer_sizes=(256, 64)))` |
+| Features | T1 `build_features` → `float32 [N, 392]` (384-d MiniLM INT8 mean-pool + L2, then 8 scalars), via the **production** `_MiniLMEncoder` imported from `pilot.strategy` (no third encoder) |
+| Sample weights | GOLD-class `R0=1, R1=1, R2=2, R3=3` (`MLPClassifier.fit(..., sample_weight=…)`) |
+| Labels | integer `0..3` ↔ `["R0","R1","R2","R3"]` (production ONNX contract, `zipmap=False`) |
+| Shipped seed | **42** (ships regardless of the stability numbers) |
+| Diagnostic seeds | 7, 2026 (stability report only; no seed selected by score) |
+| Calibration | log-space temperature `T` fit on **validation only** by minimizing NLL of `softmax(log(clip(p,1e-7,1))/T)` (golden-section, deterministic) |
+| Splits | train + val loaded; **test never opened** (T9 owns it). Boundary-set rows untouched here. |
+
+### Resampling decision (spec §6.2) — **none**
+
+The TRAIN partition is **not resampled**. Class balance is carried entirely by
+the GOLD-class sample weights (R2 counts 2×, R3 counts 3×), so no rows are
+duplicated and the fit sees each real turn exactly once. Validation and test
+keep their **natural** distribution (never resampled, by contract). Rationale:
+oversampling R3 (168 train rows) with replacement would repeat the same ~168
+vectors up to ~14× toward the R2 majority — inflating overfit on a handful of
+rare points without adding signal — whereas the sample-weight lever raises R3's
+gradient contribution without cloning rows. The `oversample` strategy is
+implemented and available in `train_lib.resample_train` but is **not** used by
+the shipped artifact.
+
+### Feature cache
+
+Embedding the 5,393 train+val turns through INT8 MiniLM takes ~16 s cold on the
+build machine (Apple silicon). Features are cached to a **git-ignored**
+`.feature_cache/<split>_<fingerprint>.npz`, keyed by a sha256 over
+(corpus bytes + labels bytes + the 392-dim contract), so any data or contract
+change invalidates the cache and retrains are otherwise instant.
+
+### Set sizes and per-split class balance (natural)
+
+| Split | R0 | R1 | R2 | R3 | total |
+|---|---|---|---|---|---|
+| train | 243 | 1761 | 2354 | 168 | **4526** |
+| val | 55 | 354 | 427 | 31 | **867** |
+
+(Test — 72/408/470/33 = 983 — is recorded in `labels_meta.json` but **not read**
+by T7.)
+
+### Seed-42 validation metrics (the shipped artifact)
+
+| Metric | Value |
+|---|---|
+| Accuracy | **0.6713** |
+| Recall R0 / R1 / R2 / R3 | 0.418 / 0.644 / 0.759 / **0.226** |
+| Severity-weighted under-routing | 0.3322 |
+| ECE (15-bin) before → after calibration | 0.2591 → **0.0513** |
+| NLL before → after calibration | 1.784 → 0.780 |
+| Fitted temperature `T` | **4.3573** |
+
+Validation confusion (gold rows × predicted cols, seed 42):
+
+| gold \ pred | R0 | R1 | R2 | R3 |
+|---|---|---|---|---|
+| **R0** | 23 | 25 | 7 | 0 |
+| **R1** | 11 | 228 | 113 | 2 |
+| **R2** | 1 | 93 | 324 | 9 |
+| **R3** | 0 | 5 | 19 | 7 |
+
+### 3-seed stability (mean ± std over seeds 42, 7, 2026 — diagnostic only)
+
+| Metric | mean ± std |
+|---|---|
+| Accuracy | 0.6697 ± 0.0011 |
+| Severity-weighted under-routing | 0.3314 ± 0.0076 |
+| ECE (calibrated) | 0.0501 ± 0.0062 |
+| Temperature `T` | 4.4012 ± 0.1263 |
+| Recall R0 | 0.3939 ± 0.0227 |
+| Recall R1 | 0.6516 ± 0.0087 |
+| Recall R2 | 0.7518 ± 0.0083 |
+| Recall R3 | 0.2366 ± 0.0152 |
+
+The seeds are tight (accuracy std ~0.001): the recipe is stable, not
+seed-lucky. **Honest read:** overall accuracy ~0.67 is well above the 0.5
+catastrophic floor, and temperature calibration cuts ECE ~5× (0.26 → 0.05).
+The weak spots are the two rare classes — **R3 recall ~0.23** (most R3 turns
+land in R2, the adjacent tier) and R0 ~0.42 — driven by their scarcity (3.6% /
+5.8% of the corpus) even with the up-weighting. These are reported exactly as
+measured; no rerun hunted a better seed, and seed 42 ships regardless. T9's
+eval gate on the **test** split is the ship-or-stop decision.
+
+### Artifact staging and provenance
+
+- The seed-42 artifact (`model.onnx` + `manifest.json`) is written to the
+  **git-ignored** staging dir `scripts/pilot_router/artifacts/pilot_v1/`. Per
+  the spec flow it lands in the shipped location
+  (`src/agentos/agentos_router/models/pilot_v1/`) **only after T9 passes** —
+  not in this task.
+- Loadability is verified in-run: `PilotModel(staging_dir)` loads available and
+  predicts a normalized `[N, 4]` distribution, with exact 392-dim parity
+  asserted (a 391-dim input is rejected fail-soft).
+- The `manifest.json` records the full §6.3 contract (classes, temperature,
+  embedder id, `model.onnx` sha256, IO contract, encoder contract copied from
+  the MiniLM `export_meta.json`, feature schema with the `url_regex`/`file_regex`
+  pins, and the training-stats block). It loads cleanly through `PilotModel`.
+- **Committed** (git-tracked): `train.py`, `train_lib.py`, `export_model.py`,
+  and [`training_meta.json`](training_meta.json) — the full metrics + provenance
+  record (set sizes, per-split balance, seed-42 metrics + confusion, 3-seed
+  stability, resampling decision, sample-weight policy, labeler pin, rubric
+  sha256, git SHA, pinned + installed dep versions). **Never committed:** the
+  staged `artifacts/` and the `.feature_cache/`.
+
+### CI smoke (offline, spec §9)
+
+`tests/test_agentos_router/test_pilot_train_smoke.py` drives the **same** T7
+code paths on a synthetic 50-row corpus+labels fixture with a deterministic stub
+encoder (no MiniLM weights, no network, fork-safe): join → build `[N, 392]`
+features → train tiny → fit T → export → `PilotModel` load round-trip, plus a
+parity guard that a wrong embed width trips. It `importorskip`s the `pilot-train`
+group so the default offline suite (which lacks it) does not error.
