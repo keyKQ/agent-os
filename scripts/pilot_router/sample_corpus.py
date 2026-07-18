@@ -67,6 +67,19 @@ _BUCKETS = 10_000  # hash bucket resolution for the split
 TARGET_TURNS = 8_000
 MIN_CHARS = 12  # triviality floor
 
+# Extension acceptance policy (owner-delegated, 2026-07-18). Screen up to
+# ``SCREEN_CAP`` turns, but stop early once BOTH the total accepted target is
+# met AND every non-rare category has reached its floor. ``tool_use`` is
+# naturally rare in WildChat — take what we find down to a soft floor.
+DEFAULT_SCREEN_CAP = 120_000
+PER_CATEGORY_FLOOR = 400  # every category except tool_use
+TOOL_USE_FLOOR = 60  # best-effort; accept fewer if 120k screened can't supply
+# Once a category exceeds this share of the running accepted total, keep
+# screening its turns but stop ACCEPTING from it (rebalance away from the
+# dominant factual_qa bucket). The cheap regex category check runs BEFORE the
+# LLM self-containment call, so capped-category turns cost no LLM spend.
+CATEGORY_SHARE_CAP = 0.35
+
 CATEGORIES = (
     "chitchat",
     "factual_qa",
@@ -133,6 +146,34 @@ def assign_split(conversation_id: str) -> str:
     All turns of one conversation share one split.
     """
     return _split_for_bucket(_bucket(conversation_id))
+
+
+def _assert_partition_stable(prior_corpus: Path) -> int:
+    """Assert the frozen partition (spec §6.2): every conversation_id recorded
+    in a previously-written corpus still maps to the SAME split under
+    ``assign_split`` now. Returns the number of ids checked (0 if no prior
+    corpus). Raises AssertionError on any drift."""
+    if not prior_corpus.is_file():
+        return 0
+    checked = 0
+    with prior_corpus.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+                cid, prev = row["conversation_id"], row["split"]
+            except (json.JSONDecodeError, KeyError):
+                continue
+            now = assign_split(cid)
+            if now != prev:
+                raise AssertionError(
+                    f"partition drift: conversation {cid!r} was {prev!r}, now {now!r}"
+                )
+            checked += 1
+    print(f"[partition] stable: {checked} prior conversation_ids keep their split")
+    return checked
 
 
 # --------------------------------------------------------------------------- #
@@ -375,6 +416,7 @@ class OpenRouterClient:
         self._usage_lock = threading.Lock()
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        self.reported_cost_usd = 0.0
         self.calls = 0
 
     def complete(self, text: str) -> str:
@@ -401,6 +443,7 @@ class OpenRouterClient:
                 with self._usage_lock:
                     self.prompt_tokens += int(usage.get("prompt_tokens", 0) or 0)
                     self.completion_tokens += int(usage.get("completion_tokens", 0) or 0)
+                    self.reported_cost_usd += float(usage.get("cost", 0.0) or 0.0)
                     self.calls += 1
                 return str(data["choices"][0]["message"]["content"])
             except Exception:
@@ -569,6 +612,111 @@ def _run_llm_filter(
     return accepted, screened
 
 
+def _quota_full(counts: dict[str, int], *, target: int) -> bool:
+    """The compound stop condition for the stratified extension: total accepted
+    at/over ``target`` AND every non-rare category at its floor (tool_use at its
+    soft floor)."""
+    total = sum(counts.values())
+    if total < target:
+        return False
+    for cat in CATEGORIES:
+        floor = TOOL_USE_FLOOR if cat == "tool_use" else PER_CATEGORY_FLOOR
+        if counts.get(cat, 0) < floor:
+            return False
+    return True
+
+
+def _category_capped(cat: str, counts: dict[str, int]) -> bool:
+    """Whether we should stop ACCEPTING new turns from ``cat`` right now: its
+    running accepted share exceeds ``CATEGORY_SHARE_CAP``. Only applies once its
+    floor is met, so a category is never starved below its floor by the cap."""
+    total = sum(counts.values())
+    if total == 0:
+        return False
+    floor = TOOL_USE_FLOOR if cat == "tool_use" else PER_CATEGORY_FLOOR
+    if counts.get(cat, 0) < floor:
+        return False
+    return counts.get(cat, 0) > CATEGORY_SHARE_CAP * total
+
+
+def _run_llm_filter_stratified(
+    deduped: list[dict[str, Any]],
+    client: SelfContainmentClient,
+    cache: dict[str, bool],
+    *,
+    target: int,
+    workers: int,
+) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    """Category-aware self-containment filter for the extension run.
+
+    Each turn is categorized with the cheap regex classifier BEFORE any LLM
+    call. Turns whose category is currently share-capped
+    (``_category_capped``) are skipped without a model call — no LLM spend on
+    turns we would not keep. Uncapped turns are screened concurrently; accepted
+    ones (self-contained) are collected until ``_quota_full`` (total ``target``
+    + per-category floors). Returns (accepted turns in stable input order,
+    number of turns actually LLM-screened, per-category accepted counts).
+
+    Verdicts are disk-cached/resumable exactly as in ``_run_llm_filter``."""
+    import threading
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    cache_lock = threading.Lock()
+
+    def _classify(turn: dict[str, Any]) -> tuple[str, bool]:
+        tid = turn["turn_id"]
+        if tid in cache:
+            return tid, cache[tid]
+        verdict = _parse_verdict(client.complete(turn["text"]))
+        with cache_lock:
+            cache[tid] = verdict
+            _append_cache(CACHE_PATH, tid, verdict)
+        return tid, verdict
+
+    # Pre-categorize; keep only what we might still accept as we go.
+    for turn in deduped:
+        turn["category"] = categorize(turn["text"])
+
+    accepted: list[dict[str, Any]] = []
+    accept_counts: dict[str, int] = {c: 0 for c in CATEGORIES}
+    screened = 0
+    it = iter(deduped)
+    inflight: dict[Any, dict[str, Any]] = {}
+    window = max(workers * 3, 48)
+    stop = False
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while True:
+            # Fill the window, skipping turns whose category is share-capped
+            # right now (no LLM call for them).
+            while not stop and len(inflight) < window:
+                nxt = next(it, None)
+                if nxt is None:
+                    break
+                if _category_capped(nxt["category"], accept_counts):
+                    continue
+                inflight[pool.submit(_classify, nxt)] = nxt
+            if not inflight:
+                break
+            done, _ = wait(set(inflight), return_when=FIRST_COMPLETED)
+            for fut in done:
+                turn = inflight.pop(fut)
+                _, verdict = fut.result()
+                screened += 1
+                cat = turn["category"]
+                # Re-check the cap at accept time (it may have filled while the
+                # call was in flight) so a category never overshoots its share.
+                if verdict and not _category_capped(cat, accept_counts):
+                    accepted.append(turn)
+                    accept_counts[cat] += 1
+                if screened % 500 == 0:
+                    print(f"[llm] screened={screened} accepted={len(accepted)} {accept_counts}")
+            if _quota_full(accept_counts, target=target):
+                stop = True
+                break
+    print(f"[llm] final accepted={len(accepted)} {accept_counts}")
+    return accepted, screened, accept_counts
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration (the real run)
 # --------------------------------------------------------------------------- #
@@ -582,6 +730,7 @@ def run(
     client: SelfContainmentClient | None,
     accept_pool_factor: float = 1.5,
     llm_workers: int = 24,
+    stratified: bool = False,
 ) -> dict[str, Any]:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = Counter()
@@ -618,23 +767,36 @@ def run(
     # avoids paying for LLM calls on turns we would never select.
     if client is None:
         raise RuntimeError("no self-containment client provided for the real run")
-    accept_pool = int(target * accept_pool_factor)
-    accepted, screened = _run_llm_filter(
-        deduped, client, cache, accept_pool=accept_pool, workers=llm_workers
-    )
+    if stratified:
+        # Extension mode: category-aware acceptance with per-category floors +
+        # share cap, stopping on the compound quota. Categories are assigned in
+        # the filter (before the LLM call) so capped categories cost no spend.
+        accepted, screened, _ = _run_llm_filter_stratified(
+            deduped, client, cache, target=target, workers=llm_workers
+        )
+        final = accepted  # already balanced by the quota controller
+    else:
+        accept_pool = int(target * accept_pool_factor)
+        accepted, screened = _run_llm_filter(
+            deduped, client, cache, accept_pool=accept_pool, workers=llm_workers
+        )
+        # Stage 6: coarse category.
+        for turn in accepted:
+            turn["category"] = categorize(turn["text"])
+        # Stage 7: stratified selection to target.
+        final = stratified_select(accepted, target=target)
     counts["llm_screened"] = screened  # turns actually LLM-screened (early-stopped)
     counts["self_contained"] = len(accepted)
+    counts["final"] = len(final)
     print(f"[llm] self_contained={counts['self_contained']}/{screened} screened")
 
-    # Stage 6: coarse category.
-    for turn in accepted:
-        turn["category"] = categorize(turn["text"])
-
-    # Stage 7: stratified selection to target.
-    final = stratified_select(accepted, target=target)
-    counts["final"] = len(final)
-
     # Stage 8: split by conversation_id + write corpus.
+    # Partition stability check (spec §6.2): the split is a pure function of
+    # (conversation_id, SEED), so any conversation that appeared in a previous
+    # corpus MUST keep its exact split now. Cross-check against the prior corpus
+    # if one is still on disk; this proves the extension moved nothing.
+    _assert_partition_stable(CORPUS_PATH)
+
     per_cat: Counter[str] = Counter()
     split_conv: dict[str, set[str]] = {s: set() for s in SPLIT_FRACTIONS}
     split_turns: Counter[str] = Counter()
@@ -685,14 +847,21 @@ def run(
     if isinstance(client, OpenRouterClient):
         prompt_t = client.prompt_tokens
         completion_t = client.completion_tokens
-        # deepseek-v4-flash OpenRouter pricing (approx, USD/1M tok):
-        # ~$0.10 input / $0.28 output. Recorded as an estimate.
-        est_cost = prompt_t / 1e6 * 0.10 + completion_t / 1e6 * 0.28
+        # OpenRouter reports a per-call ``cost`` in the usage block; we sum it
+        # for the calls made *this* process. The true per-call cost derived from
+        # this run then scales to the whole filter pass (total_calls = unique
+        # deduped turns screened, incl. those served from cache in a resume run).
+        reported = round(client.reported_cost_usd, 6) if client.reported_cost_usd else 0.0
+        total_calls = counts["llm_screened"]
+        per_call = (reported / client.calls) if client.calls else 0.0
         meta["filter_usage"] = {
-            "llm_calls": client.calls,
-            "prompt_tokens": prompt_t,
-            "completion_tokens": completion_t,
-            "estimated_cost_usd": round(est_cost, 4),
+            "llm_calls_this_run": client.calls,
+            "llm_calls_total_pass": total_calls,
+            "prompt_tokens_this_run": prompt_t,
+            "completion_tokens_this_run": completion_t,
+            "reported_cost_this_run_usd": reported,
+            "measured_cost_per_call_usd": round(per_call, 6),
+            "estimated_total_cost_usd": round(per_call * total_calls, 4),
         }
 
     META_PATH.write_text(json.dumps(meta, indent=2) + "\n")
@@ -716,6 +885,14 @@ def main(argv: list[str] | None = None) -> int:
         help="LLM-screen until accepted >= target*factor, then stop (cost control)",
     )
     parser.add_argument("--llm-workers", type=int, default=24)
+    parser.add_argument(
+        "--stratified",
+        action="store_true",
+        help=(
+            "category-aware acceptance: per-category floors + share cap, stop on "
+            "the compound quota (total target + floors). Screens up to --screen-cap."
+        ),
+    )
     args = parser.parse_args(argv)
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -732,6 +909,7 @@ def main(argv: list[str] | None = None) -> int:
             client=client,
             accept_pool_factor=args.accept_pool_factor,
             llm_workers=args.llm_workers,
+            stratified=args.stratified,
         )
     finally:
         client.close()

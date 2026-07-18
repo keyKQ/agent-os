@@ -18,6 +18,7 @@ tests import the module without needing that dependency group installed.
 from __future__ import annotations
 
 import importlib.util
+import json
 from collections import Counter
 from importlib.util import find_spec
 from pathlib import Path
@@ -372,3 +373,117 @@ def test_run_llm_filter_writes_resumable_cache(monkeypatch, tmp_path):
     reloaded = sc._load_cache(cache_path)
     assert len(reloaded) == 8
     assert reloaded["t0"] is True and reloaded["t1"] is False
+
+
+# --------------------------------------------------------------------------- #
+# 8. Extension: category quota, share cap, stratified filter, partition check
+# --------------------------------------------------------------------------- #
+
+
+def test_quota_full_requires_total_and_all_floors():
+    # Below total target -> not full.
+    counts = {c: 1000 for c in sc.CATEGORIES}
+    assert sc._quota_full(counts, target=10_000_000) is False
+    # Total met but a non-rare category below floor -> not full.
+    counts = {c: sc.PER_CATEGORY_FLOOR for c in sc.CATEGORIES}
+    counts["writing"] = sc.PER_CATEGORY_FLOOR - 1
+    assert sc._quota_full(counts, target=100) is False
+    # Total met, all non-rare at floor, tool_use at its soft floor -> full.
+    counts = {c: sc.PER_CATEGORY_FLOOR for c in sc.CATEGORIES}
+    counts["tool_use"] = sc.TOOL_USE_FLOOR
+    assert sc._quota_full(counts, target=100) is True
+
+
+def test_category_capped_respects_floor_then_share():
+    # Under floor -> never capped even if it dominates a tiny total.
+    counts = {c: 0 for c in sc.CATEGORIES}
+    counts["factual_qa"] = sc.PER_CATEGORY_FLOOR - 1
+    assert sc._category_capped("factual_qa", counts) is False
+    # At/over floor AND over the share cap -> capped.
+    counts = {c: 100 for c in sc.CATEGORIES}
+    counts["factual_qa"] = 5000  # way over 35% of the total
+    assert sc._category_capped("factual_qa", counts) is True
+    # At/over floor but under the share cap -> not capped.
+    counts = {c: 1000 for c in sc.CATEGORIES}  # each ~16.7%, under 35%
+    assert sc._category_capped("coding", counts) is False
+
+
+class _CatClient:
+    """Returns self_contained=true for every turn (so acceptance is gated only
+    by the category quota, not the verdict)."""
+
+    def __init__(self):
+        import threading
+
+        self._lock = threading.Lock()
+        self.calls = 0
+
+    def complete(self, text: str) -> str:
+        with self._lock:
+            self.calls += 1
+        return '{"self_contained": true}'
+
+
+def _cat_turns():
+    # Heavily skewed toward factual_qa to exercise the share cap.
+    rows = []
+    tid = 0
+    templates = {
+        "factual_qa": "What is fact number {i} about the world?",
+        "coding": "Write a Python function number {i} to sort data",
+        "writing": "Write a short poem number {i} about the sea",
+        "math_reasoning": "Compute the integral number {i} step by step",
+        "chitchat": "hey how are you doing today friend number {i}",
+        "tool_use": "Search the web for topic number {i} online",
+    }
+    counts = {"factual_qa": 3000, "coding": 300, "writing": 300,
+              "math_reasoning": 300, "chitchat": 300, "tool_use": 40}
+    for cat, n in counts.items():
+        for i in range(n):
+            rows.append({"turn_id": f"{cat}-{tid}", "text": templates[cat].format(i=i)})
+            tid += 1
+    # Interleave so the stream isn't category-sorted.
+    rows.sort(key=lambda r: r["turn_id"].split("-")[1])
+    return rows
+
+
+def test_stratified_filter_caps_dominant_category(monkeypatch, tmp_path):
+    monkeypatch.setattr(sc, "CACHE_PATH", tmp_path / "cache.jsonl")
+    # Small floors/target so the test is fast but exercises the same logic.
+    monkeypatch.setattr(sc, "PER_CATEGORY_FLOOR", 50)
+    monkeypatch.setattr(sc, "TOOL_USE_FLOOR", 10)
+    client = _CatClient()
+    accepted, screened, cat_counts = sc._run_llm_filter_stratified(
+        _cat_turns(), client, cache={}, target=400, workers=8
+    )
+    total = len(accepted)
+    # No category (that has a cap in play) should exceed the 35% share by much.
+    assert cat_counts["factual_qa"] <= 0.36 * total + 1
+    # Every non-rare category reached its floor; tool_use took what it found.
+    for c in ["factual_qa", "coding", "writing", "math_reasoning", "chitchat"]:
+        assert cat_counts[c] >= 50
+    assert cat_counts["tool_use"] >= 10
+
+
+def test_assert_partition_stable_passes_for_frozen_ids(tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    with corpus.open("w") as fh:
+        for cid in ["conv-a", "conv-b", "conv-c", "conv-d"]:
+            fh.write(json.dumps(
+                {"conversation_id": cid, "split": sc.assign_split(cid)}
+            ) + "\n")
+    assert sc._assert_partition_stable(corpus) == 4
+
+
+def test_assert_partition_stable_detects_drift(tmp_path):
+    corpus = tmp_path / "corpus.jsonl"
+    cid = "conv-x"
+    wrong = "val" if sc.assign_split(cid) != "val" else "test"
+    with corpus.open("w") as fh:
+        fh.write(json.dumps({"conversation_id": cid, "split": wrong}) + "\n")
+    with pytest.raises(AssertionError, match="partition drift"):
+        sc._assert_partition_stable(corpus)
+
+
+def test_assert_partition_stable_no_prior_corpus(tmp_path):
+    assert sc._assert_partition_stable(tmp_path / "missing.jsonl") == 0
