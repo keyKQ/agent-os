@@ -23,6 +23,9 @@ agentos.toml
 data/
 # Checked-in router eval dataset used by the test suite.
 !tests/data/
+# Checked-in Pilot fixture model artifacts (model.onnx + manifest.json).
+!tests/test_agentos_router/data/
+!tests/test_agentos_router/data/**
 .agentos/
 benchmarks/
 specs/

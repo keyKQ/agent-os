@@ -226,4 +226,6 @@ pilot-train = [
     "optimum[onnxruntime]>=1.20",
     "torch>=2.2",
     "transformers>=4.40",
+    "scikit-learn>=1.8,<1.9",
+    "skl2onnx>=1.17",
 ]
