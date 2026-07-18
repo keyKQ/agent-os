@@ -22,8 +22,9 @@ missing/corrupt file, or any exception at load or predict time degrades to
 ``DEFAULT_TEXT_TIER`` (via the shared ``_find_valid_tier``) with confidence
 ``0.0``, source ``"pilot_unavailable"``, and a degraded ``extra`` dict — never
 raising at classify time. The ``require_router_runtime`` escape hatch turns a
-construction-time load failure into a ``RuntimeError`` instead of degrading,
-matching how v4 honours the same flag.
+construction-time load failure — or any classify-time fault, including a
+predict fault that ``PilotModel`` absorbed fail-soft — into a ``RuntimeError``
+instead of degrading, matching how v4 honours the same flag.
 
 **Encoder adapter.** T1's ``build_features`` needs a ``PilotEncoder`` (both
 ``encode_sync`` and ``count_tokens_pretrunc``). A bare ``LocalEmbeddingProvider``
@@ -81,9 +82,10 @@ class _MiniLMEncoder:
 
     ``encode_sync`` delegates to the provider (raw, un-normalised vectors — the
     feature builder owns L2). ``count_tokens_pretrunc`` uses a second copy of the
-    pinned MiniLM tokenizer with truncation and padding disabled so it reports
-    the true pre-truncation token count that ``log1p_token_count_pretrunc_8k``
-    demands (the provider's own tokenizer has 256-token truncation enabled).
+    pinned MiniLM tokenizer with truncation and padding disabled, counting with
+    ``add_special_tokens=False`` (spec §4.4), so it reports the true
+    pre-truncation token count that ``log1p_token_count_pretrunc_8k`` demands
+    (the provider's own tokenizer has 256-token truncation enabled).
 
     Both the provider weights and the counting tokenizer load lazily on first
     use; construction is side-effect-free.
@@ -124,7 +126,9 @@ class _MiniLMEncoder:
         return np.asarray(raw, dtype=np.float32)
 
     def count_tokens_pretrunc(self, text: str) -> int:
-        return len(self._ensure_counter().encode(text).ids)
+        # add_special_tokens=False per the spec-pinned count contract (§4.4):
+        # [CLS]/[SEP] must not inflate log1p_token_count_pretrunc_8k.
+        return len(self._ensure_counter().encode(text, add_special_tokens=False).ids)
 
 
 class PilotStrategy:
@@ -201,6 +205,13 @@ class PilotStrategy:
             probs = self._model.predict_proba(features.reshape(1, -1))
             if not self._model.available:
                 # A predict-time fault flipped the model unavailable (fail-soft).
+                # PilotModel swallows the exception internally, so honour the
+                # escape hatch here too — mirroring v4, where a predict fault
+                # propagates and classify re-raises under the flag.
+                if self._require_router_runtime:
+                    raise RuntimeError(
+                        f"pilot predict failed: {self._model.unavailable_reason}"
+                    )
                 return self._unavailable_classify(valid_tiers)
             return self._map_result(probs[0], valid_tiers)
         except Exception as exc:  # noqa: BLE001 - fail-soft by contract

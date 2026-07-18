@@ -345,3 +345,39 @@ def test_require_router_runtime_raises_on_load_failure() -> None:
             encoder=_StubEncoder(),
             require_router_runtime=True,
         )
+
+
+class _BoomSession:
+    """ONNX-session stand-in whose ``run`` always faults."""
+
+    def run(self, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("onnx predict boom")
+
+
+@pytest.mark.asyncio
+async def test_require_router_runtime_raises_on_predict_fault() -> None:
+    """Mirrors v4: with the flag set, an ONNX predict-time fault must surface.
+
+    ``PilotModel._run`` swallows predict exceptions internally (fail-soft,
+    flipping ``available``), so the strategy has to consult the flag on the
+    availability-flip path too — not only when ``build_features`` raises.
+    """
+    strategy = _make_strategy(require_router_runtime=True)
+    assert strategy._model is not None
+    strategy._model._session = _BoomSession()
+    with pytest.raises(RuntimeError, match="[Pp]ilot"):
+        await strategy.classify("anything at all", ["c0", "c1", "c2", "c3"])
+
+
+@pytest.mark.asyncio
+async def test_predict_fault_degrades_without_flag() -> None:
+    """Without the flag the same predict fault degrades silently (fail-soft)."""
+    strategy = _make_strategy()
+    assert strategy._model is not None
+    strategy._model._session = _BoomSession()
+    tier, confidence, source, _extra = await strategy.classify(
+        "anything at all", ["c0", "c1", "c2", "c3"]
+    )
+    assert source == "pilot_unavailable"
+    assert confidence == 0.0
+    assert tier == DEFAULT_TEXT_TIER
