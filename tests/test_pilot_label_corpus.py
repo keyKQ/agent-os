@@ -34,12 +34,7 @@ import pytest
 
 # Load scripts/pilot_router/label_corpus.py by path (scripts/ is not a package
 # on sys.path); matches how the other pilot script tests reach their module.
-_MODULE_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "pilot_router"
-    / "label_corpus.py"
-)
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "pilot_router" / "label_corpus.py"
 _spec = importlib.util.spec_from_file_location("pilot_label_corpus", _MODULE_PATH)
 assert _spec is not None and _spec.loader is not None
 lc = importlib.util.module_from_spec(_spec)
@@ -312,9 +307,7 @@ def test_boundary_set_false_for_adjudicated_train_split(tmp_path, monkeypatch):
 def test_boundary_set_false_when_test_split_agrees(tmp_path, monkeypatch):
     # Agreement on a test-split turn is NOT a boundary item (no adjudication).
     _fresh_cache_path(tmp_path, monkeypatch)
-    client = ScriptedClient(
-        {"A": ['{"label": "R1"}'], "B": ['{"label": "R1"}']}
-    )
+    client = ScriptedClient({"A": ['{"label": "R1"}'], "B": ['{"label": "R1"}']})
     row = lc.label_turn(_turn(split="test"), client, {}, threading.Lock())
     assert row is not None
     assert row["boundary_set"] is False
@@ -491,9 +484,7 @@ def test_meta_records_model_pin_and_rubric_sha(tmp_path, monkeypatch):
     monkeypatch.setattr(lc, "META_PATH", tmp_path / "labels_meta.json")
     stats = lc.compute_stats(_rows_for_stats())
     rubric_sha = lc._sha256(lc.RUBRIC_PATH)
-    meta = lc.write_meta(
-        stats, {}, mode="dry_run", corpus_size=6389, rubric_sha=rubric_sha
-    )
+    meta = lc.write_meta(stats, {}, mode="dry_run", corpus_size=6389, rubric_sha=rubric_sha)
     assert meta["label_model"] == "claude-opus-4.8"
     assert meta["label_provider"] == "opencap"
     assert meta["labeler_pin"] == lc.LABELER_PIN
@@ -664,6 +655,161 @@ def test_json_403_stays_fatal(monkeypatch):
     client = _opencap_client_with_transport(handler, monkeypatch)
     with pytest.raises(RuntimeError, match="403"):
         client.complete("sys", "user")
+
+
+# --------------------------------------------------------------------------- #
+# R3-uplift supplement mode (--input): load candidates + §6.2 supplement contract
+# --------------------------------------------------------------------------- #
+
+
+def _find_split_cids(want: str, n: int = 3) -> list[str]:
+    """Find n conversation ids that the frozen partition maps to ``want``."""
+    out: list[str] = []
+    i = 0
+    while len(out) < n:
+        cid = f"supp-{want}-{i}"
+        if lc.assign_split(cid) == want:
+            out.append(cid)
+        i += 1
+    return out
+
+
+def test_assign_split_imported_matches_sampler():
+    # The supplement mode reuses the T5 frozen partition, not a copy.
+    for cid in ("a", "b", "conv-1", "deadbeef"):
+        assert lc.assign_split(cid) in {"train", "val", "test"}
+
+
+def test_load_candidates_rederives_split_from_frozen_partition(tmp_path):
+    train_cid = _find_split_cids("train", 1)[0]
+    path = tmp_path / "cands.jsonl"
+    # File claims split=test, but the frozen partition says train -> train wins.
+    path.write_text(
+        json.dumps(
+            {
+                "turn_id": "x1",
+                "conversation_id": train_cid,
+                "text": "design a migration",
+                "category": "coding",
+                "direction": "r3_like",
+                "split": "test",  # bogus, must be ignored
+            }
+        )
+        + "\n"
+    )
+    rows = lc.load_candidates(path)
+    assert len(rows) == 1
+    assert rows[0]["split"] == "train"  # re-derived, not the file's "test"
+    assert rows[0]["turn_id"] == "x1"
+
+
+def test_load_candidates_skips_rows_missing_required_fields(tmp_path):
+    path = tmp_path / "cands.jsonl"
+    path.write_text(
+        json.dumps({"turn_id": "ok", "conversation_id": "c", "text": "hi"})
+        + "\n"
+        + json.dumps({"turn_id": "no_text", "conversation_id": "c"})  # missing text
+        + "\n"
+        + "not json at all\n"
+    )
+    rows = lc.load_candidates(path)
+    assert [r["turn_id"] for r in rows] == ["ok"]
+
+
+def test_apply_supplement_contract_keeps_train_discards_val_test():
+    train_cids = _find_split_cids("train", 2)
+    val_cids = _find_split_cids("val", 3)
+    test_cids = _find_split_cids("test", 4)
+    rows = (
+        [
+            {"turn_id": f"tr{i}", "split": "train", "conversation_id": c}
+            for i, c in enumerate(train_cids)
+        ]
+        + [
+            {"turn_id": f"va{i}", "split": "val", "conversation_id": c}
+            for i, c in enumerate(val_cids)
+        ]
+        + [
+            {"turn_id": f"te{i}", "split": "test", "conversation_id": c}
+            for i, c in enumerate(test_cids)
+        ]
+    )
+    kept, counts = lc.apply_supplement_contract(rows)
+    assert {r["turn_id"] for r in kept} == {"tr0", "tr1"}
+    assert all(r["split"] == "train" for r in kept)
+    assert counts == {"kept_train": 2, "discarded_val": 3, "discarded_test": 4}
+
+
+def test_run_supplement_writes_overlay_not_labels(tmp_path, monkeypatch):
+    _fresh_cache_path(tmp_path, monkeypatch)
+    # Redirect overlay outputs into tmp so nothing touches the real data dir.
+    monkeypatch.setattr(lc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(lc, "SUPPLEMENT_LABELS_PATH", tmp_path / "labels_supplement.jsonl")
+    monkeypatch.setattr(lc, "SUPPLEMENT_META_PATH", tmp_path / "labels_supplement_meta.json")
+    monkeypatch.setattr(lc, "LABELS_PATH", tmp_path / "labels.jsonl")  # must stay untouched
+
+    train_cid = _find_split_cids("train", 1)[0]
+    val_cid = _find_split_cids("val", 1)[0]
+    inp = tmp_path / "cands.jsonl"
+    inp.write_text(
+        json.dumps(
+            {
+                "turn_id": "t1",
+                "conversation_id": train_cid,
+                "text": "design X",
+                "category": "coding",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {"turn_id": "t2", "conversation_id": val_cid, "text": "design Y", "category": "coding"}
+        )
+        + "\n"
+    )
+    client = ScriptedClient(
+        {
+            "A": ['{"label": "R3", "why": "arch"}', '{"label": "R3", "why": "arch"}'],
+            "B": ['{"label": "R3", "why": "arch"}', '{"label": "R3", "why": "arch"}'],
+        }
+    )
+    meta = lc.run_supplement(input_path=inp, client=client, workers=2)
+
+    # Overlay file written; original labels.jsonl NOT created.
+    assert (tmp_path / "labels_supplement.jsonl").is_file()
+    assert not (tmp_path / "labels.jsonl").is_file()
+    # Both rows labeled; contract keeps the train one, discards the val one.
+    assert meta["mode"] == "supplement"
+    assert meta["supplement_contract"]["kept_train"] == 1
+    assert meta["supplement_contract"]["discarded_val"] == 1
+    assert meta["supplement_contract"]["discarded_test"] == 0
+    # The overlay carries ALL labeled rows (both splits) for auditability.
+    overlay_text = (tmp_path / "labels_supplement.jsonl").read_text()
+    overlay = [json.loads(line) for line in overlay_text.splitlines() if line]
+    assert {r["turn_id"] for r in overlay} == {"t1", "t2"}
+
+
+def test_run_supplement_reuses_cache(tmp_path, monkeypatch):
+    _fresh_cache_path(tmp_path, monkeypatch)
+    monkeypatch.setattr(lc, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(lc, "SUPPLEMENT_LABELS_PATH", tmp_path / "labels_supplement.jsonl")
+    monkeypatch.setattr(lc, "SUPPLEMENT_META_PATH", tmp_path / "labels_supplement_meta.json")
+    train_cid = _find_split_cids("train", 1)[0]
+    inp = tmp_path / "cands.jsonl"
+    inp.write_text(
+        json.dumps({"turn_id": "t1", "conversation_id": train_cid, "text": "design X"}) + "\n"
+    )
+    # Pre-seed the cache so no client call is needed (both passes agree).
+    cache_path = tmp_path / "label_cache.jsonl"
+    with cache_path.open("w") as fh:
+        fh.write(json.dumps({"turn_id": "t1", "pass": "A", "label": "R3", "why": ""}) + "\n")
+        fh.write(json.dumps({"turn_id": "t1", "pass": "B", "label": "R3", "why": ""}) + "\n")
+
+    class _Boom:
+        def complete(self, system, user):
+            raise AssertionError("client must not be called when cache hits")
+
+    meta = lc.run_supplement(input_path=inp, client=_Boom(), workers=1)
+    assert meta["supplement_contract"]["kept_train"] == 1
 
 
 def test_html_403_streak_resets_between_successes(monkeypatch):

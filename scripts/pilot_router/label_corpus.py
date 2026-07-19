@@ -44,12 +44,21 @@ tooling, or ``set -a; source ~/.agentos/.env; set +a`` before a bare run)::
 split only (stratified across T5's categories so every category is seen). A
 full run (no ``--dry-run``) labels every turn of every split, reusing the cache
 so dry-run turns are never re-billed.
+
+``--input FILE`` is the R3-uplift supplement mode: it labels an arbitrary
+candidate JSONL (e.g. the mine_hard_candidates output) through the SAME two-pass +
+adjudication machinery and cache, RE-DERIVES each row's split from the frozen
+§6.2 partition, and writes a SEPARATE overlay ``labels_supplement.jsonl`` +
+``labels_supplement_meta.json`` (the T6 originals are never touched). The meta
+records the §6.2 supplement-contract counts: only train-assigned rows may join
+the training corpus; val/test-assigned rows are discarded and counted.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import random
@@ -61,6 +70,19 @@ from collections import Counter, defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any, Protocol
+
+# The frozen §6.2 partition lives in the T5 sampler; import it by path (scripts/
+# is not a package on sys.path) so the ``--input`` supplement mode assigns splits
+# with the SAME function the corpus was built with — a supplemental candidate can
+# never move an existing split, and val/test-assigned supplements are discarded.
+_SAMPLE_PATH = Path(__file__).resolve().parent / "sample_corpus.py"
+_sc_spec = importlib.util.spec_from_file_location(
+    "pilot_sample_corpus_for_labeling", _SAMPLE_PATH
+)
+assert _sc_spec is not None and _sc_spec.loader is not None
+_sc = importlib.util.module_from_spec(_sc_spec)
+_sc_spec.loader.exec_module(_sc)
+assign_split = _sc.assign_split
 
 # --------------------------------------------------------------------------- #
 # Pinned constants (reproducibility — mirrored in DATA.md / labels_meta.json)
@@ -118,6 +140,11 @@ _CACHE_SLUG = re.sub(r"[^A-Za-z0-9]+", "_", LABELER_PIN).strip("_")
 CACHE_PATH = DATA_DIR / f"label_cache__{_CACHE_SLUG}.jsonl"
 RUBRIC_PATH = Path(__file__).resolve().parent / "rubric.md"
 META_PATH = Path(__file__).resolve().parent / "labels_meta.json"
+
+# R3-uplift supplement (``--input`` mode) overlay outputs. Kept SEPARATE from
+# ``labels.jsonl`` / ``labels_meta.json`` so the T6 originals stay immutable.
+SUPPLEMENT_LABELS_PATH = DATA_DIR / "labels_supplement.jsonl"
+SUPPLEMENT_META_PATH = Path(__file__).resolve().parent / "labels_supplement_meta.json"
 
 SEED = 42
 
@@ -589,6 +616,74 @@ def stratified_dry_run_sample(
 
 
 # --------------------------------------------------------------------------- #
+# R3-uplift supplement mode (--input): label arbitrary mined candidates, then
+# apply the §6.2 supplement contract (frozen partition; ONLY train-assigned kept)
+# --------------------------------------------------------------------------- #
+
+# Fields a candidate row must carry to be labeled + merged. ``split`` is NOT
+# trusted from the file — it is re-derived from ``conversation_id`` via the
+# frozen ``assign_split`` so a supplement can never move an existing partition.
+_REQUIRED_CANDIDATE_FIELDS = ("turn_id", "conversation_id", "text")
+
+
+def load_candidates(path: Path) -> list[dict[str, Any]]:
+    """Load an arbitrary candidate JSONL (e.g. mine_hard_candidates output) and
+    normalize each row for labeling.
+
+    - ``split`` is RE-DERIVED from ``conversation_id`` via the frozen partition
+      (§6.2 binding: the file's own split field, if any, is ignored).
+    - ``category`` is carried through when present, else the empty string.
+    Rows missing a required field are skipped."""
+    rows: list[dict[str, Any]] = []
+    with path.open() as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if any(f not in rec for f in _REQUIRED_CANDIDATE_FIELDS):
+                continue
+            rows.append(
+                {
+                    "turn_id": str(rec["turn_id"]),
+                    "conversation_id": str(rec["conversation_id"]),
+                    "text": str(rec["text"]),
+                    "category": str(rec.get("category", "")),
+                    # Frozen partition — authoritative, overrides any file value.
+                    "split": assign_split(str(rec["conversation_id"])),
+                }
+            )
+    return rows
+
+
+def apply_supplement_contract(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """§6.2 supplement contract (BINDING): partition the labeled supplemental
+    rows by their frozen split; return ONLY the train-assigned rows for the
+    training corpus. val/test-assigned rows are DISCARDED (never added to the
+    locked val/test partitions) and counted.
+
+    Returns (train-assigned rows, {"kept_train", "discarded_val",
+    "discarded_test"})."""
+    kept: list[dict[str, Any]] = []
+    discarded = {"discarded_val": 0, "discarded_test": 0}
+    for row in rows:
+        split = row.get("split")
+        if split == "train":
+            kept.append(row)
+        elif split == "val":
+            discarded["discarded_val"] += 1
+        elif split == "test":
+            discarded["discarded_test"] += 1
+    counts = {"kept_train": len(kept), **discarded}
+    return kept, counts
+
+
+# --------------------------------------------------------------------------- #
 # Concurrent labeling pass over a set of turns
 # --------------------------------------------------------------------------- #
 
@@ -895,6 +990,86 @@ def run(
     return meta
 
 
+def run_supplement(
+    *,
+    input_path: Path,
+    client: LabelClient,
+    workers: int,
+) -> dict[str, Any]:
+    """R3-uplift ``--input`` mode: label an arbitrary candidate JSONL through the SAME
+    two-pass + adjudication machinery and cache, then apply the §6.2 supplement
+    contract (frozen partition; only train-assigned rows kept). Writes a SEPARATE
+    overlay labels file + meta so the T6 originals stay immutable.
+
+    The overlay ``labels_supplement.jsonl`` holds ALL labeled supplemental rows
+    (with their frozen split recorded) so the merge step is auditable; the meta
+    records the supplement contract counts (kept_train / discarded_val /
+    discarded_test)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    rubric_sha = _sha256(RUBRIC_PATH)
+    cache = _load_cache(CACHE_PATH)
+    candidates = load_candidates(input_path)
+    print(
+        f"[label] mode=supplement input={input_path} candidates={len(candidates)}",
+        flush=True,
+    )
+
+    rows, dropped, skipped = label_many(candidates, client, cache, workers=workers)
+    print(
+        f"[label] labeled={len(rows)} dropped={dropped} skipped={len(skipped)}",
+        flush=True,
+    )
+
+    # Write ALL labeled supplemental rows (frozen split recorded on each) to the
+    # overlay file — labels.jsonl is never touched.
+    with SUPPLEMENT_LABELS_PATH.open("w") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    # §6.2 supplement contract: only train-assigned rows would join training.
+    _kept, contract_counts = apply_supplement_contract(rows)
+
+    stats = compute_stats(rows)
+    stats["dropped"] = dropped
+    stats["skipped"] = len(skipped)
+    stats["skipped_turn_ids"] = skipped[:100]
+    usage = _usage_block(client, len(rows))
+
+    meta: dict[str, Any] = {
+        "mode": "supplement",
+        "input_file": str(input_path.name),
+        "label_provider": LABEL_PROVIDER,
+        "label_endpoint": LABEL_ENDPOINT,
+        "label_model": LABEL_MODEL,
+        "labeler_pin": LABELER_PIN,
+        "label_temperature": LABEL_TEMPERATURE,
+        "label_max_tokens": LABEL_MAX_TOKENS,
+        "prompt_order_a": PROMPT_ORDER_A,
+        "prompt_order_b": PROMPT_ORDER_B,
+        "adjudication_prompt_version": ADJUDICATION_PROMPT_VERSION,
+        "rubric_file": RUBRIC_PATH.name,
+        "rubric_sha256": rubric_sha,
+        "seed": SEED,
+        "candidate_count": len(candidates),
+        "stats": stats,
+        "supplement_contract": contract_counts,
+        "usage": usage,
+    }
+    if SUPPLEMENT_LABELS_PATH.is_file():
+        meta["supplement_labels_file"] = {
+            SUPPLEMENT_LABELS_PATH.name: _sha256(SUPPLEMENT_LABELS_PATH)
+        }
+    SUPPLEMENT_META_PATH.write_text(json.dumps(meta, indent=2) + "\n")
+
+    print(
+        f"[supplement] contract: kept_train={contract_counts['kept_train']} "
+        f"discarded_val={contract_counts['discarded_val']} "
+        f"discarded_test={contract_counts['discarded_test']}",
+        flush=True,
+    )
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -903,6 +1078,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         metavar="N",
         help="label the first N stratified TRAIN-split turns and stop",
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help=(
+            "R3-uplift supplement mode: label an arbitrary candidate JSONL (frozen "
+            "partition; §6.2 contract) to the labels_supplement.jsonl overlay"
+        ),
     )
     # Moderate default; the gateway is politely rate-limited with 429 backoff.
     parser.add_argument("--workers", type=int, default=6)
@@ -918,7 +1103,12 @@ def main(argv: list[str] | None = None) -> int:
 
     client: OpenCAPLabelClient = OpenCAPLabelClient(api_key)
     try:
-        meta = run(dry_run=args.dry_run, client=client, workers=args.workers)
+        if args.input is not None:
+            meta = run_supplement(
+                input_path=Path(args.input), client=client, workers=args.workers
+            )
+        else:
+            meta = run(dry_run=args.dry_run, client=client, workers=args.workers)
     finally:
         client.close()
 

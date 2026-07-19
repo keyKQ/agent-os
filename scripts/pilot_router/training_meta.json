@@ -140,9 +140,9 @@
   "feature_fingerprint": "52cf706571f46556",
   "hardware": "macOS-26.5.2-arm64-arm-64bit",
   "python": "3.12.13",
-  "v2_tier1": {
-    "amendment": "PILOT-V2 SPEC AMENDMENT 'R3 uplift' (owner-approved 2026-07-19)",
-    "note": "VAL-only config grid selected under the owner amendment after the T9 STOP (R3 recall 0.242 vs 0.60 floor). Test split never opened in Tier 1. Selected artifact staged (git-ignored) in artifacts/pilot_v2_tier1/; v1 staging dir untouched.",
+  "r3_uplift_config_grid": {
+    "amendment": "pilot-v1 R3 uplift spec amendment (owner-approved 2026-07-19)",
+    "note": "VAL-only config grid selected under the owner amendment after the T9 STOP (R3 recall 0.242 vs 0.60 floor). Test split never opened in the config-grid round. Selected artifact staged (git-ignored) in artifacts/pilot_v1_uplift_grid/; v1 staging dir untouched.",
     "seed": 42,
     "selection_rule": {
       "acc_within_pp_of_best": 0.02,
@@ -247,7 +247,7 @@
       }
     },
     "selected_config": "baseline",
-    "selection_rationale": "No eligible config beat baseline R3 recall by \u22650.05 (best eligible R3 uplift +0.000); KEEPING baseline. Tier 2 data is the real lever.",
-    "finding": "R3 recall bit-identical (7/31 = 0.22581) across all four configs; the rare-class re-weighting/oversampling levers do not move R3 recall on validation. Tier 2 supplemental TRAIN data is the real lever for R3."
+    "selection_rationale": "No eligible config beat baseline R3 recall by \u22650.05 (best eligible R3 uplift +0.000); KEEPING baseline. Targeted supplemental data is the real lever.",
+    "finding": "R3 recall bit-identical (7/31 = 0.22581) across all four configs; the rare-class re-weighting/oversampling levers do not move R3 recall on validation. Targeted supplemental TRAIN data is the real lever for R3."
   }
 }

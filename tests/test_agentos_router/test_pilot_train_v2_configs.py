@@ -1,6 +1,6 @@
-"""Offline CI smoke for the pilot-v2 Tier 1 config grid (V2a).
+"""Offline CI smoke for the pilot-v1 R3-uplift config grid.
 
-The owner-approved PILOT-V2 SPEC AMENDMENT ("R3 uplift") permits a small,
+The owner-approved pilot-v1 R3-uplift spec amendment permits a small,
 explicit config grid selected on VALIDATION ONLY. This test pins the exact grid
 (``baseline`` / ``oversample`` / ``weights`` / ``both`` — no others) and drives
 each config through the *real* train→export→load path on a synthetic corpus with
@@ -149,7 +149,7 @@ def test_each_config_trains_exports_loads(config_name: str, tmp_path: Path) -> N
         clf,
         out_dir,
         temperature=temperature,
-        training_stats={"_note": "V2a smoke", "config": config_name},
+        training_stats={"_note": "R3-uplift grid smoke", "config": config_name},
         export_meta=_STUB_EXPORT_META,
     )
     model = PilotModel(out_dir)

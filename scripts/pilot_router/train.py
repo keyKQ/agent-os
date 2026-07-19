@@ -81,9 +81,9 @@ LABELS_PATH = _HERE / "data" / "labels.jsonl"
 LABELS_META_PATH = _HERE / "labels_meta.json"
 CACHE_DIR = _HERE / ".feature_cache"
 STAGING_DIR = _HERE / "artifacts" / "pilot_v1"
-#: SEPARATE staging dir for the pilot-v2 Tier 1 selected config. NEVER overwrite
-#: the v1 staging dir (that is the committed T9 record).
-V2_TIER1_STAGING_DIR = _HERE / "artifacts" / "pilot_v2_tier1"
+#: SEPARATE staging dir for the pilot-v1 R3-uplift config-grid selected config.
+#: NEVER overwrite the v1 staging dir (that is the committed T9 record).
+V2_TIER1_STAGING_DIR = _HERE / "artifacts" / "pilot_v1_uplift_grid"
 TRAINING_META_PATH = _HERE / "training_meta.json"
 
 #: Selection-rule thresholds (owner amendment "R3 uplift"), applied on VAL only.
@@ -447,7 +447,7 @@ def _print_stability(s: dict[str, Any]) -> None:
         print(f"  recall {cls}: {m['mean']:.4f} ± {m['std']:.4f}")
 
 
-# --- pilot-v2 Tier 1 grid (owner-approved amendment, VAL-only selection) -----
+# --- pilot-v1 R3-uplift config grid (owner-approved amendment, VAL-only) ------
 
 
 def _select_config(
@@ -458,8 +458,8 @@ def _select_config(
     Rule: among configs whose val accuracy is within 2pp of the best config's
     accuracy AND whose over-routing proxy does not exceed baseline's by more
     than 5pp, choose the one with the highest val R3 recall. If no eligible
-    config beats baseline's R3 recall by ≥5pp, baseline is kept (a valid Tier 1
-    outcome — Tier 2 data is the real lever).
+    config beats baseline's R3 recall by ≥5pp, baseline is kept (a valid
+    outcome — targeted supplemental data is the real lever).
     """
     baseline = results["baseline"]
     best_acc = max(r.accuracy for r in results.values())
@@ -486,7 +486,7 @@ def _select_config(
             f"No eligible config beat baseline R3 recall by ≥"
             f"{V2_MEANINGFUL_R3_UPLIFT_PP:.2f} "
             f"(best eligible R3 uplift {uplift:+.3f}); KEEPING baseline. "
-            "Tier 2 data is the real lever."
+            "Targeted supplemental data is the real lever."
         )
         return "baseline", why
     why = (
@@ -499,7 +499,7 @@ def _select_config(
 
 
 def _print_grid_table(results: dict[str, SeedResult], baseline_over: float) -> None:
-    print("\n=== pilot-v2 Tier 1 val comparison (seed 42) ===")
+    print("\n=== pilot-v1 R3-uplift config-grid val comparison (seed 42) ===")
     header = (
         f"{'config':<11} {'acc':>7} {'R0':>6} {'R1':>6} {'R2':>6} {'R3':>6} "
         f"{'sevUnd':>7} {'overRt':>7} {'ECE':>6} {'T':>6}"
@@ -519,8 +519,8 @@ def _print_grid_table(results: dict[str, SeedResult], baseline_over: float) -> N
 
 
 def run_v2_tier1_grid() -> int:
-    """Run the four-config Tier 1 grid on VAL only; select + export the winner."""
-    print("Pilot pilot-v2 Tier 1 grid ('R3 uplift', owner-approved amendment)")
+    """Run the four-config R3-uplift grid on VAL only; select + export winner."""
+    print("Pilot pilot-v1 R3-uplift config-grid round (owner-approved amendment)")
     print(f"  corpus:  {CORPUS_PATH}")
     print(f"  labels:  {LABELS_PATH}")
     print(f"  staging: {V2_TIER1_STAGING_DIR}")
@@ -569,8 +569,8 @@ def run_v2_tier1_grid() -> int:
     }
     training_stats = {
         "pilot_version": PILOT_VERSION,
-        "pilot_tier": "v2_tier1",
-        "amendment": "PILOT-V2 SPEC AMENDMENT 'R3 uplift' (owner-approved 2026-07-19)",
+        "pilot_round": "r3_uplift_config_grid",
+        "amendment": "pilot-v1 R3 uplift spec amendment (owner-approved 2026-07-19)",
         "ship_seed": SHIP_SEED,
         "architecture": "Pipeline(StandardScaler, MLPClassifier(hidden_layer_sizes=(256, 64)))",
         "selected_config": selected_name,
@@ -655,8 +655,8 @@ def run_v2_tier1_grid() -> int:
     )
 
     print(
-        f"\nDONE — Tier 1 grid evaluated on val; selected '{selected_name}' staged "
-        f"in {V2_TIER1_STAGING_DIR.name}. Test split remains sealed."
+        f"\nDONE — R3-uplift grid evaluated on val; selected '{selected_name}' "
+        f"staged in {V2_TIER1_STAGING_DIR.name}. Test split remains sealed."
     )
     return 0
 
@@ -666,12 +666,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--v2-tier1-grid",
+        "--r3-uplift-grid",
+        "--v2-tier1-grid",  # retained alias (deprecated spelling)
+        dest="r3_uplift_grid",
         action="store_true",
-        help="Run the pilot-v2 Tier 1 config grid (VAL-only selection) instead "
-        "of the v1 baseline artifact build.",
+        help="Run the pilot-v1 R3-uplift config grid (VAL-only selection) "
+        "instead of the v1 baseline artifact build.",
     )
     args = parser.parse_args()
-    if args.v2_tier1_grid:
+    if args.r3_uplift_grid:
         sys.exit(run_v2_tier1_grid())
     sys.exit(main())

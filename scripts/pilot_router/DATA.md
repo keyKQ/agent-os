@@ -567,18 +567,19 @@ features → train tiny → fit T → export → `PilotModel` load round-trip, p
 parity guard that a wrong embed width trips. It `importorskip`s the `pilot-train`
 group so the default offline suite (which lacks it) does not error.
 
-## 8. pilot-v2 Tier 1 ("R3 uplift", owner-approved amendment) — VAL-only grid
+## 8. pilot-v1 R3 uplift — config-grid round (owner-approved amendment)
 
-The T9 eval gate on the **test** split returned **STOP** on the v1 artifact: R3
-recall 0.242 (floor 0.60), accuracy 0.630 (floor 0.70), over-routing 0.205
-(limit 0.144). Root cause: R3 is starved — only **168 train rows** (3.7% of the
-corpus). The owner recorded a **spec amendment** (`.superpowers/sdd/progress.md`,
-"PILOT-V2 SPEC AMENDMENT"): Tier 1 permits a **small, explicit config grid
-selected on VALIDATION ONLY** — the v1 no-search rule is amended *only* for this
-grid. Everything else of the v1 discipline stands: the fixed architecture, seed
-42, the same temperature-refit procedure, and — critically — **the test split
-stays sealed** (no test rows or labels are read anywhere in Tier 1; T9 owns the
-test gate).
+The Pilot router ships as **pilot-v1**; this is the R3-uplift training round of
+pilot-v1 (there is no separate "v2" product). The T9 eval gate on the **test**
+split returned **STOP** on the v1 artifact: R3 recall 0.242 (floor 0.60),
+accuracy 0.630 (floor 0.70), over-routing 0.205 (limit 0.144). Root cause: R3 is
+starved — only **168 train rows** (3.7% of the corpus). The owner recorded a
+**spec amendment** (`.superpowers/sdd/progress.md`): the config-grid round
+permits a **small, explicit config grid selected on VALIDATION ONLY** — the v1
+no-search rule is amended *only* for this grid. Everything else of the v1
+discipline stands: the fixed architecture, seed 42, the same temperature-refit
+procedure, and — critically — **the test split stays sealed** (no test rows or
+labels are read anywhere in the config-grid round; T9 owns the test gate).
 
 ### The frozen grid (exactly four configs — no others, no search beyond them)
 
@@ -597,7 +598,7 @@ Run it with:
 
 ```sh
 uv run --group pilot-train --extra recommended \
-    python scripts/pilot_router/train.py --v2-tier1-grid
+    python scripts/pilot_router/train.py --r3-uplift-grid
 ```
 
 ### Validation comparison (seed 42, val split, **all four reported as measured**)
@@ -622,20 +623,20 @@ over-routing was never the binding constraint here — recall was.
 Rule (from the amendment): among configs whose val accuracy is within **2pp** of
 the best config's accuracy **and** whose over-routing proxy does not exceed
 baseline's by more than **5pp**, choose the highest val **R3 recall**; if no
-config beats baseline's R3 recall by **≥5pp**, that is a valid Tier 1 outcome —
+config beats baseline's R3 recall by **≥5pp**, that is a valid outcome —
 keep baseline.
 
 Best eligible R3 uplift over baseline: **+0.000** (all tied at 0.226). No config
 clears the +5pp meaningful-uplift bar, so the rule **mechanically keeps
 baseline**. This is the honest, expected outcome the amendment anticipated:
-**Tier 2 data (targeted hard-R3 mining → Opus labeling → supplemental TRAIN
-rows) is the real lever** for R3 recall, not a config search over the existing
+**targeted data (hard-R3 mining → Opus labeling → supplemental TRAIN rows) is
+the real lever** for R3 recall, not a config search over the existing
 232-effective-row R3 partition.
 
 ### Artifact staging (separate from v1 — v1 record untouched)
 
 The selected config (`baseline`) is exported to the **separate git-ignored**
-staging dir `scripts/pilot_router/artifacts/pilot_v2_tier1/` (`model.onnx` +
+staging dir `scripts/pilot_router/artifacts/pilot_v1_uplift_grid/` (`model.onnx` +
 `manifest.json` + a `grid_val_table.json` recording all four configs and the
 selection rationale). The v1 staging dir `artifacts/pilot_v1/` — the committed
 T9 record — is **never overwritten**. Loadability is verified in-run through

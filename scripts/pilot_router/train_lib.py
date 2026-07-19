@@ -64,18 +64,19 @@ SHIP_SEED = 42
 DIAGNOSTIC_SEEDS: tuple[int, ...] = (7, 2026)
 
 
-# --- pilot-v2 Tier 1 config grid (owner-approved amendment, "R3 uplift") ------
+# --- pilot-v1 R3-uplift config grid (owner-approved amendment) ----------------
 #
-# The v1 discipline (no search) is amended for Tier 1 by an owner-approved spec
-# amendment: a SMALL, EXPLICIT config grid selected on VALIDATION ONLY. The grid
-# below is frozen — exactly these four configs, no hyperparameter search beyond
-# them, all at seed 42 with the v1 fixed architecture and the same per-config
-# temperature-refit procedure. The test split stays sealed.
+# The v1 discipline (no search) is amended for the R3-uplift round by an
+# owner-approved spec amendment: a SMALL, EXPLICIT config grid selected on
+# VALIDATION ONLY. The grid below is frozen — exactly these four configs, no
+# hyperparameter search beyond them, all at seed 42 with the v1 fixed
+# architecture and the same per-config temperature-refit procedure. The test
+# split stays sealed.
 
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """One frozen point in the pilot-v2 Tier 1 grid (VAL-only selection).
+    """One frozen point in the pilot-v1 R3-uplift config grid (VAL-only).
 
     * ``sample_weights`` — GOLD-class ``MLPClassifier.fit`` sample weights.
     * ``oversample_multipliers`` — per-class with-replacement TRAIN oversample
@@ -89,7 +90,7 @@ class TrainConfig:
     oversample_multipliers: dict[str, float] | None = None
 
 
-#: The exact four owner-approved Tier 1 configs (no others). Multipliers are
+#: The exact four owner-approved R3-uplift configs (no others). Multipliers are
 #: chosen so the effective row counts match the amendment's targets on the real
 #: corpus (train R3=168 → ~504 at 3×; R0=243 → ~486 at 2×).
 V2_TIER1_CONFIGS: dict[str, TrainConfig] = {
@@ -243,8 +244,8 @@ def resample_train(
       the lever is exercised/available; not used by the shipped artifact.
     * ``"multiplier"`` — with-replacement oversample each class named in
       ``multipliers`` to ``round(count * multiplier)`` rows (a class absent from
-      ``multipliers`` is left at its natural count). This is the pilot-v2 Tier 1
-      lever: e.g. ``{"R3": 3.0}`` ~triples R3's real rows without touching the
+      ``multipliers`` is left at its natural count). This is the R3-uplift
+      grid lever: e.g. ``{"R3": 3.0}`` ~triples R3's real rows without touching the
       others. Oversampled rows are with-replacement copies of real rows — no new
       vectors are synthesized. A multiplier of ``1.0`` is a no-op; ``<1.0`` (a
       downsample) is rejected to keep the lever monotone/explicit.
@@ -266,7 +267,7 @@ def resample_train(
             if factor < 1.0:
                 raise ValueError(
                     f"multiplier for {cls_name} must be >= 1.0 (got {factor}); "
-                    "downsampling is not a Tier 1 lever"
+                    "downsampling is not an R3-uplift lever"
                 )
             mult_by_int[CLASS_TO_INT[cls_name]] = float(factor)
         mult_idx_parts: list[np.ndarray] = []
@@ -306,7 +307,7 @@ def sample_weights_for(y: np.ndarray, weights: dict[str, float] | None = None) -
     """Per-row GOLD-class sample weights for labels ``y``.
 
     ``weights`` maps class name → weight; ``None`` uses the shipped v1 policy
-    ``SAMPLE_WEIGHT_BY_CLASS`` (``R0=1,R1=1,R2=2,R3=3``). The pilot-v2 Tier 1
+    ``SAMPLE_WEIGHT_BY_CLASS`` (``R0=1,R1=1,R2=2,R3=3``). The R3-uplift config
     grid passes a per-config dict here.
     """
     policy = SAMPLE_WEIGHT_BY_CLASS if weights is None else weights
@@ -332,7 +333,7 @@ def train_pipeline(
     that varies between the shipped v1 artifact and the diagnostic replicas.
 
     ``sample_weights`` maps class name → weight; ``None`` uses the shipped v1
-    policy. The pilot-v2 Tier 1 grid passes a per-config dict — the architecture
+    policy. The R3-uplift config grid passes a per-config dict — the architecture
     itself stays fixed (that is not amended).
 
     ``max_iter`` is a convergence budget, not a searched hyperparameter; the
