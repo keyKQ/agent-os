@@ -33,16 +33,22 @@ __all__ = [
     "known_strategy_ids",
     "pilot_asset_probe",
     "PILOT_STRATEGY_ID",
-    "V4_STRATEGY_ID",
     "LLM_JUDGE_STRATEGY_ID",
 ]
 
 #: Legacy strategy id. The v4_phase3 engine and its model bundle were removed
-#: (Phase C); the id survives only so config migration can rewrite persisted
-#: ``strategy = "v4_phase3"`` selections to ``pilot-v1`` on load.
+#: (Phase C); the id survives only so config migration and the legacy-alias
+#: map below can rewrite persisted ``strategy = "v4_phase3"`` selections to
+#: ``pilot-v1``. Deliberately NOT in ``__all__``: it is not a live strategy id.
 V4_STRATEGY_ID = "v4_phase3"
 LLM_JUDGE_STRATEGY_ID = "llm_judge"
 PILOT_STRATEGY_ID = "pilot-v1"
+
+#: Retired ids and the live strategy each one resolves to. The single source
+#: of truth consulted by both config validation and runtime resolution, so a
+#: legacy selection maps to the SAME strategy on every path even if
+#: ``DEFAULT_ROUTER_STRATEGY`` changes later.
+LEGACY_STRATEGY_ALIASES: dict[str, str] = {V4_STRATEGY_ID: PILOT_STRATEGY_ID}
 
 #: MiniLM embedder id that the Pilot feature builder depends on. Kept as a bare
 #: literal (not imported) so the registry stays import-light; the value is
@@ -183,11 +189,14 @@ def get_strategy_info(strategy_id: object) -> RouterStrategyInfo | None:
 def resolve_strategy_id(value: object) -> str:
     """Return a registered strategy id, falling back to the default.
 
-    Mirrors the historical ``_strategy_name`` behavior: an unknown/blank id
-    resolves to :data:`DEFAULT_ROUTER_STRATEGY` (the caller decides whether to
-    warn).
+    A retired id maps through :data:`LEGACY_STRATEGY_ALIASES` first, so e.g.
+    ``"v4_phase3"`` resolves to ``pilot-v1`` explicitly rather than by luck of
+    the unknown-id fallback. Otherwise mirrors the historical
+    ``_strategy_name`` behavior: an unknown/blank id resolves to
+    :data:`DEFAULT_ROUTER_STRATEGY` (the caller decides whether to warn).
     """
     candidate = str(value or "").strip() or DEFAULT_ROUTER_STRATEGY
+    candidate = LEGACY_STRATEGY_ALIASES.get(candidate, candidate)
     if candidate in _REGISTRY:
         return candidate
     return DEFAULT_ROUTER_STRATEGY

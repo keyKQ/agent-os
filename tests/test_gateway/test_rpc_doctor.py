@@ -976,12 +976,13 @@ def test_router_payload_sets_reason_judge_unresolvable() -> None:
     assert payload["runtimeInvalidReason"] == "judge_unresolvable"
 
 
-def test_evaluate_router_flags_v4_phase3_missing_bundle() -> None:
-    """v4_phase3 is the reintegrated local ML router. When its git-ignored bundle
-    is absent, rpc_doctor reports runtimeValid=False with runtimeInvalidReason
-    "assets" (a genuine missing local runtime asset), which maps to the
-    asset-centric router.runtime.missing finding — the correct taxonomy for a
-    missing v4 bundle now that the strategy_removed reason is gone."""
+def test_evaluate_router_flags_missing_local_bundle() -> None:
+    """When a local-asset strategy's bundle is absent, rpc_doctor reports
+    runtimeValid=False with runtimeInvalidReason "assets" (a genuine missing
+    local runtime asset), which maps to the asset-centric
+    router.runtime.missing finding. The payload here is pre-built, so the
+    strategy string is opaque to evaluate_router — the taxonomy only keys off
+    runtimeInvalidReason."""
     from agentos.health.evaluator import evaluate_router
 
     findings = evaluate_router(

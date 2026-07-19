@@ -344,8 +344,10 @@ def test_pypi_publish_dropped_v4_router_bundle() -> None:
 
     assert 'git lfs pull --include="src/agentos/memory/models/**"' in text
     assert 'git lfs pull --include="src/agentos/agentos_router/models/**"' in text
-    assert "v4.2_phase3_inference" not in text
+    # The v4 hydration asserts are gone, replaced by the same anti-regression
+    # guard the wheelhouse release carries.
     assert "lgbm_main.bin" not in text
+    assert "legacy v4_phase3 bundle leaked back into the tree" in text
 
 
 def test_wheelhouse_release_hydrates_pilot_minilm_export() -> None:

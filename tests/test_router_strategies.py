@@ -71,9 +71,10 @@ def test_registry_minilm_id_tracks_feature_builder() -> None:
 
 def test_resolve_strategy_id_falls_back_to_default() -> None:
     assert resolve_strategy_id("pilot-v1") == "pilot-v1"
-    # v4_phase3 is no longer registered: an unmigrated in-memory value must
-    # resolve to the default rather than dispatch a removed engine.
-    assert resolve_strategy_id("v4_phase3") == DEFAULT_ROUTER_STRATEGY
+    # v4_phase3 maps through LEGACY_STRATEGY_ALIASES to pilot-v1 explicitly —
+    # the same target the config validator produces — independent of whatever
+    # DEFAULT_ROUTER_STRATEGY happens to be.
+    assert resolve_strategy_id("v4_phase3") == PILOT_STRATEGY_ID
     assert resolve_strategy_id("bogus") == DEFAULT_ROUTER_STRATEGY
     assert resolve_strategy_id(None) == DEFAULT_ROUTER_STRATEGY
     assert resolve_strategy_id("") == DEFAULT_ROUTER_STRATEGY

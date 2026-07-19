@@ -1119,20 +1119,18 @@ class AgentOSRouterConfig(BaseSettings):
     @classmethod
     def _validate_strategy(cls, value: str) -> str:
         from agentos.router_strategies import (
-            PILOT_STRATEGY_ID,
-            V4_STRATEGY_ID,
+            LEGACY_STRATEGY_ALIASES,
             is_known_strategy,
             known_strategy_ids,
         )
 
         normalized = str(value or "").strip()
-        if normalized == V4_STRATEGY_ID:
-            # The v4_phase3 engine was removed (Phase C). Config files are
-            # rewritten by the load-time migration before validation; this
-            # alias covers values that bypass it (env override, direct
-            # construction) so an old selection degrades to the default
-            # strategy instead of hard-failing boot.
-            return PILOT_STRATEGY_ID
+        # Retired ids (e.g. the removed v4_phase3 engine) map through the
+        # shared alias table. Config files are rewritten by the load-time
+        # migration before validation; this covers values that bypass it
+        # (env override, direct construction) so an old selection lands on
+        # the same live strategy instead of hard-failing boot.
+        normalized = LEGACY_STRATEGY_ALIASES.get(normalized, normalized)
         if not is_known_strategy(normalized):
             allowed = ", ".join(repr(s) for s in sorted(known_strategy_ids()))
             raise ValueError(
