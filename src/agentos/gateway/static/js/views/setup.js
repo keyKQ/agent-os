@@ -1150,10 +1150,26 @@ const SetupView = (() => {
           <div><span>Channels</span><strong>${_esc(String(_status.channelCount || 0))}</strong></div>
         </div>
         ${_renderReadinessSummary()}
+        ${_renderUpdatePreferences()}
         <div class="setup-actions">
           <button class="setup-btn" data-prev="extras">Back</button>
           <button class="setup-btn" data-reload>Refresh</button>
           <button class="setup-btn setup-btn--primary" data-exit-setup>Open Overview</button>
+        </div>
+      </section>`;
+  }
+
+  function _renderUpdatePreferences() {
+    const notify = ((_config.updates || {}).notify) !== false;
+    return `
+      <section class="setup-subpanel" aria-label="Update preferences">
+        <h4>Updates</h4>
+        <label class="setup-check">
+          <input id="setup-updates-notify" name="setup_updates_notify" type="checkbox" data-updates-notify${notify ? ' checked' : ''}>
+          <span>Notify me when a new release of use-agent-os is available</span>
+        </label>
+        <div class="setup-actions">
+          <button class="setup-btn" data-save-updates-notify>Save update preference</button>
         </div>
       </section>`;
   }
@@ -1340,6 +1356,19 @@ const SetupView = (() => {
     _el.querySelector('[data-save-memory-settings]')?.addEventListener('click', _saveMemorySettings);
     _el.querySelector('[data-save-image]')?.addEventListener('click', _saveImage);
     _el.querySelector('[data-save-audio]')?.addEventListener('click', _saveAudio);
+    _el.querySelector('[data-save-updates-notify]')?.addEventListener('click', _saveUpdatesNotify);
+  }
+
+  async function _saveUpdatesNotify() {
+    const notify = _el.querySelector('[data-updates-notify]')?.checked !== false;
+    try {
+      await _rpc.call('config.patch', { patches: { 'updates.notify': notify } });
+      UI.toast('Update preference saved.', 'info');
+      await _load();
+      _draw();
+    } catch (err) {
+      UI.toast('Save failed: ' + err.message, 'err');
+    }
   }
 
   async function _onSetupCommandCopy(event) {

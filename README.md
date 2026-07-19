@@ -238,31 +238,68 @@ or use the GitHub release wheel link directly:
 
 ### Upgrade
 
-Upgrade a `uv tool` install to the latest release:
+The primary path is the built-in command, which detects how AgentOS was
+installed, upgrades it, and — crucially — restarts the managed gateway so it
+runs the new code (a "successful" upgrade that leaves the daemon on old code is
+the #1 documented upgrade regret):
 
 ```sh
-uv tool upgrade use-agent-os
+agentos upgrade
 ```
 
-This keeps the extras from the original install (for example
-`[recommended]`). A version-pinned install (`==<version>`) stays on
-its pin — to move it, re-run the install command with the new
-version. For a `pip` fallback install, use
-`python -m pip install --user --upgrade "use-agent-os[recommended]"`.
+On a `uv tool` or `pipx` install this runs the matching upgrade command for
+you, then restarts the managed gateway and **verifies** the running gateway
+reports the new version before printing `Gateway: restarted and verified
+(<version>)`. It prints the `old → new` versions on success.
 
-For an [install from source](#install-from-source), pull and re-run
-the installer:
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `--check` | Report whether a newer release exists on PyPI; change nothing. Offline → `could not check (offline)`, exit 0. |
+| `--dry-run` | Print the exact upgrade command that would run; touch nothing. |
+| `--no-restart` | Upgrade the package but leave the gateway running the OLD code. Prints an unmissable warning; you must then run `agentos gateway restart` yourself. |
+| `--timeout <s>` | Upgrade-subprocess timeout (default 600s). On timeout the tool's process group is killed and recovery guidance is printed — never a half-state. |
+| `--json` | Machine-readable output. |
+
+For a plain-`pip` or editable / source install, `agentos upgrade` will **not**
+fake it — it prints the exact manual command and exits non-zero. Run it
+yourself:
 
 ```sh
+# pip install
+python -m pip install --user --upgrade "use-agent-os[recommended]"
+
+# install from source
 cd agent-os
 git pull
 git lfs pull --include="src/agentos/memory/models/**"
 bash scripts/install_source.sh        # Windows: scripts/install_source.ps1
 ```
 
-After any upgrade, restart the gateway so it runs the new code. Your
-configuration and data in `~/.agentos/` are not touched by upgrades.
-To check the installed version, run `uv tool list`.
+**Version skew.** Commands that talk to the gateway compare the CLI and gateway
+versions once per run. A gateway running an *older* version than the CLI (the
+normal state right after a package upgrade, before a restart) prints a warning
+but never blocks. A gateway running a *newer* version than the CLI (you
+downgraded the CLI, or are driving a newer gateway from a stale environment) is
+**refused** — a newer gateway may have written config with a newer schema, so
+acting on it from an older CLI risks corruption. Fix it by upgrading the CLI or
+restarting the gateway from this environment; in an emergency, set
+`AGENTOS_ALLOW_VERSION_SKEW=1` to override.
+
+**Update notices.** On gateway-connected commands the CLI checks PyPI at most
+once every 24h and, if a newer release exists, prints a one-line notice on
+stderr. It is suppressed on non-interactive / CI runs, and you can turn it off
+entirely with `updates.notify = false` (see
+[docs/configuration.md](docs/configuration.md#update-notifications) or the
+setup UI's Finish step).
+
+**Config & data are safe.** Your configuration and data in `~/.agentos/` are
+not touched by upgrades. Config migrations run at gateway start and write a
+timestamped backup before rewriting any file. A version-pinned install
+(`==<version>`) stays on its pin — to move it, re-run the install command with
+the new version. To check the installed version, run `agentos gateway status`
+(shows both the CLI and running-gateway versions) or `uv tool list`.
 
 ### Install from source
 

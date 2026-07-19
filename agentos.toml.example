@@ -46,6 +46,13 @@
 # debug = false
 # diagnostics_enabled = false
 
+# Update notifications. On gateway-connected commands the CLI checks PyPI at
+# most once every 24h and prints a one-line notice on stderr when a newer
+# use-agent-os release exists (suppressed on non-TTY / CI runs). Set notify =
+# false to silence it. See docs/configuration.md#update-notifications.
+# [updates]
+# notify = true
+
 # Web search settings
 # Use Brave when a key is configured, otherwise keep DuckDuckGo.
 # search_provider = "duckduckgo"  # "duckduckgo" or "brave"
