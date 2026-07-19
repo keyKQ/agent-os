@@ -566,3 +566,89 @@ encoder (no MiniLM weights, no network, fork-safe): join → build `[N, 392]`
 features → train tiny → fit T → export → `PilotModel` load round-trip, plus a
 parity guard that a wrong embed width trips. It `importorskip`s the `pilot-train`
 group so the default offline suite (which lacks it) does not error.
+
+## 8. pilot-v2 Tier 1 ("R3 uplift", owner-approved amendment) — VAL-only grid
+
+The T9 eval gate on the **test** split returned **STOP** on the v1 artifact: R3
+recall 0.242 (floor 0.60), accuracy 0.630 (floor 0.70), over-routing 0.205
+(limit 0.144). Root cause: R3 is starved — only **168 train rows** (3.7% of the
+corpus). The owner recorded a **spec amendment** (`.superpowers/sdd/progress.md`,
+"PILOT-V2 SPEC AMENDMENT"): Tier 1 permits a **small, explicit config grid
+selected on VALIDATION ONLY** — the v1 no-search rule is amended *only* for this
+grid. Everything else of the v1 discipline stands: the fixed architecture, seed
+42, the same temperature-refit procedure, and — critically — **the test split
+stays sealed** (no test rows or labels are read anywhere in Tier 1; T9 owns the
+test gate).
+
+### The frozen grid (exactly four configs — no others, no search beyond them)
+
+| Config | Sample weights (R0/R1/R2/R3) | TRAIN oversample multipliers |
+|---|---|---|
+| `baseline` | 1 / 1 / 2 / 3 | none (shipped v1 settings, rerun for comparison) |
+| `oversample` | 1 / 1 / 2 / 3 | R0 ×2, R3 ×3 (~R0 243→486, R3 168→504 effective) |
+| `weights` | **2** / 1 / 2 / **6** | none |
+| `both` | **1.5** / 1 / 2 / **4** | R3 ×2 (~R3 168→336) |
+
+Oversampling is **with-replacement copies of real TRAIN rows** (no synthesized
+vectors), applied only to the named classes; val/test keep their **natural**
+distribution. All four run at seed 42 with per-config temperature refit on val.
+
+Run it with:
+
+```sh
+uv run --group pilot-train --extra recommended \
+    python scripts/pilot_router/train.py --v2-tier1-grid
+```
+
+### Validation comparison (seed 42, val split, **all four reported as measured**)
+
+| Config | Acc | R0 | R1 | R2 | **R3** | Sev-under | Over-route (pred>gold) | ECE (cal) | T |
+|---|---|---|---|---|---|---|---|---|---|
+| `baseline` | 0.6713 | 0.418 | 0.644 | 0.759 | **0.226** | 0.3322 | 0.1799 | 0.0513 | 4.357 |
+| `oversample` | 0.6770 | 0.400 | 0.653 | 0.766 | **0.226** | 0.3368 | 0.1742 | 0.0383 | 4.247 |
+| `weights` | 0.6563 | 0.418 | 0.647 | 0.726 | **0.226** | 0.3933 | 0.1696 | 0.0494 | 4.297 |
+| `both` | 0.6759 | 0.382 | 0.698 | 0.728 | **0.226** | 0.3702 | 0.1626 | 0.0471 | 4.238 |
+
+**R3 recall is bit-identical (7/31 = 0.22581) across all four configs.** Neither
+oversampling nor sample-weight boosts moved the R3 decision boundary on
+validation at all — the levers only trade R0/R1/R2 against each other. R3 is too
+sparse for a re-weighting/resampling lever to add signal; the 31 val R3 turns
+that land correctly (7) are the same set under every config. The over-routing
+proxy actually *dropped* slightly under every non-baseline config, so
+over-routing was never the binding constraint here — recall was.
+
+### Selection rule (applied mechanically) → **KEEP baseline**
+
+Rule (from the amendment): among configs whose val accuracy is within **2pp** of
+the best config's accuracy **and** whose over-routing proxy does not exceed
+baseline's by more than **5pp**, choose the highest val **R3 recall**; if no
+config beats baseline's R3 recall by **≥5pp**, that is a valid Tier 1 outcome —
+keep baseline.
+
+Best eligible R3 uplift over baseline: **+0.000** (all tied at 0.226). No config
+clears the +5pp meaningful-uplift bar, so the rule **mechanically keeps
+baseline**. This is the honest, expected outcome the amendment anticipated:
+**Tier 2 data (targeted hard-R3 mining → Opus labeling → supplemental TRAIN
+rows) is the real lever** for R3 recall, not a config search over the existing
+232-effective-row R3 partition.
+
+### Artifact staging (separate from v1 — v1 record untouched)
+
+The selected config (`baseline`) is exported to the **separate git-ignored**
+staging dir `scripts/pilot_router/artifacts/pilot_v2_tier1/` (`model.onnx` +
+`manifest.json` + a `grid_val_table.json` recording all four configs and the
+selection rationale). The v1 staging dir `artifacts/pilot_v1/` — the committed
+T9 record — is **never overwritten**. Loadability is verified in-run through
+`PilotModel`. The grid selection, per-config weights/multipliers, and the full
+val comparison table are recorded verbatim in the selected artifact's
+`manifest.json` `training_stats` block.
+
+### CI smoke (offline) — the grid plumbing
+
+`tests/test_agentos_router/test_pilot_train_v2_configs.py` pins the grid to
+exactly the four approved names, locks the two new levers
+(`resample_train("multiplier", …)` per-class oversampling and per-config
+`sample_weights_for`/`train_pipeline` weights) plus the val-only over-routing
+proxy added to `evaluate`, and drives **each config** through the real
+train→export→`PilotModel`-load path on the same synthetic stub-encoder fixture
+as the v1 smoke. It `importorskip`s the `pilot-train` group like the v1 smoke.

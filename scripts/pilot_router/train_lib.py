@@ -63,6 +63,62 @@ SEVERITY_WEIGHT_BY_CLASS: dict[str, float] = {"R0": 1.0, "R1": 1.0, "R2": 2.0, "
 SHIP_SEED = 42
 DIAGNOSTIC_SEEDS: tuple[int, ...] = (7, 2026)
 
+
+# --- pilot-v2 Tier 1 config grid (owner-approved amendment, "R3 uplift") ------
+#
+# The v1 discipline (no search) is amended for Tier 1 by an owner-approved spec
+# amendment: a SMALL, EXPLICIT config grid selected on VALIDATION ONLY. The grid
+# below is frozen — exactly these four configs, no hyperparameter search beyond
+# them, all at seed 42 with the v1 fixed architecture and the same per-config
+# temperature-refit procedure. The test split stays sealed.
+
+
+@dataclass(frozen=True)
+class TrainConfig:
+    """One frozen point in the pilot-v2 Tier 1 grid (VAL-only selection).
+
+    * ``sample_weights`` — GOLD-class ``MLPClassifier.fit`` sample weights.
+    * ``oversample_multipliers`` — per-class with-replacement TRAIN oversample
+      multipliers (e.g. ``{"R3": 3.0}`` ~triples R3's real rows). ``None`` means
+      no resampling; class balance is carried by ``sample_weights`` alone. Only
+      TRAIN is ever resampled — val/test keep their natural distribution.
+    """
+
+    name: str
+    sample_weights: dict[str, float]
+    oversample_multipliers: dict[str, float] | None = None
+
+
+#: The exact four owner-approved Tier 1 configs (no others). Multipliers are
+#: chosen so the effective row counts match the amendment's targets on the real
+#: corpus (train R3=168 → ~504 at 3×; R0=243 → ~486 at 2×).
+V2_TIER1_CONFIGS: dict[str, TrainConfig] = {
+    # Current shipped v1 settings — rerun for the comparison baseline.
+    "baseline": TrainConfig(
+        name="baseline",
+        sample_weights={"R0": 1.0, "R1": 1.0, "R2": 2.0, "R3": 3.0},
+        oversample_multipliers=None,
+    ),
+    # R3 oversampled ~3×, R0 ~2×; weights unchanged from baseline.
+    "oversample": TrainConfig(
+        name="oversample",
+        sample_weights={"R0": 1.0, "R1": 1.0, "R2": 2.0, "R3": 3.0},
+        oversample_multipliers={"R0": 2.0, "R3": 3.0},
+    ),
+    # No resampling; heavier GOLD-class sample weights on the rare classes.
+    "weights": TrainConfig(
+        name="weights",
+        sample_weights={"R0": 2.0, "R1": 1.0, "R2": 2.0, "R3": 6.0},
+        oversample_multipliers=None,
+    ),
+    # R3 oversample ~2× combined with moderate weight boosts.
+    "both": TrainConfig(
+        name="both",
+        sample_weights={"R0": 1.5, "R1": 1.0, "R2": 2.0, "R3": 4.0},
+        oversample_multipliers={"R3": 2.0},
+    ),
+}
+
 #: Lower clip for log-space calibration (mirrors PilotModel._PROBA_CLIP_MIN).
 _PROBA_CLIP_MIN = 1e-7
 
@@ -173,29 +229,65 @@ def resample_train(
     *,
     seed: int,
     strategy: str = "none",
+    multipliers: dict[str, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Optionally resample the TRAIN matrix for class balance (spec §6.2).
 
     ``strategy``:
 
-    * ``"none"`` — return the rows unchanged (the shipped decision; balance is
-      carried entirely by the GOLD-class sample weights, so no rows are
+    * ``"none"`` — return the rows unchanged (the shipped v1 decision; balance
+      is carried entirely by the GOLD-class sample weights, so no rows are
       duplicated). This is the default.
     * ``"oversample"`` — with-replacement oversample every minority class up to
       the majority-class count, using ``seed`` for reproducibility. Provided so
       the lever is exercised/available; not used by the shipped artifact.
+    * ``"multiplier"`` — with-replacement oversample each class named in
+      ``multipliers`` to ``round(count * multiplier)`` rows (a class absent from
+      ``multipliers`` is left at its natural count). This is the pilot-v2 Tier 1
+      lever: e.g. ``{"R3": 3.0}`` ~triples R3's real rows without touching the
+      others. Oversampled rows are with-replacement copies of real rows — no new
+      vectors are synthesized. A multiplier of ``1.0`` is a no-op; ``<1.0`` (a
+      downsample) is rejected to keep the lever monotone/explicit.
 
     Validation and test are NEVER passed here.
     """
     if strategy == "none":
         return x, y
+
+    rng = np.random.default_rng(seed)
+
+    if strategy == "multiplier":
+        if not multipliers:
+            return x, y
+        mult_by_int: dict[int, float] = {}
+        for cls_name, factor in multipliers.items():
+            if cls_name not in CLASS_TO_INT:
+                raise ValueError(f"unknown class in multipliers: {cls_name!r}")
+            if factor < 1.0:
+                raise ValueError(
+                    f"multiplier for {cls_name} must be >= 1.0 (got {factor}); "
+                    "downsampling is not a Tier 1 lever"
+                )
+            mult_by_int[CLASS_TO_INT[cls_name]] = float(factor)
+        mult_idx_parts: list[np.ndarray] = []
+        for cls_int in (int(c) for c in np.unique(y)):
+            cls_idx = np.flatnonzero(y == cls_int)
+            mult_idx_parts.append(cls_idx)
+            m_factor = mult_by_int.get(cls_int, 1.0)
+            m_target = int(round(len(cls_idx) * m_factor))
+            if m_target > len(cls_idx):
+                extra = rng.choice(cls_idx, size=m_target - len(cls_idx), replace=True)
+                mult_idx_parts.append(extra)
+        all_idx = np.concatenate(mult_idx_parts)
+        rng.shuffle(all_idx)
+        return x[all_idx], y[all_idx]
+
     if strategy != "oversample":
         raise ValueError(f"unknown resample strategy: {strategy!r}")
 
-    rng = np.random.default_rng(seed)
     counts = {int(c): int((y == c).sum()) for c in np.unique(y)}
     target = max(counts.values())
-    idx_parts: list[np.ndarray] = []
+    idx_parts = []
     for cls, cnt in counts.items():
         cls_idx = np.flatnonzero(y == cls)
         idx_parts.append(cls_idx)
@@ -210,10 +302,16 @@ def resample_train(
 # --- Locked training pipeline -----------------------------------------------
 
 
-def sample_weights_for(y: np.ndarray) -> np.ndarray:
-    """GOLD-class sample weights (``R0=1,R1=1,R2=2,R3=3``) for labels ``y``."""
+def sample_weights_for(y: np.ndarray, weights: dict[str, float] | None = None) -> np.ndarray:
+    """Per-row GOLD-class sample weights for labels ``y``.
+
+    ``weights`` maps class name → weight; ``None`` uses the shipped v1 policy
+    ``SAMPLE_WEIGHT_BY_CLASS`` (``R0=1,R1=1,R2=2,R3=3``). The pilot-v2 Tier 1
+    grid passes a per-config dict here.
+    """
+    policy = SAMPLE_WEIGHT_BY_CLASS if weights is None else weights
     w = np.ones(len(y), dtype=np.float64)
-    for cls, weight in SAMPLE_WEIGHT_BY_CLASS.items():
+    for cls, weight in policy.items():
         w[y == CLASS_TO_INT[cls]] = weight
     return w
 
@@ -224,13 +322,18 @@ def train_pipeline(
     *,
     seed: int,
     max_iter: int = 400,
+    sample_weights: dict[str, float] | None = None,
 ) -> Any:
-    """Fit the LOCKED pipeline (no search) and return it.
+    """Fit the LOCKED architecture (no search) and return it.
 
     Architecture (spec §6.6, fixed):
     ``Pipeline(StandardScaler(), MLPClassifier(hidden_layer_sizes=(256, 64)))``,
     fit with GOLD-class sample weights. ``random_state=seed`` is the only knob
-    that varies between the shipped artifact and the diagnostic replicas.
+    that varies between the shipped v1 artifact and the diagnostic replicas.
+
+    ``sample_weights`` maps class name → weight; ``None`` uses the shipped v1
+    policy. The pilot-v2 Tier 1 grid passes a per-config dict — the architecture
+    itself stays fixed (that is not amended).
 
     ``max_iter`` is a convergence budget, not a searched hyperparameter; the
     default is generous enough for convergence on the real corpus while the
@@ -246,13 +349,16 @@ def train_pipeline(
         max_iter=max_iter,
     )
     pipe = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
-    pipe.fit(x_train, y_train, clf__sample_weight=sample_weights_for(y_train))
+    pipe.fit(
+        x_train,
+        y_train,
+        clf__sample_weight=sample_weights_for(y_train, sample_weights),
+    )
 
     classes = list(pipe.named_steps["clf"].classes_)
     if classes != list(range(len(CLASSES))):
         raise ValueError(
-            f"unexpected classifier class order {classes}; "
-            "training data must contain all of 0..3"
+            f"unexpected classifier class order {classes}; training data must contain all of 0..3"
         )
     return pipe
 
@@ -315,6 +421,7 @@ class EvalMetrics:
     accuracy: float
     per_class_recall: dict[str, float]
     severity_weighted_underrouting: float
+    over_routing_rate: float
     ece: float
     nll: float
     n: int
@@ -325,6 +432,7 @@ class EvalMetrics:
             "accuracy": self.accuracy,
             "per_class_recall": self.per_class_recall,
             "severity_weighted_underrouting": self.severity_weighted_underrouting,
+            "over_routing_rate": self.over_routing_rate,
             "ece": self.ece,
             "nll": self.nll,
             "n": self.n,
@@ -371,6 +479,19 @@ def _severity_weighted_underrouting(pred: np.ndarray, y: np.ndarray) -> float:
     return float(total / len(y)) if len(y) else 0.0
 
 
+def _over_routing_rate(pred: np.ndarray, y: np.ndarray) -> float:
+    """Over-routing proxy: fraction of rows whose prediction is above gold.
+
+    Over-routing = predicting a strictly *higher* (more expensive) tier than
+    gold. This is the val-only proxy the T9 gate's over-routing limit tracks
+    (the real over-routing metric needs test-split traffic; on the sealed-test
+    discipline this pred>gold rate stands in for it during VAL-only selection).
+    """
+    if not len(y):
+        return 0.0
+    return float((pred > y).mean())
+
+
 def evaluate(
     calibrated_probs: np.ndarray,
     y: np.ndarray,
@@ -394,6 +515,7 @@ def evaluate(
         accuracy=acc,
         per_class_recall=per_class,
         severity_weighted_underrouting=_severity_weighted_underrouting(pred, y),
+        over_routing_rate=_over_routing_rate(pred, y),
         ece=_ece(calibrated_probs, y),
         nll=_nll(calibrated_probs, y, 1.0),
         n=len(y),

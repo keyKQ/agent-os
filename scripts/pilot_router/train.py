@@ -62,7 +62,9 @@ from scripts.pilot_router.train_lib import (  # noqa: E402
     DIAGNOSTIC_SEEDS,
     SAMPLE_WEIGHT_BY_CLASS,
     SHIP_SEED,
+    V2_TIER1_CONFIGS,
     Row,
+    TrainConfig,
     build_feature_matrix,
     evaluate,
     fit_temperature,
@@ -79,7 +81,15 @@ LABELS_PATH = _HERE / "data" / "labels.jsonl"
 LABELS_META_PATH = _HERE / "labels_meta.json"
 CACHE_DIR = _HERE / ".feature_cache"
 STAGING_DIR = _HERE / "artifacts" / "pilot_v1"
+#: SEPARATE staging dir for the pilot-v2 Tier 1 selected config. NEVER overwrite
+#: the v1 staging dir (that is the committed T9 record).
+V2_TIER1_STAGING_DIR = _HERE / "artifacts" / "pilot_v2_tier1"
 TRAINING_META_PATH = _HERE / "training_meta.json"
+
+#: Selection-rule thresholds (owner amendment "R3 uplift"), applied on VAL only.
+V2_ACC_WITHIN_PP = 0.02  # accuracy within 2pp of the best config's accuracy
+V2_OVERROUTE_SLACK_PP = 0.05  # over-routing proxy ≤ baseline + 5pp
+V2_MEANINGFUL_R3_UPLIFT_PP = 0.05  # <+5pp over baseline R3 recall = "not meaningful"
 
 #: Shipped resampling decision (spec §6.2). "none": balance is carried entirely
 #: by GOLD-class sample weights; no TRAIN rows are duplicated. Val/test natural.
@@ -171,6 +181,7 @@ class SeedResult:
     accuracy: float
     per_class_recall: dict[str, float]
     severity_weighted_underrouting: float
+    over_routing_rate: float
     ece_before: float
     ece_after: float
     nll_before: float
@@ -195,9 +206,7 @@ def _stability_table(results: list[SeedResult]) -> dict[str, Any]:
         "per_class_recall": {},
     }
     for cls in CLASSES:
-        table["per_class_recall"][cls] = _mean_std(
-            [r.per_class_recall[cls] for r in results]
-        )
+        table["per_class_recall"][cls] = _mean_std([r.per_class_recall[cls] for r in results])
     return table
 
 
@@ -210,9 +219,17 @@ def _train_one_seed(
     y_train: np.ndarray,
     x_val: np.ndarray,
     y_val: np.ndarray,
+    config: TrainConfig,
 ) -> tuple[SeedResult, Any, Any]:
-    xt, yt = resample_train(x_train, y_train, seed=seed, strategy=RESAMPLE_STRATEGY)
-    pipe = train_pipeline(xt, yt, seed=seed)
+    strategy = "multiplier" if config.oversample_multipliers else "none"
+    xt, yt = resample_train(
+        x_train,
+        y_train,
+        seed=seed,
+        strategy=strategy,
+        multipliers=config.oversample_multipliers,
+    )
+    pipe = train_pipeline(xt, yt, seed=seed, sample_weights=config.sample_weights)
     clf = pipe.named_steps["clf"]
 
     val_probs = pipe.predict_proba(x_val).astype(np.float32)
@@ -231,6 +248,7 @@ def _train_one_seed(
         accuracy=after.accuracy,
         per_class_recall=after.per_class_recall,
         severity_weighted_underrouting=after.severity_weighted_underrouting,
+        over_routing_rate=after.over_routing_rate,
         ece_before=before.ece,
         ece_after=after.ece,
         nll_before=before.nll,
@@ -240,15 +258,22 @@ def _train_one_seed(
     return result, pipe, clf
 
 
-# --- Main --------------------------------------------------------------------
+# --- Data loading (shared by the v1 path and the v2 grid) --------------------
 
 
-def main() -> int:
-    print("Pilot pilot-v1 training (T7)")
-    print(f"  corpus:  {CORPUS_PATH}")
-    print(f"  labels:  {LABELS_PATH}")
-    print(f"  staging: {STAGING_DIR}")
+@dataclass
+class LoadedData:
+    train_rows: list[Row]
+    val_rows: list[Row]
+    x_train: np.ndarray
+    y_train: np.ndarray
+    x_val: np.ndarray
+    y_val: np.ndarray
+    fingerprint: str
 
+
+def _load_features() -> LoadedData:
+    """Load train+val rows and features (test never opened). Shared setup."""
     rows = load_split_rows(CORPUS_PATH, LABELS_PATH)
     train_rows, val_rows = rows["train"], rows["val"]
     print(f"  rows: train={len(train_rows)} val={len(val_rows)} (test untouched)")
@@ -265,18 +290,45 @@ def main() -> int:
 
     if x_train.shape[1] != FEATURE_DIM or x_val.shape[1] != FEATURE_DIM:
         raise SystemExit(f"392-dim parity violation: {x_train.shape} / {x_val.shape}")
+    return LoadedData(
+        train_rows=train_rows,
+        val_rows=val_rows,
+        x_train=x_train,
+        y_train=y_train,
+        x_val=x_val,
+        y_val=y_val,
+        fingerprint=fingerprint,
+    )
+
+
+# --- Main (v1 baseline artifact) --------------------------------------------
+
+
+def main() -> int:
+    print("Pilot pilot-v1 training (T7)")
+    print(f"  corpus:  {CORPUS_PATH}")
+    print(f"  labels:  {LABELS_PATH}")
+    print(f"  staging: {STAGING_DIR}")
+
+    data = _load_features()
+    train_rows, val_rows = data.train_rows, data.val_rows
+    x_train, y_train = data.x_train, data.y_train
+    x_val, y_val = data.x_val, data.y_val
+    fingerprint = data.fingerprint
+
+    baseline_cfg = V2_TIER1_CONFIGS["baseline"]
 
     # Seed 42 first (the shipped artifact), then diagnostics.
     print(f"\nTraining seed {SHIP_SEED} (SHIPPED) ...")
     ship_result, ship_pipe, ship_clf = _train_one_seed(
-        SHIP_SEED, x_train, y_train, x_val, y_val
+        SHIP_SEED, x_train, y_train, x_val, y_val, baseline_cfg
     )
     _print_seed(ship_result)
 
     diag_results: list[SeedResult] = []
     for seed in DIAGNOSTIC_SEEDS:
         print(f"\nTraining diagnostic seed {seed} ...")
-        res, _, _ = _train_one_seed(seed, x_train, y_train, x_val, y_val)
+        res, _, _ = _train_one_seed(seed, x_train, y_train, x_val, y_val, baseline_cfg)
         _print_seed(res)
         diag_results.append(res)
 
@@ -307,6 +359,7 @@ def main() -> int:
             "accuracy": ship_result.accuracy,
             "per_class_recall": ship_result.per_class_recall,
             "severity_weighted_underrouting": ship_result.severity_weighted_underrouting,
+            "over_routing_rate": ship_result.over_routing_rate,
             "ece_before_calibration": ship_result.ece_before,
             "ece_after_calibration": ship_result.ece_after,
             "nll_before_calibration": ship_result.nll_before,
@@ -347,9 +400,7 @@ def main() -> int:
     print(f"  wrote {manifest_path}")
 
     # --- training_meta.json (git-tracked, no artifacts) ---
-    TRAINING_META_PATH.write_text(
-        json.dumps(training_stats, indent=2) + "\n", encoding="utf-8"
-    )
+    TRAINING_META_PATH.write_text(json.dumps(training_stats, indent=2) + "\n", encoding="utf-8")
     print(f"  wrote {TRAINING_META_PATH}")
 
     # --- Loadability check via the production loader ---
@@ -382,8 +433,7 @@ def _print_seed(r: SeedResult) -> None:
 
 
 def _print_stability(s: dict[str, Any]) -> None:
-    print("\n3-seed stability (mean ± std over seeds "
-          f"{s['seeds']}):")
+    print(f"\n3-seed stability (mean ± std over seeds {s['seeds']}):")
     print(f"  accuracy:  {s['accuracy']['mean']:.4f} ± {s['accuracy']['std']:.4f}")
     print(
         "  sev_under: "
@@ -397,5 +447,231 @@ def _print_stability(s: dict[str, Any]) -> None:
         print(f"  recall {cls}: {m['mean']:.4f} ± {m['std']:.4f}")
 
 
+# --- pilot-v2 Tier 1 grid (owner-approved amendment, VAL-only selection) -----
+
+
+def _select_config(
+    results: dict[str, SeedResult],
+) -> tuple[str, str]:
+    """Apply the amendment's mechanical selection rule. Returns (name, why).
+
+    Rule: among configs whose val accuracy is within 2pp of the best config's
+    accuracy AND whose over-routing proxy does not exceed baseline's by more
+    than 5pp, choose the one with the highest val R3 recall. If no eligible
+    config beats baseline's R3 recall by ≥5pp, baseline is kept (a valid Tier 1
+    outcome — Tier 2 data is the real lever).
+    """
+    baseline = results["baseline"]
+    best_acc = max(r.accuracy for r in results.values())
+    acc_floor = best_acc - V2_ACC_WITHIN_PP
+    over_ceiling = baseline.over_routing_rate + V2_OVERROUTE_SLACK_PP
+
+    eligible = {
+        name: r
+        for name, r in results.items()
+        if r.accuracy >= acc_floor and r.over_routing_rate <= over_ceiling
+    }
+    # Baseline is always a valid fallback even if the filters exclude it.
+    winner = max(
+        eligible.values(),
+        key=lambda r: r.per_class_recall["R3"],
+        default=baseline,
+    )
+    winner_name = next(n for n, r in results.items() if r is winner)
+
+    baseline_r3 = baseline.per_class_recall["R3"]
+    uplift = winner.per_class_recall["R3"] - baseline_r3
+    if winner_name == "baseline" or uplift < V2_MEANINGFUL_R3_UPLIFT_PP:
+        why = (
+            f"No eligible config beat baseline R3 recall by ≥"
+            f"{V2_MEANINGFUL_R3_UPLIFT_PP:.2f} "
+            f"(best eligible R3 uplift {uplift:+.3f}); KEEPING baseline. "
+            "Tier 2 data is the real lever."
+        )
+        return "baseline", why
+    why = (
+        f"Highest val R3 recall ({winner.per_class_recall['R3']:.3f}, "
+        f"{uplift:+.3f} vs baseline) among configs within {V2_ACC_WITHIN_PP:.2f} "
+        f"acc of best ({best_acc:.4f}) and over-routing ≤ baseline+"
+        f"{V2_OVERROUTE_SLACK_PP:.2f} ({over_ceiling:.4f})."
+    )
+    return winner_name, why
+
+
+def _print_grid_table(results: dict[str, SeedResult], baseline_over: float) -> None:
+    print("\n=== pilot-v2 Tier 1 val comparison (seed 42) ===")
+    header = (
+        f"{'config':<11} {'acc':>7} {'R0':>6} {'R1':>6} {'R2':>6} {'R3':>6} "
+        f"{'sevUnd':>7} {'overRt':>7} {'ECE':>6} {'T':>6}"
+    )
+    print(header)
+    for name in V2_TIER1_CONFIGS:
+        r = results[name]
+        pc = r.per_class_recall
+        over_delta = r.over_routing_rate - baseline_over
+        print(
+            f"{name:<11} {r.accuracy:>7.4f} {pc['R0']:>6.3f} {pc['R1']:>6.3f} "
+            f"{pc['R2']:>6.3f} {pc['R3']:>6.3f} "
+            f"{r.severity_weighted_underrouting:>7.4f} "
+            f"{r.over_routing_rate:>7.4f} {r.ece_after:>6.4f} {r.temperature:>6.3f}"
+            f"  (over Δ{over_delta:+.4f})"
+        )
+
+
+def run_v2_tier1_grid() -> int:
+    """Run the four-config Tier 1 grid on VAL only; select + export the winner."""
+    print("Pilot pilot-v2 Tier 1 grid ('R3 uplift', owner-approved amendment)")
+    print(f"  corpus:  {CORPUS_PATH}")
+    print(f"  labels:  {LABELS_PATH}")
+    print(f"  staging: {V2_TIER1_STAGING_DIR}")
+
+    data = _load_features()
+    train_rows, val_rows = data.train_rows, data.val_rows
+    x_train, y_train = data.x_train, data.y_train
+    x_val, y_val = data.x_val, data.y_val
+
+    results: dict[str, SeedResult] = {}
+    pipes: dict[str, tuple[Any, Any]] = {}
+    for name, cfg in V2_TIER1_CONFIGS.items():
+        print(f"\nTraining config '{name}' (seed {SHIP_SEED}) ...")
+        res, pipe, clf = _train_one_seed(SHIP_SEED, x_train, y_train, x_val, y_val, cfg)
+        _print_seed(res)
+        print(f"    over-routing proxy (pred>gold rate): {res.over_routing_rate:.4f}")
+        results[name] = res
+        pipes[name] = (pipe, clf)
+
+    baseline_over = results["baseline"].over_routing_rate
+    _print_grid_table(results, baseline_over)
+
+    selected_name, why = _select_config(results)
+    print(f"\nSELECTED CONFIG: {selected_name}\n  {why}")
+
+    sel_res = results[selected_name]
+    sel_pipe, sel_clf = pipes[selected_name]
+    sel_cfg = V2_TIER1_CONFIGS[selected_name]
+
+    # --- Assemble training stats for the selected config's manifest ---
+    labels_meta = json.loads(LABELS_META_PATH.read_text(encoding="utf-8"))
+    split_class_counts = {
+        split: dict(Counter(r.label for r in split_rows))
+        for split, split_rows in (("train", train_rows), ("val", val_rows))
+    }
+    grid_val_table = {
+        name: {
+            "accuracy": r.accuracy,
+            "per_class_recall": r.per_class_recall,
+            "severity_weighted_underrouting": r.severity_weighted_underrouting,
+            "over_routing_rate": r.over_routing_rate,
+            "ece_after_calibration": r.ece_after,
+            "fitted_temperature": r.temperature,
+        }
+        for name, r in results.items()
+    }
+    training_stats = {
+        "pilot_version": PILOT_VERSION,
+        "pilot_tier": "v2_tier1",
+        "amendment": "PILOT-V2 SPEC AMENDMENT 'R3 uplift' (owner-approved 2026-07-19)",
+        "ship_seed": SHIP_SEED,
+        "architecture": "Pipeline(StandardScaler, MLPClassifier(hidden_layer_sizes=(256, 64)))",
+        "selected_config": selected_name,
+        "selection_rationale": why,
+        "selection_rule": {
+            "acc_within_pp_of_best": V2_ACC_WITHIN_PP,
+            "over_routing_slack_pp_over_baseline": V2_OVERROUTE_SLACK_PP,
+            "meaningful_r3_uplift_pp": V2_MEANINGFUL_R3_UPLIFT_PP,
+        },
+        "config_grid": {
+            name: {
+                "sample_weights": cfg.sample_weights,
+                "oversample_multipliers": cfg.oversample_multipliers,
+            }
+            for name, cfg in V2_TIER1_CONFIGS.items()
+        },
+        "sample_weight_policy": dict(sel_cfg.sample_weights),
+        "oversample_multipliers": sel_cfg.oversample_multipliers,
+        "resample_strategy": ("multiplier" if sel_cfg.oversample_multipliers else "none"),
+        "resample_note": (
+            "VAL-only config selection per the owner amendment; TRAIN-partition "
+            "oversampling (with-replacement copies of real rows) applied only for "
+            "configs that declare multipliers. Validation/test kept at natural "
+            "distribution; test split never opened (T9 owns the gate)."
+        ),
+        "set_sizes": {"train": len(train_rows), "val": len(val_rows)},
+        "class_balance_per_split": split_class_counts,
+        "val_grid_seed42": grid_val_table,
+        "val_metrics_selected_seed42": {
+            "config": selected_name,
+            "accuracy": sel_res.accuracy,
+            "per_class_recall": sel_res.per_class_recall,
+            "severity_weighted_underrouting": sel_res.severity_weighted_underrouting,
+            "over_routing_rate": sel_res.over_routing_rate,
+            "ece_before_calibration": sel_res.ece_before,
+            "ece_after_calibration": sel_res.ece_after,
+            "nll_before_calibration": sel_res.nll_before,
+            "nll_after_calibration": sel_res.nll_after,
+            "fitted_temperature": sel_res.temperature,
+            "confusion_gold_by_pred": sel_res.confusion,
+        },
+        "labeling": {
+            "labeler_pin": labels_meta.get("labeler_pin"),
+            "label_model": labels_meta.get("label_model"),
+            "rubric_sha256": labels_meta.get("rubric_sha256"),
+            "labels_file_sha256": labels_meta.get("labels_file", {}).get("labels.jsonl"),
+        },
+        "git_sha": _git_sha(),
+        "training_scripts": [
+            "scripts/pilot_router/train.py",
+            "scripts/pilot_router/train_lib.py",
+            "scripts/pilot_router/export_model.py",
+        ],
+        "pinned_deps": list(_PINNED_DEPS),
+        "installed_versions": _installed_versions(),
+        "feature_fingerprint": data.fingerprint,
+        "hardware": platform.platform(),
+        "python": platform.python_version(),
+    }
+
+    print(f"\nExporting selected config '{selected_name}' → {V2_TIER1_STAGING_DIR}")
+    onnx_path, manifest_path = export_artifact(
+        sel_pipe,
+        sel_clf,
+        V2_TIER1_STAGING_DIR,
+        temperature=sel_res.temperature,
+        training_stats=training_stats,
+    )
+    print(f"  wrote {onnx_path} ({onnx_path.stat().st_size} bytes)")
+    print(f"  wrote {manifest_path}")
+
+    _verify_load(V2_TIER1_STAGING_DIR, x_val)
+
+    # Emit the grid table as JSON to the staging dir for the report/record.
+    (V2_TIER1_STAGING_DIR / "grid_val_table.json").write_text(
+        json.dumps(
+            {"selected_config": selected_name, "rationale": why, "grid": grid_val_table},
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print(
+        f"\nDONE — Tier 1 grid evaluated on val; selected '{selected_name}' staged "
+        f"in {V2_TIER1_STAGING_DIR.name}. Test split remains sealed."
+    )
+    return 0
+
+
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--v2-tier1-grid",
+        action="store_true",
+        help="Run the pilot-v2 Tier 1 config grid (VAL-only selection) instead "
+        "of the v1 baseline artifact build.",
+    )
+    args = parser.parse_args()
+    if args.v2_tier1_grid:
+        sys.exit(run_v2_tier1_grid())
     sys.exit(main())
