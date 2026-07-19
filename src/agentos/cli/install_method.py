@@ -88,27 +88,75 @@ def _under(path: Path, *needles: str) -> bool:
     return any(needle in lowered for needle in needles)
 
 
+def _uv_tools_roots(env: dict[str, str]) -> list[Path]:
+    """Resolved uv-tools root directories to prefix-match against.
+
+    ``UV_TOOL_DIR`` overrides the default ``~/.local/share/uv/tools`` location
+    entirely (uv honours it), so a custom value must be treated as a first-class
+    tools root — otherwise a uv-tool install under it is misclassified and we
+    hand back the actively-wrong ``pip`` suggestion (a uv tool venv has no pip).
+    """
+
+    roots: list[Path] = []
+    override = env.get("UV_TOOL_DIR", "").strip()
+    if override:
+        try:
+            roots.append(Path(override).resolve())
+        except OSError:
+            pass
+    return roots
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    """True when ``path`` is ``root`` or lives beneath it (both resolved)."""
+
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def detect_install_method(
     *,
     executable: str | None = None,
     package_dir: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> InstallMethod:
     """Classify the running install.
 
-    ``executable`` / ``package_dir`` are injectable for tests; they default to
-    ``sys.executable`` and the real ``agentos`` package location.
+    ``executable`` / ``package_dir`` / ``env`` are injectable for tests; they
+    default to ``sys.executable``, the real ``agentos`` package location, and
+    ``os.environ``.
     """
 
-    exe = Path(executable or sys.executable).resolve()
+    environ = env if env is not None else dict(os.environ)
+    raw_exe = Path(executable or sys.executable)
+    exe = raw_exe.resolve()
     pkg_dir = package_dir if package_dir is not None else _package_location()
 
     # Editable / source checkout first: it can otherwise masquerade as pip.
     if _looks_editable(pkg_dir):
         return InstallMethod.EDITABLE
 
+    # A custom UV_TOOL_DIR relocates the whole tools tree; the executable may
+    # even be a symlink from a bin dir INTO that tree, so check both the raw path
+    # and its symlink-resolved target against the override root.
+    uv_roots = _uv_tools_roots(environ)
+    if uv_roots:
+        candidates: list[Path] = []
+        for candidate in (raw_exe, exe, pkg_dir):
+            candidates.append(candidate)
+            try:
+                candidates.append(candidate.resolve())
+            except OSError:
+                pass
+        if any(_is_within(c, root) for c in candidates for root in uv_roots):
+            return InstallMethod.UV_TOOL
+
     # uv tool installs live under the uv tools root, e.g.
     #   ~/.local/share/uv/tools/use-agent-os/...
-    #   $XDG_DATA_HOME/uv/tools/... / $UV_TOOL_DIR/...
+    #   $XDG_DATA_HOME/uv/tools/...
     for candidate in (exe, pkg_dir):
         parts = [p.lower() for p in candidate.parts]
         if "uv" in parts and "tools" in parts:
@@ -221,12 +269,28 @@ def build_upgrade_plan(
             ),
         )
 
-    # PIP + UNKNOWN: hand back the exact pip command, never fake it.
-    pip_cmd = [sys.executable, "-m", "pip", "install", "--upgrade", dist]
+    if resolved_method is InstallMethod.PIP:
+        # A genuine site-packages install: pip is the right upgrade tool.
+        pip_cmd = [sys.executable, "-m", "pip", "install", "--upgrade", dist]
+        return UpgradePlan(
+            method=resolved_method,
+            delegated=False,
+            tool=None,
+            command=pip_cmd,
+            manual_hint=f"{sys.executable} -m pip install --upgrade {dist}",
+        )
+
+    # UNKNOWN: we could not classify the install, so a blind ``python -m pip``
+    # may be actively wrong (e.g. a uv/pipx venv has no pip). List all three
+    # installers and let the operator pick the one they originally used.
     return UpgradePlan(
         method=resolved_method,
         delegated=False,
         tool=None,
-        command=pip_cmd,
-        manual_hint=f"{sys.executable} -m pip install --upgrade {dist}",
+        command=[sys.executable, "-m", "pip", "install", "--upgrade", dist],
+        manual_hint=(
+            "could not detect the install method — reinstall/upgrade with your "
+            f"original installer, e.g.:\n    uv tool install {dist}\n    "
+            f"pipx install {dist}\n    {sys.executable} -m pip install --upgrade {dist}"
+        ),
     )

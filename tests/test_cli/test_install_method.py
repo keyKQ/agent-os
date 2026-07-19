@@ -44,7 +44,78 @@ from agentos.cli.install_method import InstallMethod
 def test_detect_install_method(
     exe: str, pkg: str, expected: InstallMethod
 ) -> None:
-    assert im.detect_install_method(executable=exe, package_dir=Path(pkg)) == expected
+    # Empty env so a real UV_TOOL_DIR in the test host cannot skew classification.
+    assert (
+        im.detect_install_method(executable=exe, package_dir=Path(pkg), env={})
+        == expected
+    )
+
+
+def test_uv_tool_dir_override_classified_as_uv_tool(tmp_path: Path) -> None:
+    # A custom UV_TOOL_DIR relocates the whole tools tree away from the default
+    # ~/.local/share/uv/tools heuristic.
+    tool_dir = tmp_path / "custom-uv-tools"
+    exe = tool_dir / "use-agent-os" / "bin" / "python"
+    pkg = tool_dir / "use-agent-os" / "lib" / "python3.12" / "site-packages" / "agentos"
+    pkg.mkdir(parents=True)
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    assert (
+        im.detect_install_method(
+            executable=str(exe),
+            package_dir=pkg,
+            env={"UV_TOOL_DIR": str(tool_dir)},
+        )
+        == InstallMethod.UV_TOOL
+    )
+
+
+def test_uv_tool_dir_symlinked_bin_classified_as_uv_tool(tmp_path: Path) -> None:
+    # The executable is a symlink from a bin dir OUTSIDE the tools tree into a
+    # real python UNDER UV_TOOL_DIR — resolving the symlink must still classify.
+    tool_dir = tmp_path / "uv-tools"
+    real_exe = tool_dir / "use-agent-os" / "bin" / "python"
+    real_exe.parent.mkdir(parents=True)
+    real_exe.write_text("")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    link = bin_dir / "agentos"
+    link.symlink_to(real_exe)
+    # package_dir is elsewhere (a shim location) so only the symlink target ties
+    # the install to the tools tree.
+    pkg = tmp_path / "shim" / "agentos"
+    pkg.mkdir(parents=True)
+    assert (
+        im.detect_install_method(
+            executable=str(link),
+            package_dir=pkg,
+            env={"UV_TOOL_DIR": str(tool_dir)},
+        )
+        == InstallMethod.UV_TOOL
+    )
+
+
+def test_uv_tool_dir_unset_leaves_default_behavior(tmp_path: Path) -> None:
+    # Without UV_TOOL_DIR, a plain site-packages install stays PIP.
+    exe = "/home/u/venv/bin/python"
+    pkg = tmp_path / "venv" / "lib" / "python3.12" / "site-packages" / "agentos"
+    pkg.mkdir(parents=True)
+    assert (
+        im.detect_install_method(executable=exe, package_dir=pkg, env={})
+        == InstallMethod.PIP
+    )
+    # And the default ~/.local/share/uv/tools path still matches on the heuristic.
+    assert (
+        im.detect_install_method(
+            executable="/home/u/.local/share/uv/tools/use-agent-os/bin/python",
+            package_dir=Path(
+                "/home/u/.local/share/uv/tools/use-agent-os/lib/python3.12/"
+                "site-packages/agentos"
+            ),
+            env={},
+        )
+        == InstallMethod.UV_TOOL
+    )
 
 
 def test_editable_checkout_detected(tmp_path: Path) -> None:
@@ -169,3 +240,13 @@ def test_build_plan_editable_never_delegates() -> None:
     plan = im.build_upgrade_plan(method=InstallMethod.EDITABLE)
     assert plan.delegated is False
     assert "git pull" in plan.manual_hint
+
+
+def test_build_plan_unknown_lists_all_installers() -> None:
+    # Unclassifiable install: never blindly recommend pip (a uv/pipx venv has
+    # no pip); list all three installers instead.
+    plan = im.build_upgrade_plan(method=InstallMethod.UNKNOWN)
+    assert plan.delegated is False
+    assert "uv tool install use-agent-os" in plan.manual_hint
+    assert "pipx install use-agent-os" in plan.manual_hint
+    assert "pip install --upgrade use-agent-os" in plan.manual_hint
