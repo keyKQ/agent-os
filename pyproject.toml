@@ -81,8 +81,9 @@ recommended = [
     "numpy>=1.26",
     "onnxruntime>=1.17",
     "tokenizers>=0.15",
-    # Local ML router (strategy="v4_phase3", the default). The ~75MB model
-    # bundle ships out-of-git; these libs run its inference core.
+    # Legacy local ML router (strategy="v4_phase3", eval baseline only; the
+    # default is "pilot-v1"). The ~75MB model bundle ships out-of-git; these
+    # libs run its inference core.
     "lightgbm>=4.0",
     "joblib>=1.3",
     "scikit-learn>=1.8,<1.9",

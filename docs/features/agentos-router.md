@@ -7,6 +7,12 @@ run on the most expensive model.
 Use this page when you want to enable routing, understand what it changes, or
 decide whether a fixed provider/model is better for a specific run.
 
+**Naming.** "Pilot Router" names the whole routing layer — every strategy
+below runs inside it. `pilot-v1` is one specific strategy: the default local
+ML model that ships with Pilot Router. Wire identifiers keep their original
+names (the `[agentos_router]` config section and the `AGENTOS_ROUTER_` env
+prefix).
+
 ## Why Use It
 
 Pilot Router is useful when you want:
@@ -31,9 +37,10 @@ Pilot Router has three selectable strategies, set via
 | `llm_judge` | Smart routing (LLM-based) | A small "judge" model classifies each turn (R0–R3) via a forced tool call. The judge can be a cloud model (default: the cheapest tier of your active provider) or a local OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, vLLM) configured with `judge_model` / `judge_base_url`. |
 
 Both the Web UI setup wizard and the CLI (`agentos onboard`,
-`agentos configure router`) offer a Mode dropdown with four options:
-**Smart routing (on-device)**, **Local ML — English-optimized (Pilot)**,
-**Smart routing (LLM-based)**, and **Off**. The "Judge model" field only
+`agentos configure router`) offer a Mode dropdown with three options:
+**Local ML — English-optimized (Pilot)**, **Smart routing (LLM-based)**, and
+**Off** — the legacy **Smart routing (on-device)** (`v4_phase3`) option is no
+longer offered. The "Judge model" field only
 appears when the LLM-based strategy is selected; the "Pilot safety net" field
 only appears when the Pilot strategy is selected — each is irrelevant to the
 other strategies.
@@ -223,12 +230,12 @@ If routing does not appear to work:
    agentos doctor
    ```
 
-3. If Pilot Router optional ML dependencies (`lightgbm`, `joblib`,
-   `scikit-learn`, `onnxruntime` — install via `uv sync --extra recommended`
+3. If Pilot Router optional ML dependencies (`numpy`, `onnxruntime`,
+   `tokenizers` — install via `uv sync --extra recommended`
    or the `ml-router` extra) or the local model bundle are missing, the
-   `v4_phase3` strategy degrades to the default tier rather than failing the
-   turn (the `pilot-v1` strategy degrades the same way — `pilot_unavailable`
-   → default tier — when its model bundle is missing); AgentOS can also still
+   default `pilot-v1` strategy degrades to the default tier rather than
+   failing the turn (it tags the decision `pilot_unavailable` — the same
+   graceful degrade the legacy `v4_phase3` used); AgentOS can also still
    run with direct single-model routing, or switch `strategy` to `llm_judge`
    to route without any local ML bundle at all. On Windows, ONNX Runtime may
    require the Visual C++ Redistributable.

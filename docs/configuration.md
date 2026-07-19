@@ -159,10 +159,11 @@ Router runtime dependencies (`onnxruntime`, `numpy`, `tokenizers`) stay in the
 `v4_phase3` precedent): a minimal install without them does not fail — the
 router degrades to the default tier and emits `pilot_unavailable` telemetry.
 
-All three strategies are also selectable from the Mode dropdown in onboarding
-(Web UI wizard and CLI), a four-option selector: **Local ML — English-optimized
-(Pilot)** (`pilot-v1`, the default), **Smart routing (on-device)** (`v4_phase3`),
-**Smart routing (LLM-based)** (`llm_judge`), or **Off**. The "Judge model" field
+The supported strategies are also selectable from the Mode dropdown in
+onboarding (Web UI wizard and CLI), a three-option selector: **Local ML —
+English-optimized (Pilot)** (`pilot-v1`, the default), **Smart routing
+(LLM-based)** (`llm_judge`), or **Off**. The legacy **Smart routing
+(on-device)** (`v4_phase3`) option is no longer offered. The "Judge model" field
 only appears for the LLM-based strategy; the "Pilot safety net" field only
 appears for the Pilot strategy.
 
@@ -181,8 +182,7 @@ next config load AgentOS **automatically migrates** any config still pinning
 
 There is no supported way to keep `v4_phase3` in config — the legacy engine
 remains in-tree only as an evaluation baseline until its scheduled removal
-(Phase C). Selecting **Smart routing (on-device)** in onboarding therefore
-resolves to `pilot-v1` on the next load.
+(Phase C), and onboarding no longer offers it as a Mode option.
 
 #### Pilot strategy settings
 

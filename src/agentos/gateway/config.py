@@ -1098,7 +1098,8 @@ class AgentOSRouterConfig(BaseSettings):
     # Judge-internal timeout (seconds). None derives it from
     # routing_timeout_seconds, staying strictly below the outer router budget.
     judge_timeout_seconds: float | None = Field(default=None, gt=0.0)
-    # Local ML router (strategy="v4_phase3"). v4_bundle_dir overrides the bundled
+    # Legacy local ML router (strategy="v4_phase3", eval baseline only; the
+    # default is "pilot-v1"). v4_bundle_dir overrides the bundled
     # asset root (agentos_router/models/v4.2_phase3_inference); v4_use_aux_head
     # overrides the bundle's router.runtime.yaml aux-head flag when set.
     v4_bundle_dir: str | None = None  # V4 Phase 3 bundle root; defaults to bundled assets
