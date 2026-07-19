@@ -10,7 +10,7 @@ Row format:
 ## Cross-cutting
 | behavior | legacy source | status | evidence / reason |
 | --- | --- | --- | --- |
-| Theme persistence + system-default resolution | js/theme.js:8-38 | pending | |
+| Theme persistence + system-default resolution | js/theme.js:8-38 | ported | theme.test.ts::theme store > initTheme applies stored preference; set persists and applies; toggle flips the mode; rejects invalid modes |
 | Theme flash prevention inline script | templates/index.html (head) | pending | |
 | WS handshake: connect.challenge -> connect(protocol 3) -> HelloOk+policy | js/rpc.js:87-127 | ported | ws-rpc.test.ts::handshake > answers connect.challenge with a protocol-3 connect request incl. auth token; enters connected state and stores policy on HelloOk |
 | WS req/res correlation + typed errors (code/details) | js/rpc.js:45-147 | ported | ws-rpc.test.ts::call correlation > resolves with payload on ok res, matching by id; rejects with RpcError carrying code and details; rejects immediately when not connected; rejects all pending calls when the socket closes |
@@ -24,6 +24,8 @@ Row format:
 | Document title per route ("<Title> - AgentOS Control") | js/router.js:68-71 | pending | |
 | Nav active state + aria-current | js/router.js:59-66 | pending | |
 | Bootstrap data: version/ws_url/auth_mode/base_path/config_path/features | control_ui.py:_build_bootstrap_context | ported | test_control_ui_bootstrap.py::test_bootstrap_returns_json_context |
+| Bootstrap consumption: fetch /api/bootstrap, connect WS (stored wsUrl/wsToken override), mirror _state into connection store | js/app.js (bootstrap fetch + ws connect) | ported | lib/bootstrap.ts + app/providers.tsx; covered indirectly by Task 7/8 tests |
+| Stored WS override wins over bootstrap ws_url (agentos.wsUrl / agentos.wsToken) | js/app.js | ported | app/providers.tsx (WS_URL_KEY/WS_TOKEN_KEY); covered indirectly by Task 7/8 tests |
 | noscript message | templates/index.html | pending | |
 | Feature flag AGENTOS_FEATURES.tokenViz (default false) | js/app.js:6-9 | pending | |
 | Custom base_path support for built assets | control_ui.py + vite base | pending | cutover-plan item |
