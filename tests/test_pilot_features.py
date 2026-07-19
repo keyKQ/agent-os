@@ -328,3 +328,29 @@ def test_third_party_notices_cover_bundled_minilm_export():
         "all-MiniLM-L6-v2" in heading.splitlines()[0]
         for heading in notices_text.split("## ")[1:]
     )
+
+
+# --- THIRD_PARTY_NOTICES.md must cover the checked-in WildChat golden set ----
+
+_GOLDEN_SET_REL = "tests/test_agentos_router/data/pilot_golden.jsonl"
+
+
+def test_third_party_notices_cover_wildchat_golden_set():
+    """The Pilot golden evaluation set is git-tracked and its rows are derived
+    from WildChat-1M (ODC-BY 1.0); THIRD_PARTY_NOTICES.md must attribute it
+    (dataset id, ODC-BY license, the checked-in golden-set path) so the
+    obligation promised in ``scripts/pilot_router/DATA.md`` §1 is satisfied."""
+    notices_text = (_REPO_ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+
+    # The WildChat-derived golden set actually ships in the tree.
+    assert (_REPO_ROOT / _GOLDEN_SET_REL).is_file()
+
+    assert "allenai/WildChat-1M" in notices_text
+    assert "ODC-BY" in notices_text
+    assert _GOLDEN_SET_REL in notices_text
+
+    # The section must live under its own heading (not merely mentioned in the
+    # intro bullet list), mirroring the MiniLM guard above.
+    assert any(
+        "WildChat" in heading.splitlines()[0] for heading in notices_text.split("## ")[1:]
+    )

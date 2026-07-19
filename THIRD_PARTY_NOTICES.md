@@ -20,6 +20,9 @@ AgentOS. It covers:
 - The bundled all-MiniLM-L6-v2 INT8 ONNX export under
   `src/agentos/memory/models/embeddings/all-MiniLM-L6-v2-int8/`, used by the
   Pilot router's feature builder.
+- The checked-in Pilot router golden evaluation set under
+  `tests/test_agentos_router/data/pilot_golden.jsonl`, whose rows are derived
+  from the WildChat-1M dataset (ODC-BY 1.0).
 - The built-in tokenjuice tool-result projection backend and bundled
   reduction rules under `src/agentos/plugins/tokenjuice/`.
 - The cron prompt-injection scanner was reviewed against Hermes Agent
@@ -359,6 +362,33 @@ upstream Hugging Face revision and tokenizer recorded in the export's own
 The entire AgentOS repository is licensed under the Apache License 2.0 (see
 `LICENSE`), so the upstream license terms apply uniformly; the full license
 text is included in the `LICENSE` file at the repository root.
+
+## WildChat-1M (Pilot router golden evaluation set)
+
+- Component: the Pilot router's checked-in golden evaluation set,
+  `tests/test_agentos_router/data/pilot_golden.jsonl`. Its rows are derived from
+  the WildChat-1M dataset.
+- Upstream dataset: https://huggingface.co/datasets/allenai/WildChat-1M
+- Publisher: Allen Institute for AI (AI2)
+- License: ODC-BY 1.0 (Open Data Commons Attribution License)
+- License text: https://opendatacommons.org/licenses/by/1-0/
+
+The WildChat-1M dataset is released by AI2 under the Open Data Commons
+Attribution License (ODC-BY) 1.0. The Pilot router training corpus is sampled
+from WildChat-1M, and the corpus rows themselves are **never** committed to this
+repository (they live only under the git-ignored `scripts/pilot_router/data/`;
+see `scripts/pilot_router/DATA.md` for the full corpus provenance and license
+gate). The one WildChat-derived data file that **is** checked in is the golden
+evaluation set `tests/test_agentos_router/data/pilot_golden.jsonl` — a small set
+of user-turn rows drawn from WildChat and used as a routing-quality regression
+fixture.
+
+ODC-BY 1.0 is a permissive open-data license whose substantive obligation is
+attribution: any public use of the database or a work produced from it must keep
+the attribution notice and the ODC-BY notice intact. It imposes no share-alike /
+copyleft requirement and no restriction on commercial use. This notice, together
+with the ODC-BY reference above, provides that attribution for the checked-in
+WildChat-derived golden-set rows.
 
 ## Vendored Web UI JavaScript libraries
 
