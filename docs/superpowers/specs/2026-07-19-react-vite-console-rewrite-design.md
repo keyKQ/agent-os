@@ -115,7 +115,76 @@ Packaging rules:
   delete `static/js/`, `static/css/`, `static/vendor/`, Jinja template;
   update docs and notices; wire release pipeline.
 
-## 6. Data flow & error handling
+## 6. Migration protocol — nothing left behind
+
+The rewrite follows a strict inventory → implement → verify-parity loop.
+No behavior is dropped silently: everything is either ported, or recorded
+as an explicit waiver with a reason.
+
+### 6.1 Global behavior inventory (before Layer 1 starts)
+
+Produce a **parity matrix** — one committed file
+(`docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md`)
+that is the single source of truth for migration completeness. Built by
+reading every legacy file plus mechanical extraction (grep/scripts), it
+enumerates per legacy module:
+
+- **RPC surface:** every RPC method called (extracted mechanically from
+  `rpc.call(`/method-name usage), with params/response shape notes.
+- **Server-push events** subscribed, and what each invalidates/updates.
+- **Routes & URL state:** all 13 routes, query params, deep-link behavior.
+- **Browser state:** every localStorage/sessionStorage key
+  (`agentos.wsUrl`, `agentos.wsToken`, `agentos-theme`, + any found),
+  clipboard use, file upload/download, drag-drop, keyboard shortcuts.
+- **UI behaviors per view:** every user-visible behavior, loading/empty/
+  error states, polling/refresh cadence, optimistic updates, confirmation
+  dialogs, toasts.
+- **Cross-cutting features:** theme + flash prevention, mobile/responsive
+  behaviors (`mobile.css`), markdown rendering + sanitization rules
+  (DOMPurify config!), Prism highlighting languages, approval-monitor
+  background behavior, connection-loss UX, auth modes, feature flags
+  (`AGENTOS_FEATURES.tokenViz`), favicon/meta/noscript.
+
+Each matrix row: `behavior | legacy source (file:line) | status
+(pending / ported / waived) | evidence (test name or verification note)`.
+
+### 6.2 Per-view protocol (repeated for all 13 views)
+
+1. **Inventory:** read the legacy view fully; fill its matrix rows before
+   writing any React code. The legacy file is the behavioral spec.
+2. **Implement** against the matrix rows (tests written per TDD where
+   logic warrants it).
+3. **Parity review:** a reviewer (subagent) compares legacy source vs new
+   implementation row by row; every row gets `ported` + evidence, or
+   `waived` + reason. A view is **done only when its matrix section has
+   zero `pending` rows.**
+
+### 6.3 Mechanical completeness checks (scripted, run at cutover)
+
+- **RPC coverage diff:** script extracts the set of RPC methods used by
+  legacy JS and the set used by the new TS client; the diff must be empty
+  or every difference waived in the matrix.
+- **Route diff:** all legacy `Router.register` routes exist in the new
+  router.
+- **Storage-key diff:** all legacy storage keys are consumed or retired
+  with a waiver.
+- **Asset diff:** every file under legacy `fonts/`, `img/` is present in
+  the new build output or waived.
+
+### 6.4 Cutover gate (all must hold before deleting legacy)
+
+1. Parity matrix: zero `pending` rows across all views and cross-cutting
+   sections; all waivers reviewed by the repo owner.
+2. Mechanical diffs (6.3) clean.
+3. FE quality gate green; Python gateway tests green (2,358 baseline).
+4. Manual smoke pass of all 13 views against a live gateway (checklist in
+   the matrix), both themes, desktop + narrow viewport.
+5. Docs, AGENTS.md FE lane, THIRD_PARTY_NOTICES updated.
+
+Only then does Layer 3 delete `static/js`, `static/css`, `static/vendor`
+and the Jinja template — in the same PR that flips serving to `dist/`.
+
+## 7. Data flow & error handling
 
 - **WsRpcClient** (singleton, typed): auto-reconnect with backoff,
   request/response correlation, server-push event subscription, auth token
@@ -131,7 +200,7 @@ Packaging rules:
   reconnect (same UX as legacy `_bindConnectionState`). RPC errors → toast
   + per-view inline error states.
 
-## 7. Testing & quality gate
+## 8. Testing & quality gate
 
 - **Vitest + React Testing Library** per view/component; `WsRpcClient`
   tested against a mock WebSocket.
@@ -144,7 +213,7 @@ Packaging rules:
 - **Python gate unchanged:** existing gateway tests (2,358 passing at
   baseline in this worktree) must stay green; no RPC surface changes.
 
-## 8. Open-source obligations
+## 9. Open-source obligations
 
 - **THIRD_PARTY_NOTICES.md:** all npm dependencies bundled into `dist/`
   (React, TanStack Query, Zustand, Radix/shadcn, Tailwind runtime output,
@@ -157,7 +226,7 @@ Packaging rules:
   updates `src/agentos/skills/bundled/agentos/SKILL.md` + `docs/cli.md` in
   the same change (none anticipated, but the rule binds if one appears).
 
-## 9. Out of scope
+## 10. Out of scope
 
 - Playwright E2E (optional follow-up).
 - Any RPC/backend behavior change.
