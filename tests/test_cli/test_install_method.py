@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,11 @@ def test_editable_checkout_detected(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="hardened login-dir PATH semantics are POSIX-specific; "
+    "Windows resolution uses standard which/PATHEXT",
+)
 def test_hardened_path_appends_login_dirs() -> None:
     env = {"PATH": "/custom/bin", "HOME": "/home/u"}
     out = im.hardened_path_env(env)
@@ -74,6 +80,11 @@ def test_hardened_path_no_duplicates() -> None:
     assert parts.count("/opt/homebrew/bin") == 1
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="hardened login-dir PATH semantics are POSIX-specific; "
+    "Windows resolution uses standard which/PATHEXT",
+)
 def test_resolve_tool_uses_hardened_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -93,6 +104,34 @@ def test_resolve_tool_uses_hardened_path(
 
 def test_resolve_tool_missing_returns_none() -> None:
     assert im.resolve_tool("definitely-not-a-real-tool-xyz", {"PATH": "/nonexistent"}) is None
+
+
+def test_resolve_tool_falls_back_to_which(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cross-platform: resolve_tool defers to shutil.which and returns its hit.
+
+    Runs on both POSIX and Windows — shutil.which is mocked so no real binary
+    (or PATHEXT / executable-bit) semantics are involved, only that resolve_tool
+    hardens the PATH, delegates to which, and returns the absolute path without
+    crashing.
+    """
+
+    seen: dict[str, object] = {}
+    resolved_path = str(Path("some") / "abs" / "uv")
+
+    def fake_which(tool: str, path: str | None = None) -> str:
+        seen["tool"] = tool
+        seen["path"] = path
+        return resolved_path
+
+    monkeypatch.setattr(im.shutil, "which", fake_which)
+    result = im.resolve_tool("uv", {"PATH": "/base", "HOME": "/home/u"})
+
+    assert result == str(Path(resolved_path).resolve())
+    assert seen["tool"] == "uv"
+    # resolve_tool hardens the PATH before delegating, so which sees the
+    # augmented PATH, not the bare base.
+    assert isinstance(seen["path"], str)
+    assert "/base" in seen["path"] or "\\base" in seen["path"]
 
 
 def test_build_plan_uv_tool_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
