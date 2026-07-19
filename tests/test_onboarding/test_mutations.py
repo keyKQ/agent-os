@@ -604,6 +604,21 @@ def test_upsert_router_recommended_respects_custom_local_tiers():
     assert router.tiers["c3"]["model"] == "qwen3.5:latest"
 
 
+def test_upsert_router_disabled_keeps_local_pinned_tiers_in_config():
+    """Choosing Off must not resurrect openrouter tiers in a local config."""
+    cfg = GatewayConfig()
+    provider_res = upsert_llm_provider(
+        cfg, provider_id="ollama", model="qwen3.5:2b", base_url="http://localhost:11434"
+    )
+
+    res = upsert_router(provider_res.config, mode="disabled")
+
+    assert res.config.agentos_router.enabled is False
+    persisted = res.config.to_toml_dict().get("agentos_router", {}).get("tiers", {})
+    assert persisted, "local pin must stay persisted while the router is off"
+    assert all(t.get("provider") == "ollama" for t in persisted.values())
+
+
 def test_upsert_router_recommended_still_disables_unknown_nonlocal_provider():
     # Non-local providers without a tier profile keep today's disable behavior.
     cfg = GatewayConfig(llm={"provider": "anthropic", "model": "claude-sonnet-4-6"})

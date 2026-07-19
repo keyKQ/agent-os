@@ -609,6 +609,18 @@ def upsert_router(
     if router_mode == "disabled":
         router_payload["enabled"] = False
         router_payload["tier_profile"] = None
+        if is_local_provider(provider):
+            # Keep a local pin in the persisted config while the router is off:
+            # dropping the tiers here would resurrect the openrouter defaults
+            # via the config default factory, leaving a local config that lies
+            # about its providers.
+            current_tiers = {
+                name: dict(tier)
+                for name, tier in (config.agentos_router.tiers or {}).items()
+                if isinstance(tier, dict)
+            }
+            if current_tiers:
+                router_payload["tiers"] = current_tiers
         public_payload.update({"enabled": False, "tier_profile": None})
     elif router_mode == "openrouter-mix":
         if provider != "openrouter":
