@@ -27,13 +27,13 @@ def test_skills_view_browses_community_catalog_without_source_picker() -> None:
     assert "_communitySeq" in view
 
 
-def test_skills_view_bankr_tab_is_flag_gated_and_hidden_by_default() -> None:
+def test_skills_view_bankr_tab_is_flag_gated_and_shown_by_default() -> None:
     view = Path("src/agentos/gateway/static/js/views/skills.js").read_text(encoding="utf-8")
 
-    # The Bankr partner tab is behind a flag that is off by default (hidden
-    # from the UI) while the browse machinery stays wired for when it returns.
-    assert "const _SHOW_BANKR = false;" in view
-    assert 'data-tab="bankr"' in view  # markup preserved behind the flag
+    # The Bankr partner tab is behind a flag that is on by default (shown in
+    # the UI); the flag stays in place so the tab can be toggled off again.
+    assert "const _SHOW_BANKR = true;" in view
+    assert 'data-tab="bankr"' in view  # markup gated behind the flag
     assert "Bankr partner catalog" in view
     assert "params.source = 'bankr'" in view
     # Community only excludes Bankr while the Bankr tab is showing; otherwise
