@@ -4,7 +4,7 @@ const SkillsView = (() => {
   // Show/hide the Bankr partner tab in the Skills view. Set to true to bring
   // the tab back — the BankrSource backend (browse/search/install) stays wired
   // either way, so Bankr skills remain reachable via the Community tab / CLI.
-  const _SHOW_BANKR = false;
+  const _SHOW_BANKR = true;
 
   let _el = null;
   let _rpc = null;

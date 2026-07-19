@@ -23,7 +23,7 @@ import time
 import structlog
 
 from agentos.env import trust_env as _trust_env
-from agentos.skills.hub.github import GitHubSource
+from agentos.skills.hub.github import GitHubSource, _frontmatter_field
 from agentos.skills.hub.source import SkillBundle, SkillMeta, SkillSource
 
 log = structlog.get_logger(__name__)
@@ -197,14 +197,22 @@ class BankrSource(SkillSource):
         return metas
 
     async def _load_catalog_entry(self, client, slug: str) -> SkillMeta | None:
-        """Fetch and parse one skill's catalog.json. Skips on any error.
+        """Fetch and parse one skill's catalog.json, then SKILL.md. Skips on
+        catalog error.
 
-        Only catalog.json is fetched (one request per skill) to keep browsing
-        fast; the description is filled in later at fetch()/install time.
+        Only *installable* skills get the second SKILL.md fetch — external
+        installs and malformed catalogs are discarded first, so we never spend
+        a request on a skill that won't be listed. The description is
+        load-bearing for browse search (it feeds the ``_matches`` haystack), so
+        it is fetched eagerly here, not lazily per card; a failed description
+        fetch degrades to an empty string rather than dropping the skill.
+        Results are cached for the catalog TTL, so browsing stays a bounded
+        burst per refresh.
         """
-        url = f"{self._raw_base}/{slug}/catalog.json"
+        headers = self._github._headers()
+        catalog_url = f"{self._raw_base}/{slug}/catalog.json"
         try:
-            resp = await client.get(url, headers=self._github._headers())
+            resp = await client.get(catalog_url, headers=headers)
             resp.raise_for_status()
             catalog = json.loads(resp.content)
         except Exception as exc:
@@ -212,7 +220,26 @@ class BankrSource(SkillSource):
             return None
         if not isinstance(catalog, dict):
             return None
-        return self._meta_from_catalog(slug, catalog)
+        meta = self._meta_from_catalog(slug, catalog)
+        if meta is None:
+            return None
+        skill_md_url = f"{self._raw_base}/{slug}/SKILL.md"
+        meta.description = await self._load_description(client, slug, skill_md_url, headers)
+        return meta
+
+    async def _load_description(self, client, slug: str, url: str, headers: dict) -> str:
+        """Fetch SKILL.md and read its frontmatter description. Empty on error."""
+        try:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+        except Exception as exc:
+            log.warning("bankr.skill_md_failed", slug=slug, error=str(exc))
+            return ""
+        try:
+            text = resp.content.decode("utf-8")
+        except UnicodeDecodeError:
+            return ""
+        return _frontmatter_field(text, "description")
 
     def _meta_from_catalog(self, slug: str, catalog: dict) -> SkillMeta | None:
         """Build a browse-time SkillMeta from a parsed catalog.json.
@@ -220,9 +247,8 @@ class BankrSource(SkillSource):
         Returns ``None`` when the skill is not a directly-installable ``bankr``
         skill (e.g. an ``external`` install), so callers can skip it. The
         human-readable description lives in ``SKILL.md`` frontmatter
-        (``catalog.json`` has none); it is filled in at ``fetch()`` time to keep
-        browsing fast, so the browse card shows slug + provider + catalog
-        demo/setup, but no description.
+        (``catalog.json`` has none); ``_load_catalog_entry`` fills it in with a
+        follow-up SKILL.md fetch after this meta is built.
         """
         install = catalog.get("install")
         if not isinstance(install, dict) or install.get("type") != "bankr":

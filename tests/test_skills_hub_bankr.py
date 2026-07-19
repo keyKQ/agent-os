@@ -62,8 +62,13 @@ class _AsyncClient:
         "extern": _catalog("extern", install_type="external"),
         "broken": b"{ not json",
     }
+    skill_mds = {
+        "alchemy": b"---\nname: alchemy\ndescription: On-chain data APIs\n---\n# Alchemy\n",
+        "bankr": b"---\nname: bankr\ndescription: AI-powered crypto trading agent\n---\n# Bankr\n",
+    }
     tree_calls = 0
     catalog_calls = 0
+    skill_md_calls = 0
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -80,8 +85,14 @@ class _AsyncClient:
             return _Response(json_data={"tree": self.tree_entries, "truncated": False})
         marker = "raw.githubusercontent.com/BankrBot/skills/main/"
         if marker in url:
-            type(self).catalog_calls += 1
             slug = url.split(marker, 1)[1].split("/", 1)[0]
+            if url.endswith("/SKILL.md"):
+                type(self).skill_md_calls += 1
+                content = self.skill_mds.get(slug)
+                if content is None:
+                    return _Response(status_code=404)
+                return _Response(content=content)
+            type(self).catalog_calls += 1
             return _Response(content=self.catalogs.get(slug, b"{}"))
         raise AssertionError(f"unexpected URL: {url}")
 
@@ -90,6 +101,7 @@ class _AsyncClient:
 def _reset_client_counters() -> None:
     _AsyncClient.tree_calls = 0
     _AsyncClient.catalog_calls = 0
+    _AsyncClient.skill_md_calls = 0
 
 
 @pytest.mark.asyncio
@@ -145,6 +157,40 @@ async def test_search_carries_catalog_setup_demo_and_category(monkeypatch) -> No
     assert _infer_category("uniswap", "Uniswap") == "trading"
     assert _infer_category("aeon-defi-monitor", "Aeon") == "defi"
     assert _infer_category("zzz-unknown", "Nobody") == "other"
+
+
+@pytest.mark.asyncio
+async def test_search_fills_description_from_skill_md_frontmatter(monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _AsyncClient)
+
+    results = await BankrSource().search("")
+    by_name = {r.name: r for r in results}
+
+    assert by_name["bankr"].description == "AI-powered crypto trading agent"
+    assert by_name["alchemy"].description == "On-chain data APIs"
+    # SKILL.md is fetched only for installable skills — external installs and
+    # broken catalogs never trigger a description fetch.
+    assert _AsyncClient.skill_md_calls == 2
+
+
+class _MissingSkillMdClient(_AsyncClient):
+    skill_mds: dict[str, bytes] = {}
+
+
+@pytest.mark.asyncio
+async def test_missing_skill_md_keeps_skill_with_empty_description(monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MissingSkillMdClient)
+
+    results = await BankrSource().search("")
+    by_name = {r.name: r for r in results}
+
+    # A failed SKILL.md fetch must not drop the skill from the listing.
+    assert set(by_name) == {"alchemy", "bankr"}
+    assert by_name["bankr"].description == ""
 
 
 @pytest.mark.asyncio
