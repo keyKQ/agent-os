@@ -1,0 +1,166 @@
+# AgentOS Control UI — React 19 + Vite 6 Rewrite (Design)
+
+Date: 2026-07-19
+Status: Approved design, pending implementation plan
+Branch: `worktree-fe-core-swap` (to be rebranded `feat/...` at PR time)
+
+## 1. Goal
+
+Replace the current vanilla-JS control console (~21,200 lines JS, ~13,500
+lines CSS, 13 views, no build step) with a full rewrite on:
+
+- **React 19 + Vite 6**, **TypeScript strict**
+- **TanStack Query** (server state over WS-RPC) + **Zustand** (client state)
+- **shadcn/ui + Tailwind v4** as the UI foundation (code-owned components)
+- **ESLint + Prettier + tsc + Vitest/RTL** quality gate, wired into CI and
+  AGENTS.md
+
+Strategy: **single-branch full rewrite with one cutover**. No period of the
+two frontends coexisting on `main`. Playwright E2E is an optional follow-up,
+not part of this rewrite.
+
+This is a technical rewrite that also adopts a component library: each view
+keeps the *behavior and information structure* of its legacy counterpart
+(legacy `static/js/views/*.js` files are the behavioral spec) but is rebuilt
+on shadcn components — not a pixel-faithful port.
+
+## 2. Current state (what is being replaced)
+
+- `src/agentos/gateway/static/` — `js/` (app.js, router.js, rpc.js,
+  components.js, theme.js, markdown.js, icons.js, approval_monitor.js +
+  13 `views/*.js`; `chat.js` alone is 8,841 lines), `css/` (base,
+  components, mobile, prism + per-view css), `vendor/` (marked, purify,
+  prism), `fonts/`, `img/`.
+- Served by `src/agentos/gateway/control_ui.py`: Starlette mount at
+  `{base_path}/static` (`_CachedStaticFiles`, 30-day Cache-Control,
+  `?v=` cache-busting), Jinja2 `templates/index.html` with SPA fallback,
+  bootstrap data injected as data-attributes on `#agentos-data`.
+- Backend interface: WebSocket-RPC at `/ws` (plus `/api/*` REST). The
+  rewrite changes **no** RPC surface — the new FE is a different consumer
+  of the same protocol.
+
+## 3. Repository layout & packaging
+
+```
+frontend/                          # React source — NOT packaged in the wheel
+  index.html                       # Vite entry (carries theme flash-prevention inline script)
+  package.json, vite.config.ts, tsconfig.json,
+  eslint/prettier/vitest configs, tailwind config (v4, CSS-first)
+  src/
+    main.tsx                       # entry; mounts app
+    app/                           # AppShell, React Router routes, providers
+    lib/                           # WsRpcClient, bootstrap, markdown, icons, utils
+    components/                    # shared UI incl. shadcn/ui components (code-owned)
+    views/                         # 13 view modules: overview, health, chat, sessions,
+                                   # agents, cron, usage, config, setup, channels,
+                                   # approvals, skills, logs
+    styles/                        # Tailwind entry + design tokens (CSS variables)
+
+src/agentos/gateway/static/dist/   # Vite build output — packaged & served
+                                   # (legacy static/fonts/ and static/img/ move into
+                                   # frontend/ as source assets and are emitted into dist/)
+```
+
+Packaging rules:
+
+- `pyproject.toml` uses `packages = ["src/agentos"]`, so everything under
+  `static/dist/` enters the wheel automatically — no force-include needed.
+- `frontend/` sits outside `src/agentos/`, so React source never enters the
+  wheel.
+- **`dist/` is gitignored.** The release pipeline runs
+  `npm ci && npm run build` (in `frontend/`) *before* `hatch build`, so
+  published wheels always contain a fresh `dist/`. Contributors running from
+  source either run `npm run build` once or use the Vite dev server.
+  A guard in the release workflow fails the build if `dist/` is missing or
+  empty. This is the Jupyter/Streamlit/Gradio pattern.
+
+## 4. Build/serve integration
+
+- **Dev:** `vite dev` with HMR; proxies `/ws` and `/api` (and
+  `{base_path}/api`) to a running gateway. Python-only contributors never
+  need Node.
+- **Prod:** `control_ui.py` serves `static/dist/` — Vite-generated
+  `index.html` as the SPA fallback response, hashed assets under
+  `{base_path}/static/`. Keep: base path `/control`, SPA fallback, cache
+  headers (Vite content-hashing makes the `?v=` scheme unnecessary for
+  hashed assets; keep no-cache on `index.html` itself).
+- **Bootstrap data:** replace Jinja data-attr injection with
+  `GET {base_path}/api/bootstrap` returning `{version, ws_url, auth_mode,
+  base_path, ...}` as JSON; the app fetches it at startup before opening the
+  WS. Jinja templating of `index.html` is removed. (`ws_url` derivation
+  logic in `_request_ws_url` moves to/behind this endpoint unchanged.)
+- Theme flash prevention: the inline `data-theme` script currently in the
+  Jinja template is preserved verbatim in Vite's `index.html`.
+
+## 5. Rewrite organization (layers, in order; each green before the next)
+
+- **Layer 0 — Foundation:** scaffold `frontend/` toolchain; Tailwind v4 +
+  shadcn/ui base components (Button, Card, Table, Dialog, Form, Select,
+  Toast, …); design tokens (colors, spacing, Inter / JetBrains Mono
+  self-hosted fonts) extracted from legacy `base.css` into CSS variables;
+  typed `WsRpcClient` port of `rpc.js`; markdown pipeline (marked +
+  DOMPurify + Prism as npm deps, replacing `vendor/`); AppShell
+  (sidebar/nav/topbar/connection state) + React Router with all 13 routes
+  stubbed; approval-monitor equivalent.
+- **Layer 1 — 12 standard views**, smallest first: health → overview →
+  logs → approvals → channels → agents → sessions → usage → config →
+  skills → cron → setup. Each = components + TanStack Query hooks + RTL
+  tests. Read the legacy view fully before rewriting it.
+- **Layer 2 — Chat (8.8k lines), decomposed before writing:** message list
+  + streaming rendering, tool-activity display, composer, session
+  lifecycle, inline approvals, artifacts/publish, compact controls. Each
+  module its own component/hook with tests. Highest-risk layer; the
+  implementation plan must split it into many small reviewed tasks.
+- **Layer 3 — Cutover & removal:** point `control_ui.py` at `dist/`;
+  delete `static/js/`, `static/css/`, `static/vendor/`, Jinja template;
+  update docs and notices; wire release pipeline.
+
+## 6. Data flow & error handling
+
+- **WsRpcClient** (singleton, typed): auto-reconnect with backoff,
+  request/response correlation, server-push event subscription, auth token
+  handling per bootstrap `auth_mode` (localStorage keys preserved:
+  `agentos.wsUrl`, `agentos.wsToken`, `agentos-theme`).
+- **TanStack Query** wraps RPC calls (`queryKey` = method + params).
+  Server-push events map to `queryClient.invalidateQueries` — the direct
+  analogue of the legacy event-driven invalidation pattern.
+- **Zustand** stores: connection state, theme, sidebar, approval badge.
+- **Chat streaming** bypasses the Query cache: event stream → local
+  reducer state.
+- **Errors:** WS disconnect → status banner, queries pause, refetch on
+  reconnect (same UX as legacy `_bindConnectionState`). RPC errors → toast
+  + per-view inline error states.
+
+## 7. Testing & quality gate
+
+- **Vitest + React Testing Library** per view/component; `WsRpcClient`
+  tested against a mock WebSocket.
+- **Contract fixtures:** RPC payload fixtures derived from the Python
+  gateway tests (`tests/test_gateway` RPC shapes) so FE and BE cannot
+  silently diverge.
+- **FE gate:** `tsc --noEmit && eslint && prettier --check && vitest run`
+  — added to CI and documented as a new FE lane in AGENTS.md (Node
+  version pinned; Python-only changes don't require it).
+- **Python gate unchanged:** existing gateway tests (2,358 passing at
+  baseline in this worktree) must stay green; no RPC surface changes.
+
+## 8. Open-source obligations
+
+- **THIRD_PARTY_NOTICES.md:** all npm dependencies bundled into `dist/`
+  (React, TanStack Query, Zustand, Radix/shadcn, Tailwind runtime output,
+  marked, DOMPurify, Prism, …) must be listed; generate entries via a
+  license-checker script rather than by hand; the existing notices test
+  must cover them. Legacy `vendor/` entries are updated/removed
+  accordingly.
+- **AGENTS.md / docs:** `docs/web-ui.md` updated for the new serve layout
+  and dev workflow; per repo rule, any CLI/config surface change also
+  updates `src/agentos/skills/bundled/agentos/SKILL.md` + `docs/cli.md` in
+  the same change (none anticipated, but the rule binds if one appears).
+
+## 9. Out of scope
+
+- Playwright E2E (optional follow-up).
+- Any RPC/backend behavior change.
+- Visual redesign beyond what adopting shadcn/ui implies; feature additions.
+- `tokenViz` widget stays behind its feature flag: the flag and the legacy
+  behavior are ported (widget off by default), not redesigned.
