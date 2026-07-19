@@ -12,13 +12,13 @@ Row format:
 | --- | --- | --- | --- |
 | Theme persistence + system-default resolution | js/theme.js:8-38 | pending | |
 | Theme flash prevention inline script | templates/index.html (head) | pending | |
-| WS handshake: connect.challenge -> connect(protocol 3) -> HelloOk+policy | js/rpc.js:87-127 | pending | |
-| WS req/res correlation + typed errors (code/details) | js/rpc.js:45-147 | pending | |
-| WS event fan-out incl. wildcard '*' listener | js/rpc.js:148-154 | pending | |
-| WS seq-gap detection -> close+reconnect (_gap) | js/rpc.js:188-202 | pending | |
-| WS tick-watch (policy.tick_interval_ms, 2.5x timeout) | js/rpc.js:204-217 | pending | |
-| WS keepalive ping every 55s | js/rpc.js:172-179 | pending | |
-| WS reconnect backoff 800ms x1.7 max 15s | js/rpc.js:226-231 | pending | |
+| WS handshake: connect.challenge -> connect(protocol 3) -> HelloOk+policy | js/rpc.js:87-127 | ported | ws-rpc.test.ts::handshake > answers connect.challenge with a protocol-3 connect request incl. auth token; enters connected state and stores policy on HelloOk |
+| WS req/res correlation + typed errors (code/details) | js/rpc.js:45-147 | ported | ws-rpc.test.ts::call correlation > resolves with payload on ok res, matching by id; rejects with RpcError carrying code and details; rejects immediately when not connected; rejects all pending calls when the socket closes |
+| WS event fan-out incl. wildcard '*' listener | js/rpc.js:148-154 | ported | ws-rpc.test.ts::events > fans out to named and wildcard listeners with meta |
+| WS seq-gap detection -> close+reconnect (_gap) | js/rpc.js:188-202 | ported | ws-rpc.test.ts::events > detects a seq gap, emits _gap, and closes the socket |
+| WS tick-watch (policy.tick_interval_ms, 2.5x timeout) | js/rpc.js:204-217 | ported | ws-rpc.test.ts::keepalive and reconnect > closes the socket when no frame arrives within the tick timeout |
+| WS keepalive ping every 55s | js/rpc.js:172-179 | ported | ws-rpc.test.ts::keepalive and reconnect > sends a ping every 55s while open |
+| WS reconnect backoff 800ms x1.7 max 15s | js/rpc.js:226-231 | ported | ws-rpc.test.ts::keepalive and reconnect > reconnects with backoff after close (800ms first retry) |
 | Default route: /overview desktop, /chat on <=768px | js/router.js:32 | pending | |
 | 404 route fallback rendered as text (XSS-safe) | js/router.js:48-55 | pending | |
 | Document title per route ("<Title> - AgentOS Control") | js/router.js:68-71 | pending | |
