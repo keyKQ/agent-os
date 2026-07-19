@@ -350,10 +350,15 @@ Managed:
 
 ```sh
 agentos gateway start --json
-agentos gateway status
+agentos gateway status   # shows both the CLI and running-gateway versions
 agentos gateway stop
 agentos gateway restart
 ```
+
+`agentos gateway status` reports the installed CLI version and the running
+gateway's version; when they differ it appends a mismatch line advising a
+restart (typically after `agentos upgrade --no-restart` or a manual package
+upgrade).
 
 Bind precedence:
 
@@ -363,6 +368,29 @@ Bind precedence:
 4. `AGENTOS_GATEWAY_HOST`
 5. config host
 6. `127.0.0.1`
+
+## Update Notifications
+
+On commands that connect to the gateway, the CLI checks PyPI at most once every
+24h and, if a newer release of `use-agent-os` exists, prints a one-line notice
+on stderr suggesting `agentos upgrade`. The check is silent on failure and is
+suppressed on non-interactive runs (no TTY) and in CI.
+
+```toml
+[updates]
+notify = true   # set false to silence the "new release available" notice
+```
+
+`updates.notify` defaults to `true`. Set it from the setup UI (Finish step →
+Updates), with `agentos config` (a `config.patch` on `updates.notify`), or by
+editing the config file directly. The state file
+`~/.agentos/state/update_notice.json` tracks the last check time for
+throttling; delete it to force a re-check. To silence the notice for a single
+run without changing config, set `AGENTOS_NO_UPDATE_NOTICE=1`.
+
+Related: `agentos upgrade` (the primary upgrade path), the version-skew policy,
+and the `AGENTOS_ALLOW_VERSION_SKEW=1` escape hatch are documented in the
+[README Upgrade section](../README.md#upgrade).
 
 ## Raw Config Editing
 

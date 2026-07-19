@@ -1500,4 +1500,23 @@ def test_setup_view_memory_settings_card_saves_via_config_patch():
     assert "memory.curated_memory_char_limit" in body
     assert "memory.curated_user_char_limit" in body
     assert "memory.inject_limit" in body
+
+
+def test_setup_view_has_update_notify_toggle():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    # The toggle renders in the finish step and reflects config.updates.notify.
+    assert "data-updates-notify" in txt
+    assert "_config.updates" in txt
+    assert "new release of use-agent-os" in txt
+
+
+def test_setup_view_saves_update_notify_via_config_patch():
+    txt = (VIEWS / "setup.js").read_text(encoding="utf-8")
+    start = txt.index("async function _saveUpdatesNotify()")
+    end = txt.index("\n  }", start)
+    body = txt[start:end]
+    assert "'config.patch'" in body
+    assert "'updates.notify'" in body
+    # Bound to a click handler in _bindStep.
+    assert "data-save-updates-notify" in txt
     assert "data-save-memory-settings" in txt
