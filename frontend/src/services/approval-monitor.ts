@@ -336,9 +336,11 @@ export class ApprovalMonitor {
       })
       if (!resp.ok) throw new Error('HTTP ' + resp.status)
       if (elevatedMode) setBrowserElevated(elevatedMode)
-      // approval_monitor.js:207-211 — outcome toast (info on approve, warn on deny).
+      // approval_monitor.js:207-211 — outcome toast. Legacy tone is
+      // `approved ? 'info' : 'warn'`; a bypass sets approved=true → 'info', and
+      // the port maps info→toast.success. So bypass toasts success, not warning.
       if (elevatedMode) {
-        toast.warning('Approval bypass enabled', { id: 'approval-outcome', duration: 2500 })
+        toast.success('Approval bypass enabled', { id: 'approval-outcome', duration: 2500 })
       } else if (approved) {
         toast.success('Approval granted', { id: 'approval-outcome', duration: 2500 })
       } else {

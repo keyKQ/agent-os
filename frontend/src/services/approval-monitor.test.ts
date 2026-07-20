@@ -402,7 +402,10 @@ describe('approval-monitor service', () => {
       expect(body.elevatedMode).toBe('bypass')
       expect(localStorage.getItem(ELEVATED_MODE_KEY)).toBe('bypass')
       expect(localStorage.getItem(ELEVATED_MODE_VERSION_KEY)).toBe('2')
-      expect(toast.warning).toHaveBeenCalledWith('Approval bypass enabled', expect.anything())
+      // approval_monitor.js:208-209 — bypass sets approved=true → legacy 'info'
+      // tone, which the port maps to toast.success (not warning).
+      expect(toast.success).toHaveBeenCalledWith('Approval bypass enabled', expect.anything())
+      expect(toast.warning).not.toHaveBeenCalledWith('Approval bypass enabled', expect.anything())
     })
 
     it('maps "deny" to approved:false and warns', async () => {
