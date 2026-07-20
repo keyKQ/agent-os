@@ -307,8 +307,10 @@ export function AppShell() {
           </Button>
         </header>
         <main className="min-h-0 flex-1 overflow-auto">
-          {/* Common container: every view fills and centers identically. */}
-          <div className="view-container">
+          {/* Common container: every view fills and centers identically.
+              `key` on the route path makes React remount the wrapper on
+              navigation, so the .view-enter animation replays per view. */}
+          <div key={location.pathname} className="view-container view-enter">
             <Outlet />
           </div>
         </main>

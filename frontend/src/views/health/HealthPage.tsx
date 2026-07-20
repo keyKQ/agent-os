@@ -424,7 +424,8 @@ export function HealthPage() {
         </Button>
       </header>
       {railNode}
-      <section className="health-findings" aria-label="Health findings">
+      {/* boot-seq: finding groups reveal in sequence like a TTY drawing rows. */}
+      <section className="health-findings boot-seq boot-auto" aria-label="Health findings">
         {findingsNode}
       </section>
     </div>

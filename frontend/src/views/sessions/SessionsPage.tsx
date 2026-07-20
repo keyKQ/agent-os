@@ -2,6 +2,7 @@ import './sessions.css'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
+import { listItemVariants, SUBTLE_EASE } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
@@ -248,6 +250,7 @@ type Dialog =
 
 export function SessionsPage() {
   const rpc = useRpc()
+  const reduceMotion = useReducedMotion()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -650,109 +653,130 @@ export function SessionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {slice.map((row) => {
-                  const key = row.key ?? ''
-                  const visual = sessionVisualStatus(row)
-                  const statusTone = dotTone(visual)
-                  const statusLabel = sessionStatusLabel(visual)
-                  const chipTone: Tone = sessionStatusChip(visual)
-                  const badge = runStatusBadge(row)
-                  const agentId = row.agent_id || row.agentId || agentIdFromKey(key) || ''
-                  const sub = agentSubline(agentId, agentsById, agentsLoaded)
-                  const isSel = selected.has(key)
-                  return (
-                    <tr key={key} className={isSel ? 'is-selected' : ''}>
-                      <td className="sess-table__cell--check">
-                        <input
-                          type="checkbox"
-                          aria-label={`Select session ${key}`}
-                          checked={isSel}
-                          onChange={(e) => toggleRow(key, e.target.checked)}
-                        />
-                      </td>
-                      <td className="sess-table__cell--key">
-                        <div className="sess-key-content">
-                          <span
-                            className={`sess-dot tone-${statusTone}`}
-                            title={statusLabel}
-                            aria-hidden="true"
+                <AnimatePresence initial={false}>
+                  {slice.map((row) => {
+                    const key = row.key ?? ''
+                    const visual = sessionVisualStatus(row)
+                    const statusTone = dotTone(visual)
+                    const statusLabel = sessionStatusLabel(visual)
+                    const chipTone: Tone = sessionStatusChip(visual)
+                    const badge = runStatusBadge(row)
+                    const agentId = row.agent_id || row.agentId || agentIdFromKey(key) || ''
+                    const sub = agentSubline(agentId, agentsById, agentsLoaded)
+                    const isSel = selected.has(key)
+                    const rowClass = isSel ? 'is-selected' : undefined
+                    const rowContent = (
+                      <>
+                        <td className="sess-table__cell--check">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select session ${key}`}
+                            checked={isSel}
+                            onChange={(e) => toggleRow(key, e.target.checked)}
                           />
-                          <button
-                            type="button"
-                            className="sess-key-link t-data"
+                        </td>
+                        <td className="sess-table__cell--key">
+                          <div className="sess-key-content">
+                            <span
+                              className={`sess-dot tone-${statusTone}`}
+                              title={statusLabel}
+                              aria-hidden="true"
+                            />
+                            <button
+                              type="button"
+                              className="sess-key-link t-data"
+                              title="Open chat"
+                              onClick={() => navigate('/chat?session=' + encodeURIComponent(key))}
+                            >
+                              {key}
+                            </button>
+                            {sub ? (
+                              <span
+                                className={`sess-key__agent${sub.orphan ? ' sess-key__agent--orphan' : ''}`}
+                                title={
+                                  sub.orphan
+                                    ? `Agent '${sub.name}' is no longer registered`
+                                    : undefined
+                                }
+                              >
+                                {sub.name}
+                                {sub.orphan ? (
+                                  <span className="sess-chip tone-warn">⚠ Orphaned</span>
+                                ) : null}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="sess-status-stack">
+                            <span className={`sess-chip tone-${chipTone}`}>{statusLabel}</span>
+                            {badge ? (
+                              <span className={`sess-chip tone-${badge.tone}`} title={badge.label}>
+                                {badge.label}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="t-data sess-dim">
+                          {row.message_count != null
+                            ? Number(row.message_count).toLocaleString()
+                            : '—'}
+                        </td>
+                        <td className="t-data sess-dim">
+                          {row.updated_at != null ? relTimeLabel(row.updated_at) : '—'}
+                        </td>
+                        <td className="sess-table__cell--actions">
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
                             title="Open chat"
+                            aria-label={`Open chat for ${key}`}
                             onClick={() => navigate('/chat?session=' + encodeURIComponent(key))}
                           >
-                            {key}
-                          </button>
-                          {sub ? (
-                            <span
-                              className={`sess-key__agent${sub.orphan ? ' sess-key__agent--orphan' : ''}`}
-                              title={
-                                sub.orphan
-                                  ? `Agent '${sub.name}' is no longer registered`
-                                  : undefined
-                              }
-                            >
-                              {sub.name}
-                              {sub.orphan ? (
-                                <span className="sess-chip tone-warn">⚠ Orphaned</span>
-                              ) : null}
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td>
-                        <div className="sess-status-stack">
-                          <span className={`sess-chip tone-${chipTone}`}>{statusLabel}</span>
-                          {badge ? (
-                            <span className={`sess-chip tone-${badge.tone}`} title={badge.label}>
-                              {badge.label}
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="t-data sess-dim">
-                        {row.message_count != null
-                          ? Number(row.message_count).toLocaleString()
-                          : '—'}
-                      </td>
-                      <td className="t-data sess-dim">
-                        {row.updated_at != null ? relTimeLabel(row.updated_at) : '—'}
-                      </td>
-                      <td className="sess-table__cell--actions">
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          title="Open chat"
-                          aria-label={`Open chat for ${key}`}
-                          onClick={() => navigate('/chat?session=' + encodeURIComponent(key))}
-                        >
-                          <MessageSquareIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          title="Copy session key"
-                          aria-label={`Copy session key ${key}`}
-                          onClick={() => void copyKey(key)}
-                        >
-                          <CopyIcon />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon-xs"
-                          className="sess-iconbtn--danger"
-                          title="Delete"
-                          aria-label={`Delete session ${key}`}
-                          onClick={() => setDialog({ kind: 'delete', key })}
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      </td>
-                    </tr>
-                  )
-                })}
+                            <MessageSquareIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            title="Copy session key"
+                            aria-label={`Copy session key ${key}`}
+                            onClick={() => void copyKey(key)}
+                          >
+                            <CopyIcon />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            className="sess-iconbtn--danger"
+                            title="Delete"
+                            aria-label={`Delete session ${key}`}
+                            onClick={() => setDialog({ kind: 'delete', key })}
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </td>
+                      </>
+                    )
+                    return reduceMotion ? (
+                      <tr key={key} className={rowClass}>
+                        {rowContent}
+                      </tr>
+                    ) : (
+                      <motion.tr
+                        key={key}
+                        layout
+                        className={rowClass}
+                        variants={listItemVariants}
+                        initial="initial"
+                        animate="animate"
+                        exit="exit"
+                        transition={SUBTLE_EASE}
+                      >
+                        {rowContent}
+                      </motion.tr>
+                    )
+                  })}
+                </AnimatePresence>
               </tbody>
             </table>
           </div>
@@ -788,64 +812,66 @@ export function SessionsPage() {
         ) : null}
       </section>
 
-      {dialog.kind === 'new' ? (
-        <NewSessionDialog
-          agents={agentOptions}
-          submitting={createMutation.isPending}
-          error={createError}
-          onCancel={() => {
-            setDialog({ kind: 'none' })
-            setCreateError(null)
-          }}
-          onSubmit={(agentId, createPending) => {
-            setCreateError(null)
-            createMutation.mutate({ agentId, createPending })
-          }}
-        />
-      ) : null}
+      <AnimatePresence>
+        {dialog.kind === 'new' ? (
+          <NewSessionDialog
+            agents={agentOptions}
+            submitting={createMutation.isPending}
+            error={createError}
+            onCancel={() => {
+              setDialog({ kind: 'none' })
+              setCreateError(null)
+            }}
+            onSubmit={(agentId, createPending) => {
+              setCreateError(null)
+              createMutation.mutate({ agentId, createPending })
+            }}
+          />
+        ) : null}
 
-      {dialog.kind === 'delete' ? (
-        <ConfirmDialog
-          title="Delete session"
-          body={
-            <>
-              <p>
-                Delete session <strong>{dialog.key}</strong>? This cannot be undone.
-              </p>
-              <p className="sess-confirm__warn">
-                The transcript will not be flushed to disk; use <code>/reset</code> first if you
-                want a backup.
-              </p>
-            </>
-          }
-          confirmLabel="Delete"
-          busy={deleteMutation.isPending}
-          onCancel={() => setDialog({ kind: 'none' })}
-          onConfirm={() => deleteMutation.mutate([dialog.key])}
-        />
-      ) : null}
+        {dialog.kind === 'delete' ? (
+          <ConfirmDialog
+            title="Delete session"
+            body={
+              <>
+                <p>
+                  Delete session <strong>{dialog.key}</strong>? This cannot be undone.
+                </p>
+                <p className="sess-confirm__warn">
+                  The transcript will not be flushed to disk; use <code>/reset</code> first if you
+                  want a backup.
+                </p>
+              </>
+            }
+            confirmLabel="Delete"
+            busy={deleteMutation.isPending}
+            onCancel={() => setDialog({ kind: 'none' })}
+            onConfirm={() => deleteMutation.mutate([dialog.key])}
+          />
+        ) : null}
 
-      {dialog.kind === 'bulk' ? (
-        <ConfirmDialog
-          title="Delete sessions"
-          body={
-            <>
-              <p>
-                Delete <strong>{dialog.keys.length}</strong> session
-                {dialog.keys.length === 1 ? '' : 's'}? This cannot be undone.
-              </p>
-              <p className="sess-confirm__warn">
-                The transcript will not be flushed to disk; use <code>/reset</code> first if you
-                want a backup.
-              </p>
-            </>
-          }
-          confirmLabel="Delete all"
-          busy={deleteMutation.isPending}
-          onCancel={() => setDialog({ kind: 'none' })}
-          onConfirm={() => deleteMutation.mutate(dialog.keys)}
-        />
-      ) : null}
+        {dialog.kind === 'bulk' ? (
+          <ConfirmDialog
+            title="Delete sessions"
+            body={
+              <>
+                <p>
+                  Delete <strong>{dialog.keys.length}</strong> session
+                  {dialog.keys.length === 1 ? '' : 's'}? This cannot be undone.
+                </p>
+                <p className="sess-confirm__warn">
+                  The transcript will not be flushed to disk; use <code>/reset</code> first if you
+                  want a backup.
+                </p>
+              </>
+            }
+            confirmLabel="Delete all"
+            busy={deleteMutation.isPending}
+            onCancel={() => setDialog({ kind: 'none' })}
+            onConfirm={() => deleteMutation.mutate(dialog.keys)}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
   )
 }

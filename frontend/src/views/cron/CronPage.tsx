@@ -2,6 +2,7 @@ import './cron.css'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence } from 'motion/react'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -15,6 +16,7 @@ import {
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
+import { MotionListItem } from '@/lib/motion'
 import { useRpc } from '@/app/providers'
 import { relTime } from '@/views/overview/logic'
 import { CronPanel } from './CronPanel'
@@ -714,19 +716,22 @@ export function CronPage() {
           </div>
         ) : (
           <div className="cron-cards">
-            {visible.map((job, i) => (
-              <JobCard
-                key={String(job.id ?? i)}
-                job={job}
-                busy={busy}
-                selected={selectedId === String(job.id)}
-                onOpen={(id) => setSelectedId((cur) => (cur === id ? null : id))}
-                onToggle={(j) => toggleMutation.mutate(j)}
-                onRun={(id) => runMutation.mutate(id)}
-                onEdit={(j) => setPanel({ kind: 'edit', job: j })}
-                onDelete={(j) => setPendingDelete(j)}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {visible.map((job, i) => (
+                <MotionListItem key={String(job.id ?? i)}>
+                  <JobCard
+                    job={job}
+                    busy={busy}
+                    selected={selectedId === String(job.id)}
+                    onOpen={(id) => setSelectedId((cur) => (cur === id ? null : id))}
+                    onToggle={(j) => toggleMutation.mutate(j)}
+                    onRun={(id) => runMutation.mutate(id)}
+                    onEdit={(j) => setPanel({ kind: 'edit', job: j })}
+                    onDelete={(j) => setPendingDelete(j)}
+                  />
+                </MotionListItem>
+              ))}
+            </AnimatePresence>
           </div>
         )}
 

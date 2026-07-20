@@ -2,9 +2,11 @@ import './agents.css'
 import { useEffect, useId, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence } from 'motion/react'
 import { MessageSquareIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
+import { MotionListItem } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
@@ -598,59 +600,64 @@ export function AgentsPage() {
           </div>
         ) : (
           <div className="ag-cards">
-            {agents.map((agent, i) => (
-              <AgentCard
-                key={String(agent.id || agent.name || i)}
-                agent={agent}
-                busy={mutating}
-                onChat={(id) => navigate('/chat?agent=' + encodeURIComponent(id))}
-                onEdit={(a) => setDialog({ kind: 'edit', seed: agentToForm(a) })}
-                onCustomize={openCustomize}
-                onDelete={(id) => setDialog({ kind: 'delete', id })}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {agents.map((agent, i) => (
+                <MotionListItem key={String(agent.id || agent.name || i)}>
+                  <AgentCard
+                    agent={agent}
+                    busy={mutating}
+                    onChat={(id) => navigate('/chat?agent=' + encodeURIComponent(id))}
+                    onEdit={(a) => setDialog({ kind: 'edit', seed: agentToForm(a) })}
+                    onCustomize={openCustomize}
+                    onDelete={(id) => setDialog({ kind: 'delete', id })}
+                  />
+                </MotionListItem>
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </section>
 
-      {dialog.kind === 'create' || dialog.kind === 'edit' ? (
-        <AgentDialog
-          // Remount on a new seed so the form state resets when switching
-          // between create / customize / a different agent's edit.
-          key={dialog.kind + ':' + dialog.seed.id}
-          mode={dialog.kind}
-          seed={dialog.seed}
-          saving={createMutation.isPending || updateMutation.isPending}
-          onCancel={() => setDialog({ kind: 'none' })}
-          onCreate={(id, name) => createMutation.mutate({ id, name })}
-          onSave={(initial, current) => {
-            const payload = buildUpdatePayload(initial, current)
-            // agents.js:432-437 — no-op save: nothing changed → skip the RPC,
-            // toast 'Nothing to save', and keep the dialog open.
-            if (isNoOpUpdate(payload)) {
-              toast.info('Nothing to save', { id: 'agents-update' })
-              return
-            }
-            updateMutation.mutate({ id: current.id, payload })
-          }}
-        />
-      ) : null}
+      <AnimatePresence>
+        {dialog.kind === 'create' || dialog.kind === 'edit' ? (
+          <AgentDialog
+            // Remount on a new seed so the form state resets when switching
+            // between create / customize / a different agent's edit.
+            key={dialog.kind + ':' + dialog.seed.id}
+            mode={dialog.kind}
+            seed={dialog.seed}
+            saving={createMutation.isPending || updateMutation.isPending}
+            onCancel={() => setDialog({ kind: 'none' })}
+            onCreate={(id, name) => createMutation.mutate({ id, name })}
+            onSave={(initial, current) => {
+              const payload = buildUpdatePayload(initial, current)
+              // agents.js:432-437 — no-op save: nothing changed → skip the RPC,
+              // toast 'Nothing to save', and keep the dialog open.
+              if (isNoOpUpdate(payload)) {
+                toast.info('Nothing to save', { id: 'agents-update' })
+                return
+              }
+              updateMutation.mutate({ id: current.id, payload })
+            }}
+          />
+        ) : null}
 
-      {dialog.kind === 'delete' ? (
-        <ConfirmDialog
-          title="Delete agent"
-          body={
-            <>
-              Delete agent <strong>{dialog.id}</strong>? Existing chats with this agent will keep
-              working but become unmanaged.
-            </>
-          }
-          confirmLabel="Delete agent"
-          busy={deleteMutation.isPending}
-          onCancel={() => setDialog({ kind: 'none' })}
-          onConfirm={() => deleteMutation.mutate(dialog.id)}
-        />
-      ) : null}
+        {dialog.kind === 'delete' ? (
+          <ConfirmDialog
+            title="Delete agent"
+            body={
+              <>
+                Delete agent <strong>{dialog.id}</strong>? Existing chats with this agent will keep
+                working but become unmanaged.
+              </>
+            }
+            confirmLabel="Delete agent"
+            busy={deleteMutation.isPending}
+            onCancel={() => setDialog({ kind: 'none' })}
+            onConfirm={() => deleteMutation.mutate(dialog.id)}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
   )
 }

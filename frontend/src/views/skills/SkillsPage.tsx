@@ -1,9 +1,11 @@
 import './skills.css'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence } from 'motion/react'
 import { DownloadIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
+import { MotionListItem } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
@@ -614,44 +616,48 @@ export function SkillsPage() {
         </>
       ) : null}
 
-      {dialog.kind === 'skill'
-        ? (() => {
-            const skill = allSkills.find((s) => s.name === dialog.name)
-            if (!skill) return null
-            return (
-              <SkillDialog
-                skill={skill}
-                busyKeys={busyKeys}
-                onClose={() => setDialog({ kind: 'none' })}
-                onUpdate={() => updateMutation.mutate(skill.name!)}
-                onRemove={() => uninstallMutation.mutate(skill.name!)}
-                onInstallDeps={(installId) => depsMutation.mutate({ name: skill.name!, installId })}
-              />
-            )
-          })()
-        : null}
+      <AnimatePresence>
+        {dialog.kind === 'skill'
+          ? (() => {
+              const skill = allSkills.find((s) => s.name === dialog.name)
+              if (!skill) return null
+              return (
+                <SkillDialog
+                  skill={skill}
+                  busyKeys={busyKeys}
+                  onClose={() => setDialog({ kind: 'none' })}
+                  onUpdate={() => updateMutation.mutate(skill.name!)}
+                  onRemove={() => uninstallMutation.mutate(skill.name!)}
+                  onInstallDeps={(installId) =>
+                    depsMutation.mutate({ name: skill.name!, installId })
+                  }
+                />
+              )
+            })()
+          : null}
 
-      {dialog.kind === 'registry'
-        ? (() => {
-            const base =
-              dialog.group === 'bankr'
-                ? (bankrSnapshot.data ?? [])
-                : communityQuery && communitySearch.data
-                  ? communitySearch.data
-                  : (communitySnapshot.data ?? [])
-            const item = base.find((r) => registryKey(r) === dialog.key)
-            if (!item) return null
-            return (
-              <RegistryDialog
-                item={item}
-                forceArmed={forceArmed}
-                busy={busyKeys.has(registryKey(item))}
-                onClose={() => setDialog({ kind: 'none' })}
-                onInstall={(force) => runInstall(item, force)}
-              />
-            )
-          })()
-        : null}
+        {dialog.kind === 'registry'
+          ? (() => {
+              const base =
+                dialog.group === 'bankr'
+                  ? (bankrSnapshot.data ?? [])
+                  : communityQuery && communitySearch.data
+                    ? communitySearch.data
+                    : (communitySnapshot.data ?? [])
+              const item = base.find((r) => registryKey(r) === dialog.key)
+              if (!item) return null
+              return (
+                <RegistryDialog
+                  item={item}
+                  forceArmed={forceArmed}
+                  busy={busyKeys.has(registryKey(item))}
+                  onClose={() => setDialog({ kind: 'none' })}
+                  onInstall={(force) => runInstall(item, force)}
+                />
+              )
+            })()
+          : null}
+      </AnimatePresence>
     </div>
   )
 }
@@ -741,9 +747,13 @@ function InstalledPanel({
             <span className="sk-group__meta">{layerHelp(g.layer)}</span>
           </summary>
           <div className="sk-grid">
-            {g.skills.map((s) => (
-              <SkillCard key={s.name} skill={s} onOpen={() => onOpen(s.name!)} />
-            ))}
+            <AnimatePresence initial={false}>
+              {g.skills.map((s) => (
+                <MotionListItem key={s.name}>
+                  <SkillCard skill={s} onOpen={() => onOpen(s.name!)} />
+                </MotionListItem>
+              ))}
+            </AnimatePresence>
           </div>
         </details>
       ))}
@@ -772,9 +782,13 @@ function RobinhoodPanel({
   return (
     <div className="sk-panel">
       <div className="sk-grid">
-        {skills.map((s) => (
-          <SkillCard key={s.name} skill={s} onOpen={() => onOpen(s.name!)} />
-        ))}
+        <AnimatePresence initial={false}>
+          {skills.map((s) => (
+            <MotionListItem key={s.name}>
+              <SkillCard skill={s} onOpen={() => onOpen(s.name!)} />
+            </MotionListItem>
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   )
@@ -865,16 +879,19 @@ function RegistryPanel({
           <div className="sk-registry__hint">{registryEmptyMessage(group, query)}</div>
         ) : (
           <div className="sk-grid sk-grid--registry">
-            {items.map((r) => (
-              <RegistryCard
-                key={registryKey(r)}
-                item={r}
-                forceArmed={forceArmed}
-                busy={busyKeys.has(registryKey(r))}
-                onOpen={() => onOpen(registryKey(r))}
-                onInstall={(force) => onInstall(r, force)}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {items.map((r) => (
+                <MotionListItem key={registryKey(r)}>
+                  <RegistryCard
+                    item={r}
+                    forceArmed={forceArmed}
+                    busy={busyKeys.has(registryKey(r))}
+                    onOpen={() => onOpen(registryKey(r))}
+                    onInstall={(force) => onInstall(r, force)}
+                  />
+                </MotionListItem>
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </div>

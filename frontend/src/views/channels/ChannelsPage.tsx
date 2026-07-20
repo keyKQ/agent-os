@@ -2,10 +2,12 @@ import './channels.css'
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence } from 'motion/react'
 import { RefreshCwIcon, SettingsIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
 import { CommandLine } from '@/components/CommandLine'
+import { MotionListItem } from '@/lib/motion'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
 import { relTime } from '@/views/overview/logic'
@@ -505,16 +507,19 @@ export function ChannelsPage() {
           </div>
         ) : (
           <div className="ch-cards">
-            {channels.map((channel, i) => (
-              <ChannelCard
-                key={String(channel.name || channel.id || i)}
-                channel={channel}
-                busy={busy}
-                onSetMode={onSetMode}
-                onResolve={onResolve}
-                onRevoke={onRevoke}
-              />
-            ))}
+            <AnimatePresence initial={false}>
+              {channels.map((channel, i) => (
+                <MotionListItem key={String(channel.name || channel.id || i)}>
+                  <ChannelCard
+                    channel={channel}
+                    busy={busy}
+                    onSetMode={onSetMode}
+                    onResolve={onResolve}
+                    onRevoke={onRevoke}
+                  />
+                </MotionListItem>
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </section>

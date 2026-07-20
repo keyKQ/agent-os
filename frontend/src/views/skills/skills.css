@@ -54,7 +54,7 @@
   padding: 7px 10px 7px 28px;
   background: var(--input, var(--card));
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   color: var(--foreground);
   min-width: 200px;
 }
@@ -87,7 +87,7 @@
   padding: 8px 14px;
   border: 1px solid var(--border);
   border-left: 3px solid var(--tone);
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: var(--card);
   cursor: pointer;
   transition: border-color 0.12s;
@@ -146,7 +146,7 @@
 /* ── Layer groups ───────────────────────────────────────────────────────── */
 .sk-group {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   margin-bottom: 12px;
   background: var(--card);
 }
@@ -206,7 +206,7 @@
   padding: 12px;
   text-align: left;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--background);
   cursor: pointer;
 }
@@ -241,7 +241,12 @@
   color: var(--foreground);
 }
 .sk-card__emoji {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  /* Skill-supplied emoji is real catalog metadata (kept for parity), but full-
+     color emoji clash with the mono/terminal palette — desaturate them so they
+     read as muted glyphs, not stickers. */
+  filter: grayscale(1) brightness(1.1) contrast(0.9);
+  opacity: 0.75;
 }
 .sk-card__desc {
   font-size: 0.75rem;
@@ -286,7 +291,7 @@
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: var(--card);
   cursor: pointer;
 }
@@ -302,7 +307,7 @@
 .sk-dialog__logo {
   width: 32px;
   height: 32px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   object-fit: cover;
   display: inline-flex;
   align-items: center;
@@ -313,6 +318,10 @@
   font-size: 0.75rem;
   color: var(--dim);
   flex-shrink: 0;
+  /* Registry logos are full-color brand art; mute them to the terminal palette
+     so the catalog reads as one mono surface, not a sticker wall. */
+  filter: grayscale(1) contrast(0.92) brightness(1.05);
+  opacity: 0.85;
 }
 .sk-rcard__titles {
   display: flex;
@@ -371,7 +380,7 @@
 .sk-error {
   padding: 14px;
   border: 1px solid var(--danger, #c0392b);
-  border-radius: 7px;
+  border-radius: var(--radius);
   color: var(--danger, #c0392b);
   font-size: 0.8125rem;
 }
@@ -445,7 +454,7 @@
   width: min(560px, 100%);
   max-height: 86vh;
   overflow-y: auto;
-  border-radius: 10px;
+  border-radius: var(--radius);
 }
 .sk-dialog__head {
   display: flex;
@@ -518,7 +527,7 @@
   font-family: var(--font-mono);
   background: var(--background);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--primary);
 }
 /* skills.css:642-671 — per-requirement rows in the Requirements section. */
@@ -549,7 +558,7 @@
   font-family: var(--font-mono);
   background: var(--background);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius);
   color: var(--primary);
 }
 .sk-dialog__setup {
@@ -568,7 +577,7 @@
   padding: 10px;
   background: var(--background);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius);
   overflow-x: auto;
   font-size: 0.75rem;
 }

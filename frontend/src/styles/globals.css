@@ -523,6 +523,67 @@
   .ascii-field canvas {
     display: block;
   }
+
+  /* ---- Motion system (Subtle tier per ui-ux-pro-max) ----
+     CSS-driven so it costs nothing at runtime and every animation is disabled
+     as one block under prefers-reduced-motion. Terminal-flavored: content
+     "boots in" with a short rise + fade rather than a generic slide. */
+
+  /* View enter: the whole page rises + fades on mount (200-260ms). Applied by
+     AppShell to the view-container wrapper, keyed on route so it replays on
+     navigation. */
+  /* `backwards` (not `both`): the fade+rise plays on mount, but once it ends the
+     element reverts to its un-transformed computed style. `both` would retain
+     the final keyframe's `transform: translateY(0)` (an identity matrix) — and
+     *any* non-none transform on an ancestor makes it the containing block for
+     descendant position:fixed elements, which anchors modal overlays to this
+     container instead of the viewport (dialogs render low/off-centre). */
+  .view-enter {
+    animation: view-enter 240ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+
+  /* Boot-in stagger: children reveal in sequence like a TTY drawing rows.
+     Add .boot-seq to a container; its direct children animate with an
+     index-based delay via --i (set inline: style={{'--i': n}}), or fall back
+     to nth-child steps for up to 12 items when --i isn't provided. */
+  .boot-seq > * {
+    animation: boot-row 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(var(--i, 0) * 35ms);
+  }
+  .boot-seq.boot-auto > *:nth-child(1) {
+    animation-delay: 0ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(2) {
+    animation-delay: 35ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(3) {
+    animation-delay: 70ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(4) {
+    animation-delay: 105ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(5) {
+    animation-delay: 140ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(6) {
+    animation-delay: 175ms;
+  }
+  .boot-seq.boot-auto > *:nth-child(n + 7) {
+    animation-delay: 210ms;
+  }
+
+  /* Single-element rise-in helper (panels, cards that mount on their own). */
+  .rise-in {
+    animation: boot-row 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .view-enter,
+    .boot-seq > *,
+    .rise-in {
+      animation: none;
+    }
+  }
 }
 
 @keyframes caret-blink {
@@ -533,5 +594,25 @@
 @keyframes cursor-blink {
   50% {
     opacity: 0;
+  }
+}
+@keyframes view-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes boot-row {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
