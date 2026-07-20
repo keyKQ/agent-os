@@ -1,5 +1,16 @@
 # Console Rewrite Parity Matrix
 
+> **Plan 1 complete — 2026-07-20.** Layer-0/1 foundation (bootstrap, WS-RPC,
+> theme, AppShell + 13 routes, health view) ported and verified: FE gate green
+> (38 unit tests, `vite build` clean), Python gate green (ruff + mypy clean,
+> 1559 gateway/parity tests passing), legacy UI byte-identical (empty
+> `git diff` on static js/css/vendor + templates). Every cross-cutting row is
+> `ported` except four cutover-plan items (theme-flash inline script, noscript,
+> `tokenViz` feature flag, custom `base_path`); the `### health` section has
+> zero functional `pending` rows (one owner-sign-off `waived` delta at cutover,
+> one live-parity row folded into cutover). Remaining `pending` rows and the 12
+> unfilled view sections belong to Plan 2+.
+
 Single source of truth for migration completeness (spec §6). A behavior row
 may be `pending`, `ported` (with evidence: test name or verification note),
 or `waived` (with reason, owner-approved at cutover).
