@@ -1,5 +1,20 @@
 # Console Rewrite Parity Matrix
 
+> **Plan 2 complete — 2026-07-20.** All 11 standard views (approvals, logs,
+> overview, channels, agents, sessions, usage, config, skills, cron, setup) +
+> the approval-monitor service migrated and reviewed; a 12-surface batch parity
+> audit (76 agents) found 21 deltas, all fixed via the parity-fix-round workflow
+> (one verify pass caught a fake in-flight-guard test → remediated with a
+> mutation-verified rewrite). Gates: FE `npm run check` green (829 tests / 31
+> files; `vite build` clean, ~200kB gz JS), Python green (1559 gateway/parity),
+> legacy UI byte-identical. 12/13 routes are real views; only `chat` remains a
+> stub (Plan 3). Two `pending` rows remain — both cutover-plan items (tokenViz
+> flag, custom base_path). Owner decisions honored where legacy behavior was
+> at stake (T6 dirty-guard, T11 cron editor, T12 secrets). Follow-ups deferred:
+> ConfirmDialog unification (structural CSS divergence; ModalShell drift already
+> closed), live-browser smoke of all views (folds into cutover).
+
+
 > **Plan 1 complete — 2026-07-20.** Layer-0/1 foundation (bootstrap, WS-RPC,
 > theme, AppShell + 13 routes, health view) ported and verified: FE gate green
 > (77 unit tests after this parity-fix round grew the covering suites, `vite
