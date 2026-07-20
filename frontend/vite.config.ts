@@ -4,12 +4,19 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
-// Assets are served by the gateway's existing static mount, so the built
-// index.html must reference them under {base_path}/static/dist/.
+// Dev gateway target: override with AGENTOS_GATEWAY (e.g. http://127.0.0.1:18999)
+// when the default gateway port is taken by another instance.
+const gateway = process.env.AGENTOS_GATEWAY ?? 'http://127.0.0.1:18791'
+const gatewayWs = gateway.replace(/^http/, 'ws')
+
+// Prod build: assets are served by the gateway's existing static mount, so the
+// built index.html must reference them under {base_path}/static/dist/.
+// Dev server: serve under /control/ so the router basename (/control) and the
+// bootstrap URL (/control/api/bootstrap) line up exactly like production.
 // Custom base_path support is a cutover-plan item (see parity matrix).
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  base: '/control/static/dist/',
+  base: command === 'serve' ? '/control/' : '/control/static/dist/',
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   build: {
     outDir: path.resolve(__dirname, '../src/agentos/gateway/static/dist'),
@@ -17,8 +24,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/ws': { target: 'ws://127.0.0.1:18791', ws: true },
-      '/control/api': { target: 'http://127.0.0.1:18791', changeOrigin: true },
+      '/ws': { target: gatewayWs, ws: true },
+      '/control/api': { target: gateway, changeOrigin: true },
     },
   },
   test: {
@@ -27,4 +34,4 @@ export default defineConfig({
     globals: false,
     passWithNoTests: true,
   },
-})
+}))
