@@ -28,7 +28,8 @@ export const meta = {
   ],
 }
 
-const cfg = args
+// Tolerate both a real object and a JSON-encoded string (some harnesses stringify args).
+const cfg = typeof args === 'string' ? JSON.parse(args) : args
 if (!cfg || !cfg.worktree || !cfg.batches) throw new Error('parity-fix-round: args contract not satisfied')
 const MODEL = cfg.model || undefined
 
