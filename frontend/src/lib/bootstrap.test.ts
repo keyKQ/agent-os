@@ -44,7 +44,18 @@ describe('resolveWsUrl', () => {
   })
 
   it('returns the raw value when ws_url is not parseable as a URL', () => {
+    // 'ws://[bad' has an invalid IPv6 host bracket and throws in `new URL`
+    // even with a base — this genuinely exercises the catch branch. (The
+    // previous input '::not a url::' parsed fine relative to the base and
+    // only covered the final passthrough.)
     setLocation('https://console.example.com/control/')
-    expect(resolveWsUrl('::not a url::')).toBe('::not a url::')
+    expect(resolveWsUrl('ws://[bad')).toBe('ws://[bad')
+  })
+
+  it('returns a same-host ws:// URL unchanged on an http page (early return, not rewrite)', () => {
+    // Kills the surviving mutant: without the non-https early return, this
+    // same-host ws input would be rewritten to defaultWsUrl()'s /ws path.
+    setLocation('http://localhost:3000/')
+    expect(resolveWsUrl('ws://localhost:3000/custom-path')).toBe('ws://localhost:3000/custom-path')
   })
 })
