@@ -1,4 +1,5 @@
-import { Navigate, type RouteObject } from 'react-router'
+import { useEffect } from 'react'
+import { type RouteObject } from 'react-router'
 import { StubView } from '@/views/StubView'
 import { HealthPage } from '@/views/health/HealthPage'
 
@@ -18,24 +19,52 @@ export const VIEWS: ReadonlyArray<{ path: string; title: string }> = [
   { path: 'logs', title: 'Logs' },
 ]
 
-function defaultPath(): string {
-  // Parity: js/router.js:32 — mobile lands on chat, desktop on overview.
+/**
+ * Parity: js/router.js:32 — evaluated per resolve, not once at module load.
+ * Mobile (<=768px) lands on chat, desktop on overview. Legacy re-reads
+ * matchMedia inside `_resolve()` on every navigation, so a viewport change
+ * that crosses the breakpoint before the index is (re)visited is honored.
+ */
+export function defaultViewPath(): string {
   try {
-    return window.matchMedia('(max-width: 768px)').matches ? '/chat' : '/overview'
+    return window.matchMedia('(max-width: 768px)').matches ? 'chat' : 'overview'
   } catch {
-    return '/overview'
+    return 'overview'
   }
+}
+
+function viewElement(path: string) {
+  const view = VIEWS.find((v) => v.path === path)
+  if (path === 'health') return <HealthPage />
+  return <StubView title={view?.title ?? 'Overview'} />
+}
+
+/**
+ * Parity: js/router.js:29-66 — the index route renders the *default view in
+ * place* while LEAVING the address bar at the base path (legacy never rewrites
+ * the URL here; it only picks which view to render and highlights that view's
+ * nav item). We therefore render the default view's element directly instead of
+ * issuing a <Navigate replace>. AppShell reads defaultViewPath() to highlight
+ * the matching nav item, since NavLink cannot mark itself active at the base URL.
+ */
+function IndexView() {
+  return viewElement(defaultViewPath())
 }
 
 function NotFound() {
   // Parity: js/router.js:48-55 — path rendered as text, never HTML.
+  // Parity: js/router.js:68 — an unmatched route has no meta.title, so the
+  // legacy title resolves to 'Not Found - AgentOS Control'.
+  useEffect(() => {
+    document.title = 'Not Found - AgentOS Control'
+  }, [])
   return (
     <div className="p-8 text-muted-foreground">{'Page not found: ' + window.location.pathname}</div>
   )
 }
 
 export const routeChildren: RouteObject[] = [
-  { index: true, element: <Navigate to={defaultPath()} replace /> },
+  { index: true, element: <IndexView /> },
   ...VIEWS.map((v) =>
     v.path === 'health'
       ? { path: v.path, element: <HealthPage /> }
