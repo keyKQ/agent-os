@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { HealthPage } from './HealthPage'
 
 const mockRpc = {
@@ -30,6 +30,10 @@ function renderPage() {
 }
 
 describe('HealthPage', () => {
+  afterEach(() => {
+    localStorage.clear()
+  })
+
   it('calls doctor.status deep for agent main and renders grouped findings', async () => {
     mockRpc.call.mockResolvedValue({
       status: 'degraded',
@@ -63,6 +67,73 @@ describe('HealthPage', () => {
       expect(screen.getByText('Gateway health report unavailable')).toBeInTheDocument(),
     )
     expect(screen.getByText('Health report unavailable')).toBeInTheDocument()
+  })
+
+  it('uses config-target fix steps when the stored wsUrl equals the default (health.js:227-238)', async () => {
+    // Legacy saveConnectionSettings stores the default URL itself (app.js:210):
+    // a stored-but-equal URL must still count as "uses default".
+    localStorage.setItem('agentos.wsUrl', 'ws://127.0.0.1:18791/ws')
+    mockRpc.call.mockRejectedValue(new Error('boom'))
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText('Gateway health report unavailable')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('agentos doctor --config /tmp/agentos.toml --json')).toBeInTheDocument()
+    expect(screen.getByText('agentos gateway start --config /tmp/agentos.toml')).toBeInTheDocument()
+    // Config context row present in the synthetic error report.
+    expect(screen.getByText('Config')).toBeInTheDocument()
+  })
+
+  it('uses gateway-target fix steps when the stored wsUrl differs from the default', async () => {
+    localStorage.setItem('agentos.wsUrl', 'ws://127.0.0.1:19999/ws')
+    mockRpc.call.mockRejectedValue(new Error('boom'))
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText('Gateway health report unavailable')).toBeInTheDocument(),
+    )
+    expect(
+      screen.getByText('agentos doctor --gateway ws://127.0.0.1:19999/ws --json'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Config')).not.toBeInTheDocument()
+  })
+
+  it('renders the error immediately without retrying (health.js:64-77: one deep call per load)', async () => {
+    mockRpc.call.mockRejectedValue(new Error('boom'))
+    // App-level defaults (providers.tsx) set retry: 1 — the health query must
+    // override so the deep doctor.status call is never silently duplicated.
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 5_000 } } })}
+      >
+        <HealthPage />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByText('Health report unavailable')).toBeInTheDocument())
+    expect(mockRpc.call).toHaveBeenCalledTimes(1)
+  })
+
+  it('reloads fresh on every view entry instead of serving a cached report', async () => {
+    mockRpc.call.mockResolvedValue({ status: 'ready', ready: true, findings: [] })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5_000 } },
+    })
+    const first = render(
+      <QueryClientProvider client={client}>
+        <HealthPage />
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(mockRpc.call).toHaveBeenCalledTimes(1))
+    first.unmount()
+    // gcTime 0 drops the cache on unmount (next macrotask).
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    render(
+      <QueryClientProvider client={client}>
+        <HealthPage />
+      </QueryClientProvider>,
+    )
+    // Legacy re-entered through _load: loading state, then a fresh deep call.
+    expect(screen.getByText('Checking readiness')).toBeInTheDocument()
+    await waitFor(() => expect(mockRpc.call).toHaveBeenCalledTimes(2))
   })
 
   it('refetches when Refresh is clicked', async () => {

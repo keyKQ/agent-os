@@ -13,6 +13,7 @@ import {
   impactValue,
   isLocalGatewayUrl,
   statusLabel,
+  usesDefaultGatewayUrl,
   visibleEvidenceEntries,
   type Finding,
   type GroupKind,
@@ -354,6 +355,17 @@ export function HealthPage() {
       if (!report.gatewayUrl) report.gatewayUrl = gatewayUrl
       return report
     },
+    // health.js:64-77 — legacy _load issues exactly one deep doctor.status call
+    // per view entry and renders the error immediately. Pin the react-query
+    // lifecycle to that contract: no retry before the error state, no cached
+    // report served across view entries (fresh load + loading strip each time),
+    // and no background deep diagnostics on tab focus or network reconnect.
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 
   const summaryText = query.isError
@@ -366,7 +378,11 @@ export function HealthPage() {
   let findingsNode
   if (query.isError) {
     // health.js:86-115 — synthetic gateway.unavailable report + finding.
-    const usesDefault = !localStorage.getItem(WS_URL_KEY)
+    // health.js:227-238 — usesDefault is URL-equality against the default RPC
+    // URL (bootstrap ws_url stands in for legacy App.getDefaultRpcUrl()), not
+    // mere absence of the localStorage override: legacy saveConnectionSettings
+    // stores the default URL itself on save (app.js:210).
+    const usesDefault = usesDefaultGatewayUrl(gatewayUrl, bootstrap.ws_url || '')
     const errorConfigPath = usesDefault && isLocalGatewayUrl(gatewayUrl) ? configPath : ''
     const errorReport: HealthReport = {
       status: 'unavailable',

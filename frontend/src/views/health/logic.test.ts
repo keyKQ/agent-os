@@ -7,6 +7,7 @@ import {
   shellArg,
   isLocalGatewayUrl,
   gatewayStatusTarget,
+  usesDefaultGatewayUrl,
   visibleEvidenceEntries,
   evidenceLabel,
   evidenceValue,
@@ -69,6 +70,29 @@ describe('gateway url helpers', () => {
   it('normalizes 0.0.0.0 and infers default port', () => {
     expect(gatewayStatusTarget('ws://0.0.0.0/ws')).toEqual({ host: '127.0.0.1', port: '18791' })
     expect(gatewayStatusTarget('wss://h.example/ws')).toEqual({ host: 'h.example', port: '443' })
+  })
+})
+
+describe('usesDefaultGatewayUrl', () => {
+  const DEFAULT = 'ws://127.0.0.1:18791/ws'
+  it('is true when the stored URL equals the default (legacy stores the default routinely)', () => {
+    expect(usesDefaultGatewayUrl(DEFAULT, DEFAULT)).toBe(true)
+  })
+  it('ignores query and hash — only protocol/host/pathname compare (health.js:230-234)', () => {
+    expect(usesDefaultGatewayUrl('ws://127.0.0.1:18791/ws?x=1#y', DEFAULT)).toBe(true)
+  })
+  it('falls back to the default when the gateway URL is empty', () => {
+    expect(usesDefaultGatewayUrl('', DEFAULT)).toBe(true)
+  })
+  it('is false for a different port, host, protocol, or pathname', () => {
+    expect(usesDefaultGatewayUrl('ws://127.0.0.1:19999/ws', DEFAULT)).toBe(false)
+    expect(usesDefaultGatewayUrl('ws://10.0.0.5:18791/ws', DEFAULT)).toBe(false)
+    expect(usesDefaultGatewayUrl('wss://127.0.0.1:18791/ws', DEFAULT)).toBe(false)
+    expect(usesDefaultGatewayUrl('ws://127.0.0.1:18791/other', DEFAULT)).toBe(false)
+  })
+  it('is false when the default is unknown or the URL is unparsable', () => {
+    expect(usesDefaultGatewayUrl(DEFAULT, '')).toBe(false)
+    expect(usesDefaultGatewayUrl('ws://[', DEFAULT)).toBe(false)
   })
 })
 

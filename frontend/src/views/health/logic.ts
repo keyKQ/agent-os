@@ -105,6 +105,29 @@ export function gatewayStatusTarget(url: string): { host: string; port: string }
   }
 }
 
+/**
+ * health.js:227-238 — a gateway URL "uses the default" when it equals the
+ * default RPC URL on protocol+host+pathname (query/hash ignored), NOT when the
+ * localStorage override is merely absent: legacy saveConnectionSettings
+ * (app.js:210) routinely stores the default URL itself. An empty gatewayUrl
+ * falls back to the default (=== true); an unparsable URL or unknown default
+ * returns false, mirroring the legacy try/catch + missing-App guard.
+ */
+export function usesDefaultGatewayUrl(gatewayUrl: string, defaultRpcUrl: string): boolean {
+  if (!defaultRpcUrl) return false
+  try {
+    const requested = new URL(gatewayUrl || defaultRpcUrl, location.href)
+    const defaults = new URL(defaultRpcUrl, location.href)
+    return (
+      requested.protocol === defaults.protocol &&
+      requested.host === defaults.host &&
+      requested.pathname === defaults.pathname
+    )
+  } catch {
+    return false
+  }
+}
+
 function configOption(configPath: string): string {
   // health.js:240-242
   return configPath ? ` --config ${shellArg(configPath)}` : ''
