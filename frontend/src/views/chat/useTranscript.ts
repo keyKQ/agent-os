@@ -59,9 +59,22 @@ export function useTranscript(opts: { sessionKey: string }): {
 
   // On unmount, tear down any live stream timers/rAF so a backgrounded stream
   // does not leak a timeout or animation-frame callback past the view.
+  //
+  // `clearViewLocalStreamState` is the faithful port of legacy
+  // `_clearViewLocalStreamState` (chat.js:6965-7000) and does not itself cancel
+  // the stream-active-mark reveal timer (`_streamActiveMarkTimer`). Legacy's
+  // real teardown, `destroy()` (chat.js:8775-8836), additionally calls
+  // `_clearStreamActiveMarkReveal()` unconditionally (chat.js:8788, right after
+  // the `if (_isStreaming) _endStreaming();` guard on 8787) so that timer never
+  // survives view teardown. Mirror that here: `endStreaming` (invoked via
+  // `clearViewLocalStreamState`'s callers in the streaming case) already clears
+  // the active-mark timer internally, but `clearViewLocalStreamState` alone does
+  // not, so call `clearStreamActiveMarkReveal` explicitly to match legacy
+  // destroy's unconditional cleanup.
   useEffect(() => {
     return () => {
       controller.clearViewLocalStreamState('unmount')
+      controller.clearStreamActiveMarkReveal()
     }
   }, [controller])
 

@@ -209,6 +209,10 @@ export interface StreamControllerDeps {
     anchor: HTMLElement | null,
     bubble: HTMLElement | null,
   ) => void
+  // Legacy `if (_routerFxDock)` (chat.js:6940) tests DOM-element presence (the
+  // dock element itself), not a boolean flag. The router-fx task must wire
+  // this predicate to "dock element present" to preserve legacy semantics —
+  // not left as a plain feature-flag getter.
   routerFxDock?: () => boolean
   /** chat.js:6383/6403 — compaction gate for the thinking indicator. */
   isCompactInFlightForCurrentSession?: () => boolean
@@ -1131,6 +1135,7 @@ export function createStreamController(
     // hints
     markVisibleStreamEvent,
     showAwaitingModelHintAfterToolResult,
+    clearStreamActiveMarkReveal,
     // lifecycle
     startStreaming,
     ensureStreamBubble,
