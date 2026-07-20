@@ -272,24 +272,23 @@
       padding: 16px 16px 32px;
     }
   }
-  /* Atmospheric ASCII field: decorative, never interactive. */
+  /* Atmospheric ASCII field: decorative canvas, never interactive. The canvas
+     reads `color` for its glyph tint (signal). */
   .ascii-field {
     position: absolute;
     inset: 0;
     overflow: hidden;
     pointer-events: none;
     user-select: none;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    line-height: 1.7;
-    letter-spacing: 0.4em;
-    white-space: pre;
     color: var(--primary);
-    opacity: 0.2;
-    /* Ember drift: dense at the base, dissolving toward the top. */
-    mask-image: linear-gradient(to bottom, transparent 5%, black 70%);
+    opacity: 0.22;
+    /* Soft edges left/right so the field breathes inside the header. */
+    mask-image: linear-gradient(to right, transparent, black 8%, black 92%, transparent);
   }
   :root[data-theme='light'] .ascii-field {
-    opacity: 0.14;
+    opacity: 0.16;
+  }
+  .ascii-field canvas {
+    display: block;
   }
 }
