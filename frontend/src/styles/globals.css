@@ -192,7 +192,13 @@
   }
 }
 
-@layer components {
+/* These custom console classes live in @layer utilities (Tailwind's highest
+   layer) — NOT @layer components. Reason: Tailwind v4's @import registers layer
+   order from its own internal statement; a `@layer components{}` block that
+   appears earlier in this file than that statement gets ordered AHEAD of `base`,
+   so the base preflight (`*{padding:0}`) would win over `.view-container`
+   padding. `utilities` is always registered last, so it reliably beats base. */
+@layer utilities {
   /* Tactical micro-label: the mono, uppercase, wide-tracked kicker used for
      group headers and metadata (legacy --track-label 0.22em). */
   .t-label {
@@ -349,13 +355,27 @@
      full-bleed surface (chat) opts out with its own negative-margin wrapper. */
   .view-container {
     width: 100%;
-    max-width: 1400px;
-    margin-inline: auto;
-    padding: 24px 28px 48px;
+    max-width: 1600px;
+    /* Left-aligned, not centered: a centered block on a wide viewport leaves a
+       large dead gutter on the right. Content hugs the sidebar edge with a
+       consistent inset and only caps its far edge.
+       NOTE: use physical longhands (padding-left/right/top/bottom), NOT the
+       `padding-inline`/`padding-block` shorthands — Tailwind v4's base reset
+       sets `padding-inline-start: 0` on `*`, and a cross-layer shorthand does
+       not reliably override that longhand. Matching the exact longhand wins. */
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 24px;
+    padding-bottom: 48px;
   }
   @media (max-width: 768px) {
     .view-container {
-      padding: 16px 16px 32px;
+      padding-left: 16px;
+      padding-right: 16px;
+      padding-top: 16px;
+      padding-bottom: 32px;
     }
   }
   /* Atmospheric ASCII field: decorative canvas, never interactive. The canvas
