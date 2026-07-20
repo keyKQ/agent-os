@@ -3,9 +3,9 @@
    the new CSS variables. Lime stays signal-only: status tones carry ok/warn/
    danger/info, never the accent. */
 
+/* Outer width/padding come from the shared .view-container in AppShell. */
 .health-layout {
-  padding: 24px 28px 48px;
-  max-width: 1080px;
+  width: 100%;
 }
 
 /* Header: terminal hero with the atmospheric ASCII backdrop behind it */
@@ -419,9 +419,6 @@
 
 /* Mobile collapse */
 @media (max-width: 768px) {
-  .health-layout {
-    padding: 16px;
-  }
   .health-status__rail {
     grid-template-columns: 1fr;
   }

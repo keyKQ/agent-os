@@ -265,7 +265,10 @@ export function AppShell() {
           </Button>
         </header>
         <main className="min-h-0 flex-1 overflow-auto">
-          <Outlet />
+          {/* Common container: every view fills and centers identically. */}
+          <div className="view-container">
+            <Outlet />
+          </div>
         </main>
       </div>
       <Toaster />

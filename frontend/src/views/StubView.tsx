@@ -6,7 +6,7 @@ export function StubView({ title }: { title: string }) {
     document.title = `${title} - AgentOS Control`
   }, [title])
   return (
-    <div className="px-7 py-6">
+    <div>
       <header className="relative pt-4 pb-6">
         <AsciiField />
         <div className="relative">

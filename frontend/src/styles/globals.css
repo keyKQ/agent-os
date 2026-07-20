@@ -258,6 +258,20 @@
   .panel__body {
     padding: 16px;
   }
+  /* Common view container — owned by AppShell's <main>, inherited by EVERY
+     view. Views must NOT set their own outer max-width/padding; a future
+     full-bleed surface (chat) opts out with its own negative-margin wrapper. */
+  .view-container {
+    width: 100%;
+    max-width: 1400px;
+    margin-inline: auto;
+    padding: 24px 28px 48px;
+  }
+  @media (max-width: 768px) {
+    .view-container {
+      padding: 16px 16px 32px;
+    }
+  }
   /* Atmospheric ASCII field: decorative, never interactive. */
   .ascii-field {
     position: absolute;
