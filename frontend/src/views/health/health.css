@@ -8,13 +8,21 @@
   max-width: 1080px;
 }
 
-/* Header */
+/* Header: terminal hero with the atmospheric ASCII backdrop behind it */
 .health-stage__header {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 20px;
+  padding: 18px 0 22px;
+}
+.health-stage__title-block {
+  position: relative; /* sits above the ascii-field */
+}
+.health-stage__header .btn-refresh {
+  position: relative;
 }
 .health-eyebrow {
   font-family: var(--font-mono);
@@ -24,11 +32,17 @@
   color: var(--dim);
 }
 .health-stage__title-block h2 {
-  font-size: clamp(1.75rem, 1.2rem + 1.6vw, 2.75rem);
-  line-height: 1;
-  font-weight: 800;
-  letter-spacing: -0.02em;
+  font-family: var(--font-mono);
+  font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2.375rem);
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
   margin-top: 6px;
+}
+.health-stage__title-block h2::after {
+  content: '.';
+  color: var(--primary);
 }
 #health-summary {
   margin-top: 8px;
@@ -156,31 +170,62 @@
   color: var(--ok);
 }
 
-/* Finding groups */
+/* Finding groups: boxed panels with a signal-dot kicker header (reference:
+   "THE FURNACE" / "LIVE INCINERATIONS" panel heads) */
 .health-findings {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 20px;
+}
+.health-finding-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
 }
 .health-finding-group__header {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 10px;
-  margin-bottom: 4px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--hairline);
+  padding: 10px 16px;
+}
+/* Panel-head dot is SEMANTIC: it carries the group's tone, never the accent. */
+.health-finding-group__header::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--dim);
+  flex: none;
+}
+.health-finding-group.is-action .health-finding-group__header::before {
+  background: var(--danger);
+}
+.health-finding-group.is-degraded .health-finding-group__header::before {
+  background: var(--warn);
+}
+.health-finding-group.is-optional .health-finding-group__header::before {
+  background: var(--info);
+}
+.health-finding-group.is-ready .health-finding-group__header::before {
+  background: var(--ok);
 }
 .health-finding-group__header h3 {
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--foreground);
 }
 .health-finding-group__header p {
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--dim);
-  margin-top: 2px;
+  letter-spacing: 0.02em;
 }
 .health-finding-group__header > span {
+  margin-left: auto;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 0.8125rem;
@@ -192,7 +237,7 @@
   display: grid;
   grid-template-columns: 14px 1fr;
   gap: 14px;
-  padding: 14px 0;
+  padding: 14px 16px;
 }
 .health-finding + .health-finding {
   border-top: 1px solid var(--hairline);

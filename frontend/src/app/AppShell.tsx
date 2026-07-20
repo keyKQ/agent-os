@@ -143,10 +143,10 @@ export function AppShell() {
           sidebarOpen ? '' : 'max-md:-translate-x-full'
         }`}
       >
-        {/* Wordmark: tight heavy sans, the lime mark dot is the only signal use here. */}
-        <div className="flex items-baseline gap-1.5 border-b border-hairline px-4 py-4">
-          <span className="text-[15px] font-extrabold tracking-tight">AgentOS</span>
-          <span className="t-label !text-primary">Control</span>
+        {/* Wordmark: terminal two-tone, lowercase mono (reference posture). */}
+        <div className="border-b border-hairline px-4 py-4 font-mono text-[14px] font-bold lowercase tracking-tight">
+          <span>AgentOS</span>
+          <span className="text-primary">Control</span>
         </div>
         <nav aria-label="Main" className="flex-1 overflow-y-auto px-2 py-3">
           {NAV_GROUPS.map((group) => (

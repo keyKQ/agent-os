@@ -172,8 +172,9 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: var(--font-sans);
-    font-size: 0.9375rem; /* legacy --fs-md */
+    /* Full-terminal posture: mono is the UI voice, sans is the exception. */
+    font-family: var(--font-mono);
+    font-size: 0.875rem;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
@@ -201,17 +202,80 @@
     letter-spacing: 0.22em;
     color: var(--dim);
   }
-  /* Dashboard view title (legacy .view-display rung): tight, heavy, poster. */
+  /* Terminal view title: mono, bold, lowercase, with the signal-colored
+     trailing period rendered via CSS so the accessible name stays clean. */
   .t-display {
-    font-size: clamp(1.75rem, 1.2rem + 1.6vw, 2.75rem);
-    line-height: 1;
-    font-weight: 800;
-    letter-spacing: -0.02em;
+    font-family: var(--font-mono);
+    font-size: clamp(1.5rem, 1.1rem + 1.4vw, 2.375rem);
+    line-height: 1.05;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-transform: lowercase;
+  }
+  .t-display::after {
+    content: '.';
+    color: var(--primary);
   }
   /* Mono numerals for data readouts. */
   .t-data {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.01em;
+  }
+  /* Boxed panel: the composition unit of the console. Header row carries a
+     signal dot + mono kicker; content sits inside the border. */
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .panel__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: var(--muted-foreground);
+  }
+  .panel__head::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--primary);
+    flex: none;
+  }
+  .panel__head > [data-slot='panel-meta'] {
+    margin-left: auto;
+    letter-spacing: 0.1em;
+    color: var(--dim);
+  }
+  .panel__body {
+    padding: 16px;
+  }
+  /* Atmospheric ASCII field: decorative, never interactive. */
+  .ascii-field {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    user-select: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.7;
+    letter-spacing: 0.4em;
+    white-space: pre;
+    color: var(--primary);
+    opacity: 0.2;
+    /* Ember drift: dense at the base, dissolving toward the top. */
+    mask-image: linear-gradient(to bottom, transparent 5%, black 70%);
+  }
+  :root[data-theme='light'] .ascii-field {
+    opacity: 0.14;
   }
 }

@@ -1,6 +1,7 @@
 import './health.css'
 import { useQuery } from '@tanstack/react-query'
 import { CopyIcon, RefreshCwIcon } from 'lucide-react'
+import { AsciiField } from '@/components/AsciiField'
 import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -242,7 +243,7 @@ function FindingsSection({ findings }: { findings: Finding[] }) {
   return (
     <>
       {groups.map((group) => (
-        <section className="health-finding-group" key={group.kind}>
+        <section className={`health-finding-group is-${group.kind}`} key={group.kind}>
           <header className="health-finding-group__header">
             <div>
               <h3>{group.title}</h3>
@@ -458,15 +459,17 @@ export function HealthPage() {
   return (
     <div className="health-layout health-stage">
       <header className="health-stage__header">
+        <AsciiField />
         <div className="health-stage__title-block">
           <span className="health-eyebrow">Control · Health</span>
           <h2>Health</h2>
           <p id="health-summary">{summaryText}</p>
         </div>
         <Button
-          variant="ghost"
+          variant="outline"
           id="health-refresh"
           title="Refresh health report"
+          className="btn-refresh text-xs uppercase tracking-[0.14em]"
           onClick={() => void query.refetch()}
         >
           <RefreshCwIcon />
