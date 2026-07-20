@@ -233,6 +233,44 @@ describe('ConfigPage', () => {
     expect(mockRpc.call).not.toHaveBeenCalledWith('config.patch', expect.anything())
   })
 
+  it('keeps the sticky bar up (with the form dirty count) after switching to YAML mode with pending form edits', async () => {
+    // config.js:667-679 — the bar is visible when there are pending form edits
+    // OR the YAML draft is dirty; switching to YAML mode must not hide a form
+    // edit that is still pending. The count follows the form keys until the YAML
+    // draft itself diverges.
+    await loadWith(sampleConfig())
+    const numberInput = await screen.findByDisplayValue('8000')
+    fireEvent.change(numberInput, { target: { value: '9000' } })
+    await waitFor(() => expect(screen.getByText(/changes? pending/i)).toBeInTheDocument())
+    // Switch to YAML mode — the (undirtied) YAML draft would give count 0, but
+    // the pending form edit must keep the bar visible showing "1 change pending".
+    fireEvent.click(screen.getByRole('button', { name: /^yaml$/i }))
+    await screen.findByLabelText(/yaml editor/i)
+    const bar = screen.getByRole('region', { name: /pending changes/i })
+    expect(within(bar).getByText('1')).toBeInTheDocument()
+    expect(within(bar).getByText(/change pending/i)).toBeInTheDocument()
+  })
+
+  it('preserves an invalid object-field JSON draft across a tab switch (text and flag stay in sync)', async () => {
+    // config.js:545,593-609 — the raw draft (including invalid text) is kept per
+    // key so unmounting the field (switching tabs) and remounting it restores the
+    // exact text the user typed, consistent with the still-set Invalid JSON flag.
+    await loadWith(sampleConfig())
+    const jsonArea = await screen.findByDisplayValue(/https:\/\/a\.example\.com/)
+    // Type invalid JSON into the Core-tab object field.
+    fireEvent.change(jsonArea, { target: { value: '{ broken' } })
+    await waitFor(() => expect(screen.getByText('Invalid JSON')).toBeInTheDocument())
+    // Switch away to another tab (unmounts the Core object field) then back.
+    fireEvent.click(screen.getByRole('tab', { name: /ai & agents/i }))
+    await waitFor(() => expect(screen.queryByDisplayValue('{ broken')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: /^core$/i }))
+    // The invalid draft text is restored (not reverted to the canonical value),
+    // and the Invalid JSON flag is still shown — the two agree.
+    await waitFor(() => expect(screen.getByDisplayValue('{ broken')).toBeInTheDocument())
+    expect(screen.getByText('Invalid JSON')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue(/https:\/\/a\.example\.com/)).not.toBeInTheDocument()
+  })
+
   it('search filters the visible fields within the active tab', async () => {
     await loadWith(sampleConfig())
     await screen.findByLabelText('debug')

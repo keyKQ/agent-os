@@ -67,6 +67,7 @@ function ConfigField({
   groupId,
   dirty,
   invalid,
+  jsonDraft,
   onChange,
 }: {
   configKey: string
@@ -74,6 +75,10 @@ function ConfigField({
   groupId: string
   dirty: boolean
   invalid: boolean
+  // config.js:545 — in-progress raw object-field text (valid or invalid) to seed
+  // the uncontrolled textarea on mount, so it survives an unmount/remount; falls
+  // back to the canonical serialisation when there is no draft.
+  jsonDraft: string | undefined
   onChange: (key: string, kind: 'boolean' | 'number' | 'json' | 'string', raw: string) => void
 }) {
   const inputId = useId()
@@ -127,7 +132,10 @@ function ConfigField({
       />
     )
   } else if (kind === 'object') {
-    const jsonStr = JSON.stringify(value, null, 2)
+    // config.js:545-546 — seed from the in-progress draft when present (so an
+    // invalid draft is not silently reverted to the canonical serialisation on
+    // remount), else the pretty-printed canonical value.
+    const jsonStr = jsonDraft !== undefined ? jsonDraft : JSON.stringify(value, null, 2)
     const errorId = `${inputId}-error`
     control = (
       <details className="cfg-object" open={dirty || invalid}>
@@ -189,6 +197,7 @@ function FormTab({
   editedValues,
   dirty,
   invalid,
+  jsonDrafts,
   resetKey,
   onChange,
 }: {
@@ -198,6 +207,7 @@ function FormTab({
   editedValues: Record<string, unknown>
   dirty: DirtyMap
   invalid: InvalidJsonMap
+  jsonDrafts: Record<string, string>
   // Bumped on every fresh config snapshot (load / reload / discard / post-save)
   // so uncontrolled object-field textareas remount and drop stale draft text —
   // config.js:302 re-rendered the panel HTML wholesale on each _loadData.
@@ -231,6 +241,7 @@ function FormTab({
                   groupId={group.id}
                   dirty={key in dirty}
                   invalid={key in invalid}
+                  jsonDraft={key in jsonDrafts ? jsonDrafts[key] : undefined}
                   onChange={onChange}
                 />
               )
@@ -340,6 +351,12 @@ export function ConfigPage() {
   const [editedValues, setEditedValues] = useState<Record<string, unknown>>({})
   const [dirty, setDirty] = useState<DirtyMap>({})
   const [invalid, setInvalid] = useState<InvalidJsonMap>({})
+  // config.js:185,545,593-609 — in-progress raw object-field JSON text, keyed by
+  // dotted key. Preserved (including invalid drafts) so that unmounting a field
+  // — e.g. switching tabs — and remounting it restores the exact text the user
+  // typed, keeping it consistent with the still-set "Invalid JSON" flag. Cleared
+  // only on a no-op revert and on any fresh snapshot / discard.
+  const [jsonDrafts, setJsonDrafts] = useState<Record<string, string>>({})
 
   // YAML-mode draft state (baseline = objToYaml(loaded config)).
   const [yamlDraft, setYamlDraft] = useState<string | null>(null)
@@ -383,6 +400,7 @@ export function ConfigPage() {
     setEditedValues({})
     setDirty({})
     setInvalid({})
+    setJsonDrafts({})
     setYamlDraft(null)
     setDiffOpen(false)
   }
@@ -395,6 +413,7 @@ export function ConfigPage() {
     setEditedValues({})
     setDirty({})
     setInvalid({})
+    setJsonDrafts({})
     setYamlDraft(null)
     setDiffOpen(false)
     void queryClient.invalidateQueries({ queryKey: ['config'] })
@@ -403,9 +422,13 @@ export function ConfigPage() {
   // config.js:585-616 — a field edit: parse → validate JSON → diff vs loaded.
   const onFieldChange = useCallback(
     (key: string, kind: 'boolean' | 'number' | 'json' | 'string', raw: string) => {
+      // config.js:594 — record the raw object-field text on every keystroke,
+      // before parsing, so an invalid draft survives an unmount/remount.
+      if (kind === 'json') setJsonDrafts((m) => ({ ...m, [key]: raw }))
       const parsed = parseFieldValue(kind, raw)
       if (!parsed.ok) {
-        // Invalid JSON: flag it and stop (no dirty diff while unparseable).
+        // Invalid JSON: flag it and stop (no dirty diff while unparseable). The
+        // raw draft is already stored above so the textarea and the flag agree.
         setInvalid((m) => ({ ...m, [key]: true }))
         return
       }
@@ -423,6 +446,16 @@ export function ConfigPage() {
         else delete next[key]
         return next
       })
+      // config.js:609 — a valid edit that reverts to the loaded value is a no-op;
+      // drop the draft so the field re-seeds from the canonical serialisation.
+      if (kind === 'json' && !result.dirty) {
+        setJsonDrafts((m) => {
+          if (!(key in m)) return m
+          const next = { ...m }
+          delete next[key]
+          return next
+        })
+      }
     },
     [config],
   )
@@ -494,8 +527,15 @@ export function ConfigPage() {
     patchMutation.mutate(payload)
   }, [mode, yamlDraft, baselineYaml, invalid, dirty, applyMutation, patchMutation])
 
-  const count = mode === 'yaml' ? (yamlDirty ? 1 : 0) : dirtyCount(dirty)
-  const barVisible = count > 0
+  // config.js:667-679 — the sticky bar tracks BOTH edit surfaces independently:
+  // it is visible whenever there are pending form edits OR the YAML draft is
+  // dirty (the latter only counts in YAML mode). So switching to YAML mode with
+  // pending form edits keeps the bar up showing the form dirty count — the YAML
+  // "1 change" only takes over once the YAML draft itself diverges.
+  const formKeys = dirtyCount(dirty)
+  const yamlDirtyVisible = mode === 'yaml' && yamlDirty
+  const count = yamlDirtyVisible ? 1 : formKeys
+  const barVisible = formKeys > 0 || yamlDirtyVisible
 
   return (
     <div className="cfg-stage">
@@ -597,6 +637,7 @@ export function ConfigPage() {
               editedValues={editedValues}
               dirty={dirty}
               invalid={invalid}
+              jsonDrafts={jsonDrafts}
               resetKey={lastSnapshotAt}
               onChange={onFieldChange}
             />
@@ -617,7 +658,10 @@ export function ConfigPage() {
       {barVisible ? (
         <StickyBar
           count={count}
-          yamlMode={mode === 'yaml'}
+          // config.js:686 — the diff view keys off yamlDirtyVisible, not the raw
+          // mode: in YAML mode with only pending form edits it still shows the
+          // per-field form diff rows.
+          yamlMode={yamlDirtyVisible}
           dirty={dirty}
           diffOpen={diffOpen}
           onToggleDiff={() => setDiffOpen((o) => !o)}
