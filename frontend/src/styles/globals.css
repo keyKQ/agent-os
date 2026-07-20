@@ -265,6 +265,43 @@
   .tone-border {
     border: 1px solid color-mix(in srgb, var(--tone, var(--border)) 45%, var(--border));
   }
+  /* Common terminal command line (see components/CommandLine.tsx). */
+  .cmdline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: 720px;
+    background: var(--background);
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-sm);
+    padding: 5px 6px 5px 12px;
+  }
+  .cmdline__prompt {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--primary);
+    user-select: none;
+    flex: none;
+  }
+  .cmdline code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    color: var(--foreground);
+    white-space: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .cmdline .cmdline__copy {
+    opacity: 0.45;
+    flex: none;
+  }
+  .cmdline:hover .cmdline__copy,
+  .cmdline .cmdline__copy:focus-visible {
+    opacity: 1;
+  }
   /* Mono numerals for data readouts. */
   .t-data {
     font-family: var(--font-mono);

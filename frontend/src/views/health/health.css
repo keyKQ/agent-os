@@ -400,22 +400,7 @@
   font-size: 0.8125rem;
   font-weight: 600;
 }
-.health-step__command {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.health-step__command code {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  background: var(--background);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
-  padding: 3px 8px;
-  overflow-x: auto;
-  white-space: nowrap;
-}
+/* Command rows use the common .cmdline (components/CommandLine.tsx). */
 .health-step__detail {
   font-size: 0.75rem;
   color: var(--dim);

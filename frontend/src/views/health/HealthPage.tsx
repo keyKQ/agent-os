@@ -1,9 +1,9 @@
 import './health.css'
 import { useQuery } from '@tanstack/react-query'
-import { CopyIcon, RefreshCwIcon } from 'lucide-react'
+import { RefreshCwIcon } from 'lucide-react'
 import { AsciiField } from '@/components/AsciiField'
+import { CommandLine } from '@/components/CommandLine'
 import { useEffect } from 'react'
-import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useBootstrap, useRpc } from '@/app/providers'
 import {
@@ -71,67 +71,14 @@ function gatewayUnavailableDetail(gatewayUrl: string, err: unknown): string {
   return `Cannot load doctor.status from ${gatewayUrl}. ${reason}`
 }
 
-// health.js:48-62 — clipboard write with an execCommand textarea fallback.
-function copyText(text: string): Promise<void> {
-  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    return navigator.clipboard.writeText(text)
-  }
-  const ta = document.createElement('textarea')
-  ta.value = text
-  ta.setAttribute('readonly', '')
-  ta.style.position = 'fixed'
-  ta.style.left = '-9999px'
-  document.body.appendChild(ta)
-  ta.select()
-  const ok = document.execCommand('copy')
-  document.body.removeChild(ta)
-  return ok ? Promise.resolve() : Promise.reject(new Error('Copy command failed'))
-}
-
-// health.js:35-46 + components.js UI.toast — copy handler with ok/err toast.
-// Match the legacy UI.toast contract as closely as the sonner seam allows:
-//   * durations: 1600ms ok / 2500ms err (legacy UI.toast(msg, 'ok', 1600) /
-//     (msg, 'err', 2500)).
-//   * dedupe of identical visible toasts: legacy keys by `${type}\0${message}`
-//     and drops a repeat while one is visible. Sonner has no message-keyed
-//     dedupe, but a stable per-outcome `id` collapses repeats into a single
-//     toast (a re-fire updates the existing one in place instead of stacking).
-//   Residual seam (recorded on parity matrix row 64): sonner 2.0.7 renders the
-//   whole toast list in ONE aria-live="polite" region and dropped the per-toast
-//   `important` option, so error toasts cannot be announced assertively
-//   (role="alert"/aria-live="assertive") the way legacy UI.toast set role=alert
-//   on err/warn toasts. Not fakeable through the sonner API at this version.
-const COPY_OK_TOAST_ID = 'health-copy-ok'
-const COPY_ERR_TOAST_ID = 'health-copy-err'
-
-async function onCopyCommand(command: string): Promise<void> {
-  if (!command) return
-  try {
-    await copyText(command)
-    toast.success('Copied command', { id: COPY_OK_TOAST_ID, duration: 1600 })
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    toast.error('Copy failed: ' + message, { id: COPY_ERR_TOAST_ID, duration: 2500 })
-  }
-}
-
+// health.js:35-62 + components.js UI.toast — copy handling now lives in the
+// COMMON <CommandLine> component (clipboard + execCommand fallback, 1600ms ok
+// / 2500ms err toasts, stable ids for dedupe; the sonner a11y seam stays
+// recorded on parity matrix row 64). Health scopes its toast ids with the
+// legacy-compatible "health-copy" prefix.
 function CommandRow({ command }: { command: string }) {
-  // health.js:388-395 — code + copy button.
-  return (
-    <span className="health-step__command">
-      <code>{command}</code>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-xs"
-        title="Copy command"
-        aria-label="Copy command"
-        onClick={() => void onCopyCommand(command)}
-      >
-        <CopyIcon />
-      </Button>
-    </span>
-  )
+  // health.js:388-395 — terminal command line + copy.
+  return <CommandLine command={command} toastIdPrefix="health-copy" />
 }
 
 function StepsList({ steps, kind }: { steps: NonNullable<Finding['fixSteps']>; kind: GroupKind }) {
