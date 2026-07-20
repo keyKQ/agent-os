@@ -1,0 +1,337 @@
+/* Channels view — tactical-HQ styling on the shared token system (globals.css).
+   Information structure references legacy css/views/channels.css; values rebuilt
+   on the design-system tokens. Status color flows ONLY through --tone (tone-*
+   classes); lime stays signal-only. */
+
+.ch-stage {
+  width: 100%;
+}
+
+/* Header: terminal hero over the atmospheric ASCII backdrop (Health posture). */
+.ch-stage__header {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 18px 0 22px;
+}
+.ch-stage__title-block {
+  position: relative; /* above the ascii-field */
+}
+.ch-stage__subtitle {
+  margin-top: 8px;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.ch-stage__refresh {
+  position: relative;
+}
+
+/* Stat row: hairline-separated tiles; hero + attention carry a --tone gutter. */
+.ch-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  background: var(--hairline);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 28px;
+}
+.ch-stat {
+  background: var(--surface);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ch-stat--hero,
+.ch-stat--attention {
+  border-left: 3px solid var(--tone, var(--border));
+}
+.ch-stat__value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.ch-stat--attention .ch-stat__value {
+  color: var(--tone, var(--foreground));
+}
+.ch-stat__hint {
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+/* Channel list. */
+.ch-list__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.ch-list__count {
+  color: var(--dim);
+  margin-left: 4px;
+}
+.ch-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+/* Channel card: a .panel with a status --tone gutter. */
+.ch-card {
+  border-left: 3px solid var(--tone, var(--border));
+}
+.ch-card__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.ch-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone, var(--dim));
+  flex: none;
+}
+.ch-card__name {
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-card__type {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  flex: none;
+}
+.ch-card__status {
+  padding: 12px 16px 0;
+}
+.ch-card__chip {
+  display: inline-block;
+  border: 1px solid color-mix(in srgb, var(--tone, var(--border)) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  font-size: 0.6875rem;
+  color: var(--tone, var(--foreground));
+}
+.ch-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  padding: 12px 16px 0;
+}
+.ch-card__meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ch-card__meta dt {
+  font-size: 0.625rem;
+}
+.ch-card__meta dd {
+  font-size: 0.8125rem;
+  color: var(--foreground);
+}
+
+/* Adapter config disclosure. */
+.ch-card__config {
+  padding: 12px 16px 0;
+}
+.ch-card__config summary {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+  cursor: pointer;
+}
+.ch-card__config-pre {
+  margin-top: 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  padding: 10px 12px;
+  font-size: 0.6875rem;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+.ch-card__footnote {
+  padding: 12px 16px 16px;
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+
+/* Telegram access sub-panel. */
+.ch-access {
+  margin: 14px 16px 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  padding: 14px;
+}
+.ch-access--pending {
+  border-left: 3px solid var(--warn);
+}
+.ch-access__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.ch-access__title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.ch-access__mode {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+.ch-access__select {
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 0.75rem;
+  padding: 4px 8px;
+}
+.ch-access__select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.ch-access__warning {
+  font-size: 0.75rem;
+  color: var(--warn);
+  margin-bottom: 8px;
+}
+.ch-access__note {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.ch-access__group + .ch-access__group {
+  margin-top: 12px;
+}
+.ch-access__group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ch-access__group-title span {
+  color: var(--dim);
+}
+.ch-access__empty {
+  font-size: 0.75rem;
+  color: var(--dim);
+}
+.ch-access__people {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ch-access__person {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 8px 10px;
+}
+.ch-access__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ch-access__identity strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.ch-access__identity span {
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+.ch-access__code {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  color: var(--primary);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+}
+.ch-access__person-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Empty state. */
+.ch-empty {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 32px 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.ch-empty__title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.ch-empty__msg {
+  max-width: 520px;
+  font-size: 0.8125rem;
+  color: var(--dim);
+}
+.ch-empty__commands {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+}
+
+/* Mobile collapse. */
+@media (max-width: 900px) {
+  .ch-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 768px) {
+  .ch-stage__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .ch-cards {
+    grid-template-columns: 1fr;
+  }
+}
