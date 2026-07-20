@@ -57,9 +57,25 @@
   gap: 1px;
   background: var(--hairline);
   border: 1px solid var(--border);
+  /* Terminal severity gutter: the whole rail carries its status tone. */
+  border-left: 3px solid var(--tone, var(--border));
   border-radius: var(--radius);
   overflow: hidden;
   margin-bottom: 28px;
+}
+.health-status__rail.is-ready {
+  --tone: var(--ok);
+}
+.health-status__rail.is-degraded {
+  --tone: var(--warn);
+}
+.health-status__rail.is-action_required,
+.health-status__rail.is-action-required,
+.health-status__rail.is-unavailable {
+  --tone: var(--danger);
+}
+.health-status__rail.is-loading {
+  --tone: var(--dim);
 }
 .health-status__rail > * {
   background: var(--surface);
@@ -87,16 +103,8 @@
   letter-spacing: -0.01em;
   line-height: 1.1;
 }
-.health-status__rail.is-ready .health-score strong {
-  color: var(--ok);
-}
-.health-status__rail.is-degraded .health-score strong {
-  color: var(--warn);
-}
-.health-status__rail.is-action_required .health-score strong,
-.health-status__rail.is-action-required .health-score strong,
-.health-status__rail.is-unavailable .health-score strong {
-  color: var(--danger);
+.health-status__rail .health-score strong {
+  color: var(--tone, var(--foreground));
 }
 .health-score__summary {
   font-size: 0.8125rem;
@@ -179,9 +187,23 @@
 }
 .health-finding-group {
   border: 1px solid var(--border);
+  /* Terminal severity gutter in the group's tone. */
+  border-left: 3px solid var(--tone, var(--border));
   border-radius: var(--radius);
   background: var(--surface);
   overflow: hidden;
+}
+.health-finding-group.is-action {
+  --tone: var(--danger);
+}
+.health-finding-group.is-degraded {
+  --tone: var(--warn);
+}
+.health-finding-group.is-optional {
+  --tone: var(--info);
+}
+.health-finding-group.is-ready {
+  --tone: var(--ok);
 }
 .health-finding-group__header {
   display: flex;
@@ -190,26 +212,14 @@
   border-bottom: 1px solid var(--hairline);
   padding: 10px 16px;
 }
-/* Panel-head dot is SEMANTIC: it carries the group's tone, never the accent. */
+/* Panel-head dot is SEMANTIC: it reads the group's --tone, never the accent. */
 .health-finding-group__header::before {
   content: '';
   width: 6px;
   height: 6px;
   border-radius: 1px;
-  background: var(--dim);
+  background: var(--tone, var(--dim));
   flex: none;
-}
-.health-finding-group.is-action .health-finding-group__header::before {
-  background: var(--danger);
-}
-.health-finding-group.is-degraded .health-finding-group__header::before {
-  background: var(--warn);
-}
-.health-finding-group.is-optional .health-finding-group__header::before {
-  background: var(--info);
-}
-.health-finding-group.is-ready .health-finding-group__header::before {
-  background: var(--ok);
 }
 .health-finding-group__header h3 {
   font-family: var(--font-mono);
@@ -238,6 +248,20 @@
   grid-template-columns: 14px 1fr;
   gap: 14px;
   padding: 14px 16px;
+  /* Per-row severity gutter (terminal log-line posture). */
+  border-left: 2px solid color-mix(in srgb, var(--tone, transparent) 55%, transparent);
+}
+.health-finding.is-error {
+  --tone: var(--danger);
+}
+.health-finding.is-warn {
+  --tone: var(--warn);
+}
+.health-finding.is-info {
+  --tone: var(--info);
+}
+.health-finding.is-ok {
+  --tone: var(--ok);
 }
 .health-finding + .health-finding {
   border-top: 1px solid var(--hairline);
@@ -255,17 +279,8 @@
   border-radius: 1px; /* square posture */
   background: var(--dim);
 }
-.health-finding.is-error .health-finding__dot {
-  background: var(--danger);
-}
-.health-finding.is-warn .health-finding__dot {
-  background: var(--warn);
-}
-.health-finding.is-info .health-finding__dot {
-  background: var(--info);
-}
-.health-finding.is-ok .health-finding__dot {
-  background: var(--ok);
+.health-finding .health-finding__dot {
+  background: var(--tone, var(--dim));
 }
 .health-finding__line {
   flex: 1;
@@ -286,11 +301,9 @@
   letter-spacing: 0.14em;
   color: var(--dim);
 }
-.health-finding.is-error .health-finding__meta > span:first-child {
-  color: var(--danger);
-}
+.health-finding.is-error .health-finding__meta > span:first-child,
 .health-finding.is-warn .health-finding__meta > span:first-child {
-  color: var(--warn);
+  color: var(--tone);
 }
 .health-finding__title {
   margin-top: 6px;

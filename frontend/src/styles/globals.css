@@ -240,6 +240,31 @@
       animation: none;
     }
   }
+  /* ---- Common status-tone system (terminal severity gutter) ----
+     Set a tone class on any element, then use .tone-rail (left gutter rule)
+     or .tone-border (tinted full border). Views map their own state classes
+     to --tone the same way; NEVER hardcode status colors per view. */
+  .tone-ok {
+    --tone: var(--ok);
+  }
+  .tone-warn {
+    --tone: var(--warn);
+  }
+  .tone-danger {
+    --tone: var(--danger);
+  }
+  .tone-info {
+    --tone: var(--info);
+  }
+  .tone-dim {
+    --tone: var(--dim);
+  }
+  .tone-rail {
+    border-left: 2px solid var(--tone, var(--border));
+  }
+  .tone-border {
+    border: 1px solid color-mix(in srgb, var(--tone, var(--border)) 45%, var(--border));
+  }
   /* Mono numerals for data readouts. */
   .t-data {
     font-family: var(--font-mono);
