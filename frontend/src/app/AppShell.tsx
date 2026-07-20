@@ -166,14 +166,15 @@ export function AppShell() {
           <span>AgentOS</span>
           <span className="text-primary">Control</span>
         </div>
-        <nav aria-label="Main" className="flex-1 overflow-y-auto px-2 py-3">
+        <nav aria-label="Main" className="flex-1 overflow-y-auto px-2.5 py-5">
           {NAV_GROUPS.map((group) => (
-            <div key={group.label} className="mb-4">
-              <div className="t-label px-2 pb-1.5">{group.label}</div>
+            <div key={group.label} className="mb-6">
+              <div className="nav-group px-2.5 pb-2">{group.label}</div>
               {group.items.map((v) => {
                 // router.js:59-66 — active nav item carries .is-active styling
                 // AND aria-current="page" for screen readers. Lime is reserved
-                // as signal: active nav gets the left rule + lime icon/text.
+                // as signal: active nav gets the left rule + lime icon/text +
+                // a blinking terminal caret.
                 const active = activePath === v.path
                 const Icon = v.icon
                 return (
@@ -182,14 +183,14 @@ export function AppShell() {
                     to={`/${v.path}`}
                     onClick={() => setSidebarOpen(false)}
                     aria-current={active ? 'page' : undefined}
-                    className={`relative flex items-center gap-2.5 rounded-sm px-2.5 py-[7px] text-[13px] transition-colors duration-150 ${
+                    className={`relative flex items-center gap-3 rounded-sm px-3 py-2.5 text-[14px] lowercase transition-colors duration-150 ${
                       active
-                        ? 'bg-accent font-semibold text-primary before:absolute before:inset-y-1 before:left-0 before:w-[2px] before:bg-primary'
+                        ? 'caret-blink bg-accent font-semibold text-primary before:absolute before:inset-y-1.5 before:left-0 before:w-[2px] before:bg-primary'
                         : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
                     }`}
                   >
                     <Icon
-                      className={`size-4 shrink-0 ${active ? 'text-primary' : 'text-dim'}`}
+                      className={`size-[18px] shrink-0 ${active ? 'text-primary' : 'text-dim'}`}
                       strokeWidth={1.5}
                       aria-hidden="true"
                     />
