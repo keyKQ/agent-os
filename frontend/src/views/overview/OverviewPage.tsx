@@ -11,6 +11,7 @@ import {
   RefreshCwIcon,
   StethoscopeIcon,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { useBootstrap, useRpc } from '@/app/providers'
@@ -139,9 +140,22 @@ export function OverviewPage() {
       await rpc.waitForConnection()
       return rpc.call<StatusPayload>('status', {})
     },
+    // overview.js:245-248 — status is the one read that surfaces its failure to
+    // the operator; legacy fired the toast once per failed call (no retries).
+    retry: false,
     refetchInterval: POLL_MS,
     refetchOnWindowFocus: false,
   })
+
+  // overview.js:245-248 — only the status read toasts on failure. A stable
+  // toast id de-dupes the single visible notification across re-renders.
+  useEffect(() => {
+    if (statusQuery.isError) {
+      const err = statusQuery.error
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error('Failed to load status: ' + message, { id: 'overview-status-err' })
+    }
+  }, [statusQuery.isError, statusQuery.error])
 
   const doctorQuery = useQuery<DoctorPayload>({
     queryKey: ['overview', 'doctor.status'],
@@ -234,6 +248,11 @@ export function OverviewPage() {
   const status = statusQuery.data
   const usage = usageQuery.data
   const recent = sortRecentSessions(sessionsQuery.data?.sessions ?? [])
+  // overview.js:272-310 — sessions.list `.catch(() => {})` left the initial
+  // skeleton in place on failure; only a *successful* empty response rendered
+  // the "No sessions yet" CTA. Distinguish error from empty so a failed read
+  // never masquerades as an empty account.
+  const sessionsFailed = sessionsQuery.isError
   const doctor = doctorQuery.data
   const doctorFailed = doctorQuery.isError
 
@@ -286,7 +305,9 @@ export function OverviewPage() {
           </span>
         </StatTile>
         <StatTile label="Total sessions" icon={<ActivityIcon />} to="/sessions">
-          <strong className="ov-stat__value t-data">{formatTokens(usage?.totalSessions)}</strong>
+          {/* overview.js:262 — legacy printed the raw integer (data.totalSessions
+              ?? '—'); no toLocaleString grouping, unlike the token tile. */}
+          <strong className="ov-stat__value t-data">{usage?.totalSessions ?? '—'}</strong>
           <span className="ov-stat__hint">view all →</span>
         </StatTile>
         <StatTile label="Provider" icon={<BotIcon />} to="/agents">
@@ -330,7 +351,14 @@ export function OverviewPage() {
             </button>
           </div>
           <div className="panel__body ov-recent">
-            {recent.length === 0 ? (
+            {sessionsFailed ? (
+              // overview.js:272-310 — a failed sessions.list is not an empty
+              // account: keep a neutral placeholder (legacy left the skeleton),
+              // never the "No sessions yet" empty CTA.
+              <div className="ov-recent__empty" role="status">
+                <span>Recent sessions unavailable.</span>
+              </div>
+            ) : recent.length === 0 ? (
               <div className="ov-recent__empty">
                 <MessageSquareIcon className="ov-recent__empty-icon" aria-hidden="true" />
                 <span>No sessions yet — open chat to start your first one.</span>

@@ -2,7 +2,17 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { OverviewPage } from './OverviewPage'
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  },
+}))
 
 const navigateSpy = vi.fn()
 vi.mock('react-router', async () => {
@@ -74,16 +84,20 @@ const SESSIONS = {
 function wireRpc(
   opts: {
     status?: unknown
+    statusReject?: boolean
     doctor?: unknown
     doctorReject?: boolean
     usage?: unknown
     sessions?: unknown
+    sessionsReject?: boolean
   } = {},
 ) {
   mockRpc.call.mockImplementation((method: string) => {
     switch (method) {
       case 'status':
-        return Promise.resolve(opts.status ?? STATUS)
+        return opts.statusReject
+          ? Promise.reject(new Error('boom'))
+          : Promise.resolve(opts.status ?? STATUS)
       case 'doctor.status':
         return opts.doctorReject
           ? Promise.reject(new Error('down'))
@@ -91,7 +105,9 @@ function wireRpc(
       case 'usage.status':
         return Promise.resolve(opts.usage ?? USAGE)
       case 'sessions.list':
-        return Promise.resolve(opts.sessions ?? SESSIONS)
+        return opts.sessionsReject
+          ? Promise.reject(new Error('down'))
+          : Promise.resolve(opts.sessions ?? SESSIONS)
       default:
         return Promise.resolve({})
     }
@@ -115,6 +131,7 @@ describe('OverviewPage', () => {
     mockRpc = makeRpc()
     navigateSpy.mockReset()
     connState = 'connected'
+    vi.mocked(toast.error).mockClear()
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -144,6 +161,17 @@ describe('OverviewPage', () => {
     expect(screen.getByText('Two capabilities need attention')).toBeInTheDocument()
   })
 
+  // overview.js:262 — the Total sessions tile printed the raw integer, unlike
+  // the token tile which localizes. A value with a thousands boundary proves
+  // no toLocaleString grouping is applied.
+  it('renders the total-sessions count raw (no thousands grouping)', async () => {
+    wireRpc({ usage: { totalSessions: 12345, totalTokens: 1234567, totalCostUsd: 4.2 } })
+    renderPage()
+    const tile = await screen.findByRole('button', { name: /total sessions/i })
+    await waitFor(() => expect(within(tile).getByText('12345')).toBeInTheDocument())
+    expect(within(tile).queryByText((12345).toLocaleString())).not.toBeInTheDocument()
+  })
+
   it('renders recent sessions sorted newest-first with status dot, model and relative time', async () => {
     wireRpc()
     renderPage()
@@ -159,6 +187,42 @@ describe('OverviewPage', () => {
     wireRpc({ sessions: { sessions: [] } })
     renderPage()
     await waitFor(() => expect(screen.getByText(/No sessions yet/i)).toBeInTheDocument())
+  })
+
+  // overview.js:272-310 — a failed sessions.list left the skeleton in place;
+  // only a *successful* empty response showed the "No sessions yet" CTA.
+  it('keeps a neutral state (not the empty CTA) when sessions.list rejects', async () => {
+    wireRpc({ sessionsReject: true })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText(/Recent sessions unavailable/i)).toBeInTheDocument(),
+    )
+    // The "No sessions yet" empty CTA must NOT render on a failed read.
+    expect(screen.queryByText(/No sessions yet/i)).not.toBeInTheDocument()
+  })
+
+  // overview.js:245-248 — status is the one read that toasts on failure.
+  it('toasts once when the status read rejects', async () => {
+    wireRpc({ statusReject: true })
+    renderPage()
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to load status:'),
+        expect.objectContaining({ id: 'overview-status-err' }),
+      ),
+    )
+    // A stable toast id keeps it to a single visible notification.
+    expect(toast.error).toHaveBeenCalledTimes(1)
+  })
+
+  // The sibling reads stay silent on failure — only status surfaces a toast.
+  it('does not toast when sessions.list rejects', async () => {
+    wireRpc({ sessionsReject: true })
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText(/Recent sessions unavailable/i)).toBeInTheDocument(),
+    )
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
   it('shows the health tile as unavailable when doctor.status rejects', async () => {
