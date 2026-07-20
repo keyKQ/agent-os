@@ -1,0 +1,321 @@
+/* Cron view — rebuilt on the globals.css token system (mirrors the Health /
+   Channels / Agents posture). Status color is expressed ONLY via the --tone
+   primitive; lime --primary stays signal-only. */
+
+.cron-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Header hero with the AsciiField backdrop. */
+.cron-stage__header {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 1.25rem 0 1.5rem;
+  overflow: hidden;
+}
+.cron-stage__title-block {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.cron-stage__subtitle {
+  max-width: 46ch;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+.cron-stage__actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.cron-search {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  min-width: 12rem;
+}
+.cron-search:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.cron-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.cron-sort__select {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+/* Stat tiles — hairline rows, one lime hero gutter. */
+.cron-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+}
+.cron-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  background: var(--background);
+}
+.cron-stat--hero {
+  border-left: 2px solid var(--primary);
+}
+.cron-stat__value {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+.cron-stat__hint {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+/* List. */
+.cron-list__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.cron-list__count {
+  color: var(--muted-foreground);
+}
+.cron-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+  gap: 1rem;
+}
+
+/* Job card — a .panel with a --tone status gutter. */
+.cron-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-left-width: 2px;
+}
+.cron-card.is-selected {
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
+}
+.cron-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cron-card__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.cron-card__name {
+  font-weight: 600;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cron-card__name:hover {
+  color: var(--primary);
+}
+.cron-pill {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted-foreground);
+  flex: none;
+}
+.cron-card__schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.cron-expr {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.8rem;
+  background: var(--muted);
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+}
+.cron-card__human {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+.cron-card__meta {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+}
+.cron-card__meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+}
+.cron-card__meta dt {
+  color: var(--muted-foreground);
+}
+.cron-card__meta dd {
+  margin: 0;
+  text-align: right;
+}
+.cron-card__message dd {
+  text-align: left;
+  color: var(--muted-foreground);
+}
+.cron-card__abs {
+  color: var(--muted-foreground);
+}
+.cron-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.cron-muted {
+  color: var(--muted-foreground);
+}
+.cron-status {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cron-status.tone-ok {
+  color: var(--tone);
+}
+.cron-status.tone-danger {
+  color: var(--tone);
+}
+.cron-card__actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+/* Run-history drawer. */
+.cron-detail {
+  margin-top: 1rem;
+  padding: 1rem;
+}
+.cron-detail__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.cron-detail__name {
+  display: block;
+  font-size: 1rem;
+}
+.cron-runs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.cron-runs th,
+.cron-runs td {
+  text-align: left;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.cron-runs th {
+  color: var(--muted-foreground);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+}
+.cron-runs__reply {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Empty state — dashed, tokenized. */
+.cron-empty {
+  border: 1px dashed var(--border);
+  padding: 2rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+.cron-empty__title {
+  font-weight: 600;
+}
+.cron-empty__msg {
+  max-width: 52ch;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+.cron-empty__actions {
+  margin-top: 0.5rem;
+}
+
+/* Delete confirmation modal (tokenized alertdialog). */
+.cron-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--background) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+.cron-modal {
+  width: min(28rem, calc(100vw - 2rem));
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cron-modal__title {
+  font-size: 1rem;
+  font-weight: 600;
+}
+.cron-modal__body {
+  color: var(--muted-foreground);
+  font-size: 0.9rem;
+}
+.cron-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}

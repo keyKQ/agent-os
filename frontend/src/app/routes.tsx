@@ -11,6 +11,7 @@ import { SessionsPage } from '@/views/sessions/SessionsPage'
 import { UsagePage } from '@/views/usage/UsagePage'
 import { ConfigPage } from '@/views/config/ConfigPage'
 import { SkillsPage } from '@/views/skills/SkillsPage'
+import { CronPage } from '@/views/cron/CronPage'
 
 export const VIEWS: ReadonlyArray<{ path: string; title: string }> = [
   { path: 'overview', title: 'Overview' },
@@ -54,6 +55,7 @@ function viewElement(path: string) {
   if (path === 'usage') return <UsagePage />
   if (path === 'config') return <ConfigPage />
   if (path === 'skills') return <SkillsPage />
+  if (path === 'cron') return <CronPage />
   return <StubView title={view?.title ?? 'Overview'} />
 }
 
@@ -99,6 +101,7 @@ export const routeChildren: RouteObject[] = [
     if (v.path === 'usage') return { path: v.path, element: <UsagePage /> }
     if (v.path === 'config') return { path: v.path, element: <ConfigPage /> }
     if (v.path === 'skills') return { path: v.path, element: <SkillsPage /> }
+    if (v.path === 'cron') return { path: v.path, element: <CronPage /> }
     return { path: v.path, element: <StubView title={v.title} /> }
   }),
   { path: '*', element: <NotFound /> },
