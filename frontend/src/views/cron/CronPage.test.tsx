@@ -95,6 +95,7 @@ function wireRpc(
     runReject?: boolean
     runsReject?: boolean
     removeReject?: boolean
+    createReject?: boolean
     runs?: unknown[]
   } = {},
 ) {
@@ -107,6 +108,8 @@ function wireRpc(
       case 'cron.subscribe':
       case 'cron.unsubscribe':
         return Promise.resolve({})
+      case 'cron.create':
+        return opts.createReject ? Promise.reject(new Error('create failed')) : Promise.resolve({})
       case 'cron.update':
         return opts.updateReject ? Promise.reject(new Error('update failed')) : Promise.resolve({})
       case 'cron.run':
@@ -298,6 +301,24 @@ describe('CronPage', () => {
     await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
   })
 
+  it('toggles the sort direction and reorders the cards', async () => {
+    // Two jobs; sort by name ascending → Daily standup before Health check.
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Daily standup')).toBeInTheDocument())
+    fireEvent.change(screen.getByLabelText('Sort jobs'), { target: { value: 'name' } })
+    const namesAsc = screen
+      .getAllByLabelText(/^Cron job /)
+      .map((el) => el.getAttribute('aria-label'))
+    expect(namesAsc).toEqual(['Cron job Daily standup', 'Cron job Health check'])
+    // flip to descending
+    fireEvent.click(screen.getByRole('button', { name: /sort direction/i }))
+    const namesDesc = screen
+      .getAllByLabelText(/^Cron job /)
+      .map((el) => el.getAttribute('aria-label'))
+    expect(namesDesc).toEqual(['Cron job Health check', 'Cron job Daily standup'])
+  })
+
   it('toasts when cron.list fails', async () => {
     wireRpc({ listReject: true })
     renderPage()
@@ -308,5 +329,152 @@ describe('CronPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(document.title).toBe('Cron - AgentOS Control'))
+  })
+})
+
+describe('CronPage — create/edit panel', () => {
+  it('New job opens the create panel; Save with a name+cron calls cron.create and invalidates', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/^name$/i), { target: { value: 'Standup' } })
+    fireEvent.change(within(dialog).getByLabelText('Cron expression', { selector: 'input' }), {
+      target: { value: '0 9 * * 1-5' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith(
+        'cron.create',
+        expect.objectContaining({
+          name: 'Standup',
+          payloadKind: 'reminder',
+          schedule: { kind: 'cron', expr: '0 9 * * 1-5' },
+        }),
+      ),
+    )
+    await waitFor(() => expect(callsTo('cron.list')).toBeGreaterThanOrEqual(2))
+    // panel closes on success
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('blocks submit and toasts when the name is blank (no RPC)', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith('Name is required', expect.anything()),
+    )
+    expect(callsTo('cron.create')).toBe(0)
+  })
+
+  it('edit prefills the form and Save sends the full payload via cron.update {id}', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Daily standup')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /edit daily standup/i }))
+    const dialog = await screen.findByRole('dialog')
+    // prefilled name + cron
+    expect(within(dialog).getByLabelText(/^name$/i)).toHaveValue('Daily standup')
+    expect(within(dialog).getByLabelText('Cron expression', { selector: 'input' })).toHaveValue(
+      '0 9 * * 1-5',
+    )
+    // change the name and save
+    fireEvent.change(within(dialog).getByLabelText(/^name$/i), {
+      target: { value: 'Daily standup v2' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith(
+        'cron.update',
+        expect.objectContaining({
+          id: 'job-rem',
+          name: 'Daily standup v2',
+          schedule: { kind: 'cron', expr: '0 9 * * 1-5' },
+        }),
+      ),
+    )
+    await waitFor(() => expect(callsTo('cron.list')).toBeGreaterThanOrEqual(2))
+  })
+
+  it('switching schedule type to interval validates a positive integer', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/^name$/i), { target: { value: 'Ping' } })
+    fireEvent.change(within(dialog).getByLabelText(/schedule type/i), {
+      target: { value: 'every' },
+    })
+    // interval field now visible; 0 is invalid
+    fireEvent.change(within(dialog).getByLabelText(/interval/i), { target: { value: '0' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Interval must be an integer number of seconds',
+        expect.anything(),
+      ),
+    )
+    expect(callsTo('cron.create')).toBe(0)
+    // a valid interval saves
+    fireEvent.change(within(dialog).getByLabelText(/interval/i), { target: { value: '60' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith(
+        'cron.create',
+        expect.objectContaining({ schedule: { kind: 'every', every_seconds: 60 } }),
+      ),
+    )
+  })
+
+  it('agent-task mode reveals the session-target picker and a named-session key requirement', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/^name$/i), { target: { value: 'Task' } })
+    fireEvent.change(within(dialog).getByLabelText('Cron expression', { selector: 'input' }), {
+      target: { value: '* * * * *' },
+    })
+    fireEvent.change(within(dialog).getByLabelText(/job mode/i), {
+      target: { value: 'agent_turn' },
+    })
+    // session target appears; pick "session" (named) with no key → blocked
+    fireEvent.change(within(dialog).getByLabelText(/session target/i), {
+      target: { value: 'session' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Named session key is required',
+        expect.anything(),
+      ),
+    )
+    expect(callsTo('cron.create')).toBe(0)
+  })
+
+  it('closes the panel on Cancel without an RPC', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^cancel$/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(callsTo('cron.create')).toBe(0)
+  })
+
+  it('the empty-state CTA opens the create panel', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /create your first schedule/i }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 })

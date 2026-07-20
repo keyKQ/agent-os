@@ -2,13 +2,24 @@ import './cron.css'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { PencilIcon, PlusIcon, RefreshCwIcon, SendIcon, SquareIcon, Trash2Icon } from 'lucide-react'
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  PencilIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  SendIcon,
+  SquareIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
 import { relTime } from '@/views/overview/logic'
+import { CronPanel } from './CronPanel'
 import {
+  activeChatSessionKey,
   explainCron,
   filterJobs,
   humanCountdownPast,
@@ -26,8 +37,64 @@ import {
   type CronDot,
   type RawJob,
   type RawRun,
+  type SaveBuild,
   type SortCol,
 } from './logic'
+
+// cron.js:1491 — the localStorage key that holds the active chat session.
+const ACTIVE_SESSION_KEY = 'agentos_active_session'
+
+// cron.js:1485-1494 — read the active chat session from the URL + localStorage
+// (both reads tolerate access errors, like legacy). Kept impure-at-the-edge so
+// activeChatSessionKey() in logic.ts stays a pure, tested transform.
+function readActiveSessionKey(): string {
+  let urlSession = ''
+  try {
+    urlSession = new URLSearchParams(window.location.search).get('session') || ''
+  } catch {
+    /* location unavailable */
+  }
+  let stored = ''
+  try {
+    stored = localStorage.getItem(ACTIVE_SESSION_KEY) || ''
+  } catch {
+    /* storage unavailable */
+  }
+  return activeChatSessionKey(urlSession, stored)
+}
+
+// The create/edit panel state: closed, creating (optional template seed), or
+// editing an existing job.
+type PanelState =
+  | { kind: 'closed' }
+  | { kind: 'create'; template: Partial<RawJob> | null }
+  | { kind: 'edit'; job: RawJob }
+
+// cron.js:832-843 — the three empty-state quick-start presets (seed the create
+// panel). `hint` is UI-only; the rest is the template seed for seedForm.
+const EMPTY_TEMPLATES: Array<Partial<RawJob> & { expression: string; hint: string }> = [
+  {
+    name: 'Daily standup nudge',
+    expression: '0 9 * * 1-5',
+    payloadKind: 'reminder',
+    message: 'Good morning! Time for standup.',
+    hint: 'Weekday morning reminder',
+  },
+  {
+    name: 'Hourly health check',
+    expression: '0 * * * *',
+    payloadKind: 'agent_turn',
+    message: 'Run a quick system health check and report any anomalies.',
+    hint: 'Hourly agent check',
+  },
+  {
+    name: 'Friday wrap-up',
+    expression: '0 17 * * 5',
+    payloadKind: 'agent_turn',
+    message: "Summarize this week's work and propose next week's priorities.",
+    hint: 'Friday agent wrap-up',
+  },
+]
 
 // cron.js:341-342 — cron.list may return a bare array or {jobs:[…]}.
 interface CronListResult {
@@ -366,14 +433,14 @@ function DeleteConfirm({
 // ── Page ─────────────────────────────────────────────────────────────────────
 export function CronPage() {
   const rpc = useRpc()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
   const [search, setSearch] = useState('')
   const [sortCol, setSortCol] = useState<SortCol>('next_run')
-  const [sortAsc] = useState(true)
+  const [sortAsc, setSortAsc] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<RawJob | null>(null)
+  const [panel, setPanel] = useState<PanelState>({ kind: 'closed' })
 
   useEffect(() => {
     document.title = 'Cron - AgentOS Control'
@@ -484,6 +551,24 @@ export function CronPage() {
     },
   })
 
+  // cron.js:1240-1250 — save the create/edit panel → cron.create OR cron.update
+  // (method + full payload assembled in logic.ts::buildSavePayload). Success
+  // toast + close + reload; failure toast.
+  const saveMutation = useMutation({
+    mutationFn: (build: Extract<SaveBuild, { ok: true }>) => rpc.call(build.method, build.payload),
+    onSuccess: (_data, build) => {
+      toast.success(build.method === 'cron.update' ? 'Schedule updated' : 'Schedule created', {
+        id: 'cron-save',
+      })
+      setPanel({ kind: 'closed' })
+      void invalidate()
+    },
+    onError: (err) => {
+      const message = err instanceof Error ? err.message : String(err)
+      toast.error('Save failed: ' + message, { id: 'cron-save-err' })
+    },
+  })
+
   const jobs = jobsQuery.data ?? []
   const busy = toggleMutation.isPending || runMutation.isPending || removeMutation.isPending
 
@@ -539,12 +624,28 @@ export function CronPage() {
           </label>
           <Button
             variant="outline"
+            size="icon-sm"
+            title={sortAsc ? 'Ascending' : 'Descending'}
+            aria-label={`Sort direction: ${sortAsc ? 'ascending' : 'descending'}`}
+            onClick={() => setSortAsc((v) => !v)}
+          >
+            {sortAsc ? <ArrowUpIcon /> : <ArrowDownIcon />}
+          </Button>
+          <Button
+            variant="outline"
             title="Refresh"
             className="text-xs uppercase tracking-[0.14em]"
             onClick={() => void invalidate()}
           >
             <RefreshCwIcon />
             <span>Refresh</span>
+          </Button>
+          <Button
+            className="text-xs uppercase tracking-[0.14em]"
+            onClick={() => setPanel({ kind: 'create', template: null })}
+          >
+            <PlusIcon />
+            <span>New job</span>
           </Button>
         </div>
       </header>
@@ -580,15 +681,28 @@ export function CronPage() {
           <div className="cron-empty">
             <div className="cron-empty__title">No schedules yet.</div>
             <p className="cron-empty__msg">
-              Create a cron job to wake an agent, fire a reminder, or kick off recurring work — all
-              on time. Schedule creation stays in the CLI so payloads, delivery, and session targets
-              stay explicit.
+              Create your first cron job to wake an agent, fire a reminder, or kick off recurring
+              work — all on time, all on your terms.
             </p>
             <div className="cron-empty__actions">
-              <Button type="button" onClick={() => navigate('/chat')}>
+              <Button type="button" onClick={() => setPanel({ kind: 'create', template: null })}>
                 <PlusIcon />
-                <span>Ask an agent to schedule it</span>
+                <span>Create your first schedule</span>
               </Button>
+            </div>
+            <div className="cron-empty__hints">
+              <span className="cron-empty__hints-label t-label">Try a preset</span>
+              {EMPTY_TEMPLATES.map((tpl) => (
+                <button
+                  key={tpl.name}
+                  type="button"
+                  className="cron-empty-hint"
+                  onClick={() => setPanel({ kind: 'create', template: tpl })}
+                >
+                  <code>{tpl.expression}</code>
+                  <span>{tpl.hint}</span>
+                </button>
+              ))}
             </div>
           </div>
         ) : visible.length === 0 ? (
@@ -609,11 +723,7 @@ export function CronPage() {
                 onOpen={(id) => setSelectedId((cur) => (cur === id ? null : id))}
                 onToggle={(j) => toggleMutation.mutate(j)}
                 onRun={(id) => runMutation.mutate(id)}
-                onEdit={() =>
-                  toast.info('Editing schedules stays in the CLI: agentos cron edit', {
-                    id: 'cron-edit',
-                  })
-                }
+                onEdit={(j) => setPanel({ kind: 'edit', job: j })}
                 onDelete={(j) => setPendingDelete(j)}
               />
             ))}
@@ -635,6 +745,20 @@ export function CronPage() {
           busy={removeMutation.isPending}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => removeMutation.mutate(String(pendingDelete.id))}
+        />
+      ) : null}
+
+      {panel.kind !== 'closed' ? (
+        <CronPanel
+          // Remount on a new seed so form state resets between create/edit and
+          // between different jobs (mirrors the agents-dialog key strategy).
+          key={panel.kind === 'edit' ? 'edit:' + String(panel.job.id) : 'create'}
+          job={panel.kind === 'edit' ? panel.job : null}
+          template={panel.kind === 'create' ? panel.template : null}
+          activeSessionKey={readActiveSessionKey()}
+          saving={saveMutation.isPending}
+          onCancel={() => setPanel({ kind: 'closed' })}
+          onSubmit={(build) => saveMutation.mutate(build)}
         />
       ) : null}
     </div>

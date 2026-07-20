@@ -14,6 +14,10 @@ export interface RawJob {
   status?: string
   expression?: string
   schedule?: string
+  scheduleKind?: string
+  schedule_kind?: string
+  scheduleRaw?: string | number
+  schedule_raw?: string | number
   next_run?: string | number | null
   last_run?: string | number | null
   last_status?: string
@@ -23,6 +27,30 @@ export interface RawJob {
   session_target?: string
   message?: string
   prompt?: string
+  agentId?: string
+  tz?: string
+  wakeMode?: string
+  wake_mode?: string
+  delivery?: RawDelivery | null
+  originSessionKey?: string
+  origin_session_key?: string
+  targetSessionKey?: string
+  target_session_key?: string
+  sessionKey?: string
+  session_key?: string
+  [key: string]: unknown
+}
+
+/** A raw delivery block on a job (from the wire). */
+export interface RawDelivery {
+  mode?: string
+  channelName?: string
+  to?: string
+  channelId?: string
+  accountId?: string
+  webhookUrl?: string
+  bestEffort?: boolean
+  failureDestination?: RawDelivery | null
   [key: string]: unknown
 }
 
@@ -498,4 +526,452 @@ export function explainCron(expr: string): string {
   const minPart = humanizeFieldList(p.minute, 'every minute')
   const hourPart = humanizeFieldList(p.hour, 'every hour')
   return `at minute ${minPart}, hour ${hourPart}`
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Create / Edit panel — pure form seeding, validation, and payload assembly
+// ported 1:1 from cron.js (_openPanel ~927, _populateDeliveryFields 1083,
+// _buildDeliveryFromForm 1114, _buildFailureDestinationFromForm 1154,
+// _saveJob 1180, session-key helpers 1485-1520). RPC/DOM/animation stay in
+// CronPage.tsx; everything decision-shaped lives here and is unit-tested.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type ScheduleKind = 'cron' | 'every' | 'at'
+export type PayloadKind = 'reminder' | 'agent_turn' | 'system_event'
+export type SessionTarget = 'main' | 'current' | 'isolated' | 'session'
+export type DeliveryMode = '' | 'none' | 'announce' | 'webhook'
+export type FailureDestMode = '' | 'channel' | 'webhook'
+
+/** The editable shape of the create/edit panel — one field per legacy DOM id. */
+export interface CronForm {
+  name: string
+  message: string
+  enabled: boolean
+  agentId: string
+  payloadKind: PayloadKind
+  sessionTarget: SessionTarget
+  targetSessionKey: string
+  scheduleKind: ScheduleKind
+  cron: string
+  every: string
+  at: string
+  tz: string
+  wakeMode: string
+  // delivery
+  deliveryMode: DeliveryMode
+  deliveryChannel: string
+  deliveryTo: string
+  deliveryAccount: string
+  deliveryWebhookUrl: string
+  deliveryWebhookToken: string
+  deliveryBestEffort: boolean
+  // failure destination
+  fdMode: FailureDestMode
+  fdChannel: string
+  fdTo: string
+  fdAccount: string
+  fdWebhookUrl: string
+  fdWebhookToken: string
+}
+
+/** A blank create form — matches _openPanel's new-job defaults (cron.js:937-966). */
+export const EMPTY_CRON_FORM: CronForm = {
+  name: '',
+  message: '',
+  enabled: true,
+  agentId: 'main',
+  payloadKind: 'reminder',
+  sessionTarget: 'isolated',
+  targetSessionKey: '',
+  scheduleKind: 'cron',
+  cron: '',
+  every: '',
+  at: '',
+  tz: '',
+  wakeMode: 'now',
+  deliveryMode: '',
+  deliveryChannel: '',
+  deliveryTo: '',
+  deliveryAccount: '',
+  deliveryWebhookUrl: '',
+  deliveryWebhookToken: '',
+  deliveryBestEffort: false,
+  fdMode: '',
+  fdChannel: '',
+  fdTo: '',
+  fdAccount: '',
+  fdWebhookUrl: '',
+  fdWebhookToken: '',
+}
+
+// ── session-key helpers (cron.js:1496-1520) ─────────────────────────────────
+
+/** cron.js:1496-1507 — normalize a session key to its canonical agent:main form. */
+export function canonicalSessionKey(key: string | null | undefined): string {
+  const value = (key || '').trim()
+  if (!value) return ''
+  if (value === 'default' || value === 'webchat:default') return 'agent:main:webchat:default'
+  if (value.startsWith('agent:default:'))
+    return 'agent:main:' + value.slice('agent:default:'.length)
+  if (value.startsWith('sess-')) return 'agent:main:webchat:' + value.slice('sess-'.length)
+  return value
+}
+
+/** cron.js:1509-1520 — resolve a job's bound session key across the field aliases. */
+export function jobSessionKey(job: RawJob | null | undefined): string {
+  if (!job) return ''
+  return String(
+    job.originSessionKey ||
+      job.origin_session_key ||
+      job.targetSessionKey ||
+      job.target_session_key ||
+      job.sessionKey ||
+      job.session_key ||
+      '',
+  )
+}
+
+/**
+ * cron.js:1485-1494 — the active chat session key: the URL `?session=` param
+ * (canonicalized) wins, else the `agentos_active_session` localStorage value.
+ * The raw inputs are injected so the helper stays pure/testable; CronPage reads
+ * window.location.search + localStorage and passes them in.
+ */
+export function activeChatSessionKey(urlSession: string, storedSession: string): string {
+  const fromUrl = canonicalSessionKey(urlSession)
+  if (fromUrl) return fromUrl
+  return canonicalSessionKey(storedSession)
+}
+
+// ── seed the form from a job (edit) or template (create) — cron.js:937-966 ──
+
+/**
+ * cron.js:927-966 — build the initial form state. `job` non-null → edit seed;
+ * else a create seed from `template` (optional) + the active session key.
+ */
+export function seedForm(
+  job: RawJob | null,
+  template: Partial<RawJob> | null,
+  activeSessionKey: string,
+): CronForm {
+  const tpl = (template || {}) as Record<string, unknown>
+  const str = (v: unknown): string => (v == null ? '' : String(v))
+
+  const payloadKind = (
+    job ? job.payloadKind || 'agent_turn' : (tpl.payloadKind as string) || 'reminder'
+  ) as PayloadKind
+  const scheduleKind = (
+    job
+      ? job.scheduleKind || job.schedule_kind || 'cron'
+      : (tpl.scheduleKind as string) || (tpl.schedule_kind as string) || 'cron'
+  ) as ScheduleKind
+  const sessionTarget = (
+    job
+      ? job.sessionTarget || job.session_target || 'isolated'
+      : (tpl.sessionTarget as string) || (payloadKind === 'system_event' ? 'main' : 'isolated')
+  ) as SessionTarget
+
+  const delivery = deliveryFormFromJob(job)
+
+  return {
+    name: job ? str(job.name) : str(tpl.name),
+    message: job ? str(job.message || job.prompt) : str(tpl.message),
+    enabled: job ? !!job.enabled : true,
+    agentId: job ? str(job.agentId) || 'main' : str(tpl.agentId) || 'main',
+    payloadKind,
+    sessionTarget,
+    targetSessionKey: job
+      ? jobSessionKey(job)
+      : str(tpl.targetSessionKey) || activeSessionKey || '',
+    scheduleKind,
+    cron: job ? str(job.expression) : str(tpl.expression),
+    every:
+      scheduleKind === 'every'
+        ? job
+          ? str(job.scheduleRaw || job.schedule_raw)
+          : str(tpl.every_seconds)
+        : '',
+    at: scheduleKind === 'at' ? (job ? str(job.scheduleRaw || job.schedule_raw) : str(tpl.at)) : '',
+    tz: job ? str(job.tz) : str(tpl.tz),
+    wakeMode: job ? str(job.wakeMode || job.wake_mode) || 'now' : str(tpl.wakeMode) || 'now',
+    ...delivery,
+  }
+}
+
+/**
+ * cron.js:1083-1112 — map a job's delivery block onto the delivery/failure-dest
+ * form fields. 'none' from the wire is a real user choice; ''/null means
+ * "inferred". Webhook tokens are never echoed back (always blank).
+ */
+export function deliveryFormFromJob(
+  job: RawJob | null,
+): Pick<
+  CronForm,
+  | 'deliveryMode'
+  | 'deliveryChannel'
+  | 'deliveryTo'
+  | 'deliveryAccount'
+  | 'deliveryWebhookUrl'
+  | 'deliveryWebhookToken'
+  | 'deliveryBestEffort'
+  | 'fdMode'
+  | 'fdChannel'
+  | 'fdTo'
+  | 'fdAccount'
+  | 'fdWebhookUrl'
+  | 'fdWebhookToken'
+> {
+  const d = (job && job.delivery) || {}
+  const mode = String(d.mode || '').toLowerCase()
+  const deliveryMode: DeliveryMode =
+    mode === 'webhook'
+      ? 'webhook'
+      : mode === 'announce' || mode === 'channel'
+        ? 'announce'
+        : mode === 'none'
+          ? 'none'
+          : ''
+
+  const fd = d.failureDestination || {}
+  const fdModeRaw = String(fd.mode || '').toLowerCase()
+  const fdMode: FailureDestMode =
+    fdModeRaw === 'webhook'
+      ? 'webhook'
+      : fdModeRaw === 'channel' || fdModeRaw === 'announce'
+        ? 'channel'
+        : ''
+
+  return {
+    deliveryMode,
+    deliveryChannel: String(d.channelName || ''),
+    deliveryTo: String(d.to || d.channelId || ''),
+    deliveryAccount: String(d.accountId || ''),
+    deliveryWebhookUrl: String(d.webhookUrl || ''),
+    deliveryWebhookToken: '',
+    deliveryBestEffort: !!d.bestEffort,
+    fdMode,
+    fdChannel: String(fd.channelName || ''),
+    fdTo: String(fd.to || fd.channelId || ''),
+    fdAccount: String(fd.accountId || ''),
+    fdWebhookUrl: String(fd.webhookUrl || ''),
+    fdWebhookToken: '',
+  }
+}
+
+// ── field-visibility derivations (cron.js:997-1081) ─────────────────────────
+
+/**
+ * cron.js:997-1057 — the session-target select's effective value + whether it is
+ * locked, plus the message label, given the current payload kind and target.
+ * system_event → locked 'main'; reminder → locked 'isolated'; agent_turn → user
+ * choice, but a stale 'main' is coerced to current|isolated (main is not a valid
+ * agent-turn target). Returns the resolved target + lock + message label; the
+ * component uses these to render disabled state and conditional rows.
+ */
+export interface TargetResolution {
+  target: SessionTarget
+  locked: boolean
+  messageLabel: string
+  showTargetSessionRow: boolean
+}
+
+export function resolveTarget(
+  payloadKind: PayloadKind,
+  rawTarget: SessionTarget,
+  activeSessionKey: string,
+): TargetResolution {
+  if (payloadKind === 'system_event') {
+    return { target: 'main', locked: true, messageLabel: 'Event text', showTargetSessionRow: false }
+  }
+  if (payloadKind === 'reminder') {
+    return {
+      target: 'isolated',
+      locked: true,
+      messageLabel: 'Reminder text',
+      showTargetSessionRow: false,
+    }
+  }
+  // agent_turn — a stale 'main' becomes current (with a session key) or isolated.
+  let target = rawTarget
+  if (target === 'main') target = activeSessionKey ? 'current' : 'isolated'
+  return {
+    target,
+    locked: false,
+    messageLabel: 'Task prompt',
+    showTargetSessionRow: target === 'current' || target === 'session',
+  }
+}
+
+// ── delivery / failure-destination payload builders (cron.js:1114-1178) ─────
+
+/** Discriminates a validation failure from "no delivery block" in the builders. */
+export type DeliveryBuild =
+  { ok: true; delivery: Record<string, unknown> | null } | { ok: false; error: string }
+
+/**
+ * cron.js:1154-1178 — assemble the failureDestination block. Returns null when
+ * disabled, an error when a required field is missing, else the block.
+ */
+export function buildFailureDest(form: CronForm): DeliveryBuild {
+  const mode = form.fdMode
+  if (!mode) return { ok: true, delivery: null }
+  if (mode === 'webhook') {
+    const url = form.fdWebhookUrl.trim()
+    if (!url) return { ok: false, error: 'Failure-destination webhook URL is required' }
+    const out: Record<string, unknown> = { mode: 'webhook', webhookUrl: url }
+    const tok = form.fdWebhookToken.trim()
+    if (tok) out.webhookToken = tok
+    return { ok: true, delivery: out }
+  }
+  // channel mode
+  const ch = form.fdChannel.trim()
+  const to = form.fdTo.trim()
+  const acct = form.fdAccount.trim()
+  if (!ch && !to)
+    return { ok: false, error: 'Failure destination channel needs a channel or recipient' }
+  const out: Record<string, unknown> = { mode: 'channel' }
+  if (ch) out.channelName = ch.toLowerCase()
+  if (to) out.to = to
+  if (acct) out.accountId = acct
+  return { ok: true, delivery: out }
+}
+
+/**
+ * cron.js:1114-1152 — assemble the delivery block. Returns null when nothing is
+ * set, an error when a required field is missing (webhook URL, or a nested
+ * failure-dest error), else the delivery block (which may carry failureDestination).
+ */
+export function buildDelivery(form: CronForm): DeliveryBuild {
+  const mode = form.deliveryMode
+  const fdMode = form.fdMode
+  const bestEffort = form.deliveryBestEffort
+  if (!mode && !fdMode) return { ok: true, delivery: null }
+
+  const fdResult = buildFailureDest(form)
+  if (!fdResult.ok) return fdResult
+  const fd = fdResult.delivery
+
+  if (mode === 'none') {
+    const out: Record<string, unknown> = { mode: 'none' }
+    if (fd) out.failureDestination = fd
+    return { ok: true, delivery: out }
+  }
+  if (mode === 'webhook') {
+    const url = form.deliveryWebhookUrl.trim()
+    if (!url) return { ok: false, error: 'Webhook URL is required for webhook delivery' }
+    const out: Record<string, unknown> = { mode: 'webhook', webhookUrl: url }
+    const tok = form.deliveryWebhookToken.trim()
+    if (tok) out.webhookToken = tok
+    if (bestEffort) out.bestEffort = true
+    if (fd) out.failureDestination = fd
+    return { ok: true, delivery: out }
+  }
+  if (mode === 'announce') {
+    const out: Record<string, unknown> = { mode: 'announce' }
+    const ch = form.deliveryChannel.trim()
+    const to = form.deliveryTo.trim()
+    const acct = form.deliveryAccount.trim()
+    if (ch) out.channelName = ch.toLowerCase()
+    if (to) out.to = to
+    if (acct) out.accountId = acct
+    if (bestEffort) out.bestEffort = true
+    if (fd) out.failureDestination = fd
+    return { ok: true, delivery: out }
+  }
+  // mode empty but fd set → standalone failure-destination patch.
+  if (fd) return { ok: true, delivery: { failureDestination: fd } }
+  return { ok: true, delivery: null }
+}
+
+// ── save payload assembly (cron.js:1180-1251) ───────────────────────────────
+
+/** A save is either a validation error or a resolved {method, payload}. */
+export type SaveBuild =
+  | { ok: true; method: 'cron.create' | 'cron.update'; payload: Record<string, unknown> }
+  | { ok: false; error: string }
+
+/**
+ * cron.js:1180-1251 — validate the form and assemble the cron.create/update
+ * payload. `editingJob` non-null → cron.update (payload carries {id}). Every
+ * legacy guard is preserved: name required; interval must be a positive
+ * integer; ISO time required for 'at'; current/named session-key required;
+ * delivery/failure-dest validation. `activeSessionKey` binds current/reminder
+ * origins the way the legacy _activeChatSessionKey() did.
+ */
+export function buildSavePayload(
+  form: CronForm,
+  editingJob: RawJob | null,
+  activeSessionKey: string,
+): SaveBuild {
+  const name = form.name.trim()
+  if (!name) return { ok: false, error: 'Name is required' }
+
+  const message = form.message.trim()
+  const enabled = form.enabled
+  const payloadKind = form.payloadKind
+  const agentId = form.agentId.trim() || 'main'
+  const sessionTarget: SessionTarget =
+    payloadKind === 'system_event'
+      ? 'main'
+      : payloadKind === 'reminder'
+        ? 'isolated'
+        : form.sessionTarget
+  const targetSessionKey = form.targetSessionKey.trim()
+
+  const payload: Record<string, unknown> = {
+    name,
+    enabled,
+    payloadKind,
+    agentId,
+    sessionTarget,
+    text: message,
+  }
+
+  if (form.scheduleKind === 'cron') {
+    payload.schedule = { kind: 'cron', expr: form.cron.trim() }
+  } else if (form.scheduleKind === 'every') {
+    const everySeconds = Number(form.every)
+    if (!Number.isInteger(everySeconds) || everySeconds < 1) {
+      return { ok: false, error: 'Interval must be an integer number of seconds' }
+    }
+    payload.schedule = { kind: 'every', every_seconds: everySeconds }
+  } else if (form.scheduleKind === 'at') {
+    const at = form.at.trim()
+    if (!at) return { ok: false, error: 'ISO time is required' }
+    payload.schedule = { kind: 'at', at }
+  }
+
+  const tz = form.tz.trim()
+  if (tz) {
+    payload.tz = tz
+    const sched = payload.schedule as { kind?: string } | undefined
+    if (sched && sched.kind === 'cron') (sched as Record<string, unknown>).tz = tz
+  }
+
+  const wakeMode = form.wakeMode
+  if (wakeMode && wakeMode !== 'now') payload.wakeMode = wakeMode
+
+  const deliveryResult = buildDelivery(form)
+  if (!deliveryResult.ok) return deliveryResult
+  if (deliveryResult.delivery !== null) payload.delivery = deliveryResult.delivery
+
+  if (sessionTarget === 'current') {
+    const boundSessionKey = targetSessionKey || activeSessionKey || jobSessionKey(editingJob)
+    if (!boundSessionKey) return { ok: false, error: 'Current session key is required' }
+    payload.sessionKey = boundSessionKey
+    payload.targetSessionKey = boundSessionKey
+    payload.originSessionKey = boundSessionKey
+  }
+  if (payloadKind === 'reminder' && activeSessionKey) {
+    payload.originSessionKey = activeSessionKey
+  }
+  if (sessionTarget === 'session') {
+    if (!targetSessionKey) return { ok: false, error: 'Named session key is required' }
+    payload.targetSessionKey = targetSessionKey
+  }
+
+  const isEdit = !!editingJob
+  if (isEdit) payload.id = editingJob!.id
+
+  return { ok: true, method: isEdit ? 'cron.update' : 'cron.create', payload }
 }
