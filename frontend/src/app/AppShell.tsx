@@ -220,13 +220,25 @@ export function AppShell() {
             </div>
           ))}
         </nav>
-        {/* app.js:66-68,88 — version footer, suppressed when version is empty. */}
+        {/* app.js:66-68,88 — version footer as a TTY status bar. Suppressed
+            when version is empty. */}
         {version && (
           <div
-            className="t-data mt-auto border-t border-hairline px-4 py-3 text-[11px] text-dim"
+            className="t-data mt-auto flex items-center gap-2 border-t border-hairline px-4 py-2.5 text-[11px] text-dim"
             data-testid="nav-foot"
           >
-            v{version}
+            <span
+              aria-hidden="true"
+              className={`size-1.5 rounded-full ${
+                pillOk ? 'bg-ok' : pillVariant === 'warn' ? 'bg-warn' : 'bg-danger'
+              }`}
+            />
+            <span
+              className={pillOk ? 'text-ok' : pillVariant === 'warn' ? 'text-warn' : 'text-danger'}
+            >
+              {pillLabel.toUpperCase()}
+            </span>
+            <span className="ml-auto">v{version}</span>
           </div>
         )}
       </aside>
@@ -246,6 +258,16 @@ export function AppShell() {
             >
               <Menu className="size-4" />
             </Button>
+            {/* Terminal-window chrome: traffic-light dots + the current shell
+                path, framing the console as an emulator window. */}
+            <span className="term-dots max-md:hidden" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="t-data max-md:hidden text-[12px] text-dim" aria-hidden="true">
+              agentos@control:~{location.pathname.replace(/^\/control/, '') || '/'}
+            </span>
             {/* app.js:94,174-183 — persistent connection pill; never unmounts.
                 Tactical readout: mono uppercase, square, status dot carries the
                 semantic state (the one permitted status dot on this surface). */}

@@ -416,7 +416,7 @@ export function HealthPage() {
           variant="outline"
           id="health-refresh"
           title="Refresh health report"
-          className="btn-refresh text-xs uppercase tracking-[0.14em]"
+          className="btn-refresh btn-term"
           onClick={() => void query.refetch()}
         >
           <RefreshCwIcon />

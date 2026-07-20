@@ -40,9 +40,28 @@
   text-transform: lowercase;
   margin-top: 6px;
 }
-.health-stage__title-block h2::after {
-  content: '.';
+/* Match the common .t-display terminal treatment: prompt sigil + block cursor. */
+.health-stage__title-block h2::before {
+  content: '> ';
   color: var(--primary);
+  opacity: 0.85;
+}
+.health-stage__title-block h2::after {
+  content: '';
+  display: inline-block;
+  width: 0.5ch;
+  height: 0.95em;
+  margin-left: 0.18em;
+  translate: 0 0.08em;
+  background: var(--primary);
+  vertical-align: baseline;
+  animation: cursor-blink 1.05s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .health-stage__title-block h2::after {
+    animation: none;
+    opacity: 0.7;
+  }
 }
 #health-summary {
   margin-top: 8px;

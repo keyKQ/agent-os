@@ -74,7 +74,7 @@
 :root[data-theme='dark'],
 :root {
   color-scheme: dark;
-  --radius: 4px; /* legacy --radius-md; square is the default posture */
+  --radius: 0px; /* TTY posture: hard corners everywhere (ui-ux-pro-max: Terminal CLI radius 0) */
 
   --background: #060608; /* legacy --bg */
   --foreground: #ececef; /* legacy --text */
@@ -97,8 +97,8 @@
   --destructive: #f87171; /* legacy --danger */
   --destructive-foreground: #1a0808;
 
-  --border: rgba(255, 255, 255, 0.13);
-  --hairline: rgba(255, 255, 255, 0.09);
+  --border: rgba(204, 255, 0, 0.18); /* signal-tinted terminal border, crisp */
+  --hairline: rgba(204, 255, 0, 0.1);
   --input: rgba(255, 255, 255, 0.16);
   --ring: #ccff00; /* focus = signal, per legacy */
 
@@ -172,11 +172,19 @@
   }
   body {
     @apply bg-background text-foreground;
-    /* Full-terminal posture: mono is the UI voice, sans is the exception. */
+    /* Full-terminal posture: mono is the UI voice, sans is the exception.
+       Crisper glyph edges than the antialiased default — a monitor/TTY reads
+       sharper, not smoothed. Disable ligatures/contextual alternates so code
+       renders character-for-character like a real terminal. */
     font-family: var(--font-mono);
     font-size: 0.875rem;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
+    text-rendering: geometricPrecision;
+    font-feature-settings:
+      'liga' 0,
+      'calt' 0;
+    font-variant-ligatures: none;
   }
   /* Atmospheric grain (legacy body::before): fixed, pointer-events-none only. */
   body::before {
@@ -189,6 +197,40 @@
     background-size: 160px 160px;
     opacity: var(--grain-opacity);
     mix-blend-mode: overlay;
+  }
+  /* CRT scanlines + faint vignette (Terminal-CLI signal, ui-ux-pro-max DB).
+     Kept at LOW opacity so it never touches text contrast (a11y: the strain
+     that flags Cyberpunk/Retro-Futurism comes from neon glow + high-opacity
+     lines, which we deliberately omit). Fixed, pointer-events-none, sits above
+     content but below modals/toasts. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    /* Sits at z 0 (just above the fixed page background, BELOW all panels,
+       buttons, cards and the sidebar which stack in the normal flow at z:auto>0)
+       so the scanlines texture the empty ground only — never striping the
+       interactive surfaces on top of it. */
+    z-index: 0;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.16) 3px
+      ),
+      radial-gradient(120% 120% at 50% 50%, transparent 62%, rgba(0, 0, 0, 0.28) 100%);
+  }
+  :root[data-theme='light'] body::after {
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.045) 3px
+      ),
+      radial-gradient(120% 120% at 50% 50%, transparent 70%, rgba(40, 30, 20, 0.06) 100%);
   }
 }
 
@@ -218,9 +260,93 @@
     letter-spacing: -0.01em;
     text-transform: lowercase;
   }
-  .t-display::after {
-    content: '.';
+  /* Terminal prompt sigil before the view title (`> health.`). */
+  .t-display::before {
+    content: '> ';
     color: var(--primary);
+    opacity: 0.85;
+  }
+  /* Title ends in a signal-colored blinking block cursor — a real TTY caret,
+     rendered via ::after so it's common to every view (all use .t-display),
+     zero per-view markup. Static under reduced-motion. */
+  .t-display::after {
+    content: '';
+    display: inline-block;
+    width: 0.5ch;
+    height: 0.95em;
+    margin-left: 0.18em;
+    translate: 0 0.08em;
+    background: var(--primary);
+    vertical-align: baseline;
+    animation: cursor-blink 1.05s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-display::after {
+      animation: none;
+      opacity: 0.7;
+    }
+  }
+  /* Bracket button — `[ LABEL ]` TUI affordance. Compose on a real <button>
+     so keyboard/focus/44px hit-target are preserved (a11y). */
+  .btn-term {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-size: 0.75rem;
+    color: var(--foreground);
+    border: 1px solid var(--border);
+    border-radius: 0; /* TTY: zero radius */
+    background: transparent;
+    padding: 7px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition:
+      color 120ms,
+      border-color 120ms,
+      background 120ms;
+  }
+  .btn-term::before {
+    content: '[';
+    color: var(--dim);
+  }
+  .btn-term::after {
+    content: ']';
+    color: var(--dim);
+  }
+  .btn-term:hover {
+    color: var(--primary);
+    border-color: var(--primary);
+  }
+  .btn-term:hover::before,
+  .btn-term:hover::after {
+    color: var(--primary);
+  }
+  .btn-term:active {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+  /* Terminal-window chrome: three traffic-light dots + a mono path segment,
+     used in the topbar to frame the console as an emulator window. */
+  .term-dots {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .term-dots span {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    display: block;
+  }
+  .term-dots span:nth-child(1) {
+    background: var(--danger);
+  }
+  .term-dots span:nth-child(2) {
+    background: var(--warn);
+  }
+  .term-dots span:nth-child(3) {
+    background: var(--ok);
   }
   /* Terminal nav group label: shell-comment posture (# control). */
   .nav-group {
@@ -400,6 +526,11 @@
 }
 
 @keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@keyframes cursor-blink {
   50% {
     opacity: 0;
   }
