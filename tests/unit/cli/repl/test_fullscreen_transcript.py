@@ -154,6 +154,70 @@ def test_scroll_is_noop_when_not_fullscreen() -> None:
         assert chat._transcript_follow is True
 
 
+def test_resolve_chat_fullscreen_precedence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Explicit arg wins; then the env override; then the TTY default."""
+    from agentos.cli.tui.terminal.app import resolve_chat_fullscreen
+
+    # Explicit argument always wins, regardless of env.
+    monkeypatch.setenv("AGENTOS_CHAT_FULLSCREEN", "0")
+    assert resolve_chat_fullscreen(True) is True
+    assert resolve_chat_fullscreen(False) is False
+
+    # Env override wins when no explicit arg is given.
+    monkeypatch.setenv("AGENTOS_CHAT_FULLSCREEN", "1")
+    assert resolve_chat_fullscreen() is True
+    monkeypatch.setenv("AGENTOS_CHAT_FULLSCREEN", "off")
+    assert resolve_chat_fullscreen() is False
+
+    # With no env override the default follows the stdout TTY-ness. Force a
+    # known value via a fake stdout so the assertion is deterministic.
+    monkeypatch.delenv("AGENTOS_CHAT_FULLSCREEN", raising=False)
+
+    class _FakeStdout:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("sys.stdout", _FakeStdout())
+    assert resolve_chat_fullscreen() is True
+
+    class _FakePipe:
+        def isatty(self) -> bool:
+            return False
+
+    monkeypatch.setattr("sys.stdout", _FakePipe())
+    assert resolve_chat_fullscreen() is False
+
+
+def test_queued_startup_output_replays_into_pane(fullscreen_env: None) -> None:
+    """Pre-surface startup output (queued while the app has not yet taken the
+    alternate screen) is drained into the transcript pane when the full-screen
+    surface opens — this is how the welcome banner survives full-screen."""
+    import agentos.cli.tui.terminal.prompt as prompt_module
+    from agentos.cli.tui.terminal.prompt import interactive_session, queue_pane_output
+
+    async def _drive() -> str:
+        # Simulate the notifier / launch_bridge capture-and-queue step.
+        queue_pane_output("Connected to gateway. Session: agent:main:cli:abc\n")
+        queue_pane_output("AGENTOS welcome banner\n")
+        with create_pipe_input() as pipe:
+            out = Vt100_Output(io.StringIO(), lambda: Size(rows=20, columns=80))
+            async with interactive_session(
+                surface="cli_gateway",
+                model="m",
+                session_id="agent:main:cli:abc",
+                input=pipe,
+                output=out,
+            ) as handle:
+                await asyncio.sleep(0.05)
+                return handle._chat_app._transcript
+
+    transcript = asyncio.run(_drive())
+    assert "Connected to gateway. Session: agent:main:cli:abc" in transcript
+    assert "AGENTOS welcome banner" in transcript
+    # The pending buffer is drained (and cleared) once replayed.
+    assert prompt_module._pending_pane_output == []
+
+
 def test_interactive_session_redirects_console_into_pane(fullscreen_env: None) -> None:
     """In full-screen, Rich `console.print` output lands in the transcript
     pane (not stdout), and the real console stream is restored on exit."""

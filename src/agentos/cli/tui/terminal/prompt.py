@@ -472,6 +472,34 @@ async def prompt_approval(
 _chat_applications: dict[Surface, ChatApplication] = {}
 
 
+# Full-screen surface only: startup output (the "Connected to gateway" line,
+# the branded banner + catalogue panel) is rendered *before* the prompt-toolkit
+# Application takes the alternate screen buffer, so it would be wiped the moment
+# the app starts. In full-screen we capture that output (already ANSI-coloured,
+# rendered at the real terminal width) and replay it into the transcript pane
+# once the surface is open. See issue #46 (issue 1).
+_pending_pane_output: list[str] = []
+
+
+def queue_pane_output(text: str) -> None:
+    """Queue pre-surface startup output for replay into the full-screen pane.
+
+    No-op on empty text. The buffer is drained (and cleared) by
+    ``interactive_session`` when the full-screen surface opens.
+    """
+    if text:
+        _pending_pane_output.append(text)
+
+
+def _drain_pane_output(chat_app: ChatApplication) -> None:
+    """Flush any queued startup output into the transcript pane, in order."""
+    if not _pending_pane_output:
+        return
+    for chunk in _pending_pane_output:
+        chat_app.append_transcript(chunk)
+    _pending_pane_output.clear()
+
+
 class InteractiveSessionHandle:
     """Handle returned by `interactive_session()`.
 
@@ -524,6 +552,7 @@ def _get_or_create_chat_app(
     *,
     input: Input | None = None,
     output: Output | None = None,
+    fullscreen: bool | None = None,
 ) -> ChatApplication:
     # Local import to avoid a circular dependency with app.py at module load
     # (app.py only imports from `agentos.engine.commands`).
@@ -552,6 +581,7 @@ def _get_or_create_chat_app(
             auto_suggest=auto_suggest,
             history=history,
             input_header=_input_header_fragments,
+            fullscreen=fullscreen,
         )
 
     cached = _chat_applications.get(surface)
@@ -565,6 +595,7 @@ def _get_or_create_chat_app(
             auto_suggest=auto_suggest,
             history=history,
             input_header=_input_header_fragments,
+            fullscreen=fullscreen,
         )
         _chat_applications[surface] = cached
     return cached
@@ -605,6 +636,7 @@ async def interactive_session(
     router_tier: str | None = None,
     input: Input | None = None,
     output: Output | None = None,
+    fullscreen: bool | None = None,
 ) -> AsyncIterator[InteractiveSessionHandle]:
     """Long-lived prompt-toolkit Application for this surface.
 
@@ -625,7 +657,9 @@ async def interactive_session(
     `_bottom_toolbar` callable used by `prompt_user`.
     """
     parsed = parse_surface(surface) if isinstance(surface, str) else surface
-    chat_app = _get_or_create_chat_app(parsed, input=input, output=output)
+    chat_app = _get_or_create_chat_app(
+        parsed, input=input, output=output, fullscreen=fullscreen
+    )
 
     # Toolbar context lives in `_toolbar_context`; mutate before launching so
     # the first redraw renders the right model / session_id chips.
@@ -684,6 +718,12 @@ async def interactive_session(
         # input/output pair before the caller starts pushing keystrokes
         # through `create_pipe_input`.
         await asyncio.sleep(0)
+        # Full-screen surface owns the whole screen, so the startup output
+        # (connect line + branded banner + catalogue panel) that was rendered
+        # before the app took the alternate buffer must be replayed into the
+        # transcript pane now that it is live. See issue #46 (issue 1).
+        if chat_app.fullscreen:
+            _drain_pane_output(chat_app)
         yield handle
     finally:
         # Tear down the Application before unwinding patch_stdout so the

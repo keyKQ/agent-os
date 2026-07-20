@@ -122,16 +122,19 @@ title comes from `/new <title>` (or is loaded from the gateway on
 active. `/status` mirrors the same fields plus the active permissions
 posture.
 
-**Experimental full-screen surface.** Set `AGENTOS_CHAT_FULLSCREEN=1`
-to render the conversation in a scrollable in-app pane above a
-permanently-pinned input frame (Claude Code style), so the frame stays
-visible while the assistant streams. `PgUp`/`PgDn` scroll back through
-history; new output re-pins to the newest line. This trades away native
-terminal scrollback and is opt-in while it matures; the default surface
-streams to native scrollback as before.
+**Full-screen surface (default).** `agentos chat` renders the conversation
+in a scrollable in-app pane above a permanently-pinned input frame (Claude
+Code style), so the frame stays visible while the assistant streams. The
+branded welcome screen renders at the top of the pane on launch. `PgUp`/`PgDn`
+scroll back through history; new output re-pins to the newest line.
+
+Full-screen is the default for an interactive terminal. Non-TTY / piped
+invocations fall back to native scrollback automatically. To force a mode set
+`AGENTOS_CHAT_FULLSCREEN`:
 
 ```sh
-AGENTOS_CHAT_FULLSCREEN=1 agentos chat
+AGENTOS_CHAT_FULLSCREEN=0 agentos chat   # opt out — stream to native scrollback
+AGENTOS_CHAT_FULLSCREEN=1 agentos chat   # force full-screen (e.g. under a pipe)
 ```
 
 One-shot automation:

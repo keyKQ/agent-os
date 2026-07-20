@@ -33,13 +33,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     (Claude Code style) so the typing area reads as a distinct box
     between the transcript and the bottom toolbar. Consistent across the
     gateway and `--standalone` surfaces.
-  - Experimental full-screen chat surface behind `AGENTOS_CHAT_FULLSCREEN=1`:
-    the conversation renders in a scrollable in-app pane above a
-    permanently-pinned input frame, so the frame stays visible while the
-    assistant streams (no flicker, no dropped partial lines). `PgUp`/`PgDn`
-    scroll history; new output re-pins to the tail. Opt-in while it matures
-    (trades away native terminal scrollback); the default surface is
-    unchanged.
+  - Full-screen chat surface is now the **default** for `agentos chat`: the
+    conversation renders in a scrollable in-app pane above a permanently-pinned
+    input frame, so the frame stays visible while the assistant streams (no
+    flicker, no dropped partial lines). The branded welcome screen (connect
+    line + banner + tool/skill panel) renders at the top of the pane on launch
+    — previously it was wiped by the alternate screen buffer. `PgUp`/`PgDn`
+    scroll history; new output re-pins to the tail. Non-TTY / piped
+    invocations fall back to native scrollback; `AGENTOS_CHAT_FULLSCREEN=0`
+    forces native scrollback and `=1` forces full-screen.
 
 ### Changed
 

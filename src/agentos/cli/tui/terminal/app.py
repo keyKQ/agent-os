@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -87,17 +88,45 @@ _DOUBLE_CTRL_C_WINDOW_S: float = 1.5
 _ACTIVE_INPUT_PREFIX_WIDTH: int = 7
 
 
-def _fullscreen_enabled() -> bool:
-    """Opt-in flag for the full-screen transcript-pane chat surface.
+def _fullscreen_env() -> bool | None:
+    """Tri-state read of the ``AGENTOS_CHAT_FULLSCREEN`` override.
 
-    When set, the assistant transcript renders inside a scrollable
-    prompt-toolkit pane above a permanently-pinned input frame (Claude
-    Code style) instead of streaming to native terminal scrollback. Gated
-    so the mature native-scrollback path stays the default until the
-    full-screen surface reaches parity. See issue #46 (issue 1).
+    Returns ``True``/``False`` when the variable is set to a recognized
+    truthy/falsy value, or ``None`` when unset (so the caller falls back to
+    its own default). The full-screen transcript-pane surface renders the
+    assistant transcript inside a scrollable prompt-toolkit pane above a
+    permanently-pinned input frame (Claude Code style) instead of streaming
+    to native terminal scrollback. See issue #46 (issue 1).
     """
-    value = (os.environ.get("AGENTOS_CHAT_FULLSCREEN") or "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    raw = os.environ.get("AGENTOS_CHAT_FULLSCREEN")
+    if raw is None:
+        return None
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off", ""}:
+        return False
+    return None
+
+
+def resolve_chat_fullscreen(explicit: bool | None = None) -> bool:
+    """Resolve whether an ``agentos chat`` surface should run full-screen.
+
+    Precedence: an ``explicit`` argument wins; otherwise the
+    ``AGENTOS_CHAT_FULLSCREEN`` override wins; otherwise full-screen is the
+    default for an interactive TTY (a real ``agentos chat`` session) and is
+    off for non-TTY / piped contexts (tests, redirected output) so those
+    keep the plain native-scrollback behavior.
+    """
+    if explicit is not None:
+        return explicit
+    env = _fullscreen_env()
+    if env is not None:
+        return env
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
 
 
 def _build_key_bindings() -> KeyBindings:
@@ -220,16 +249,24 @@ class ChatApplication:
         history: History | None = None,
         complete_while_typing: bool = True,
         input_header=None,
+        fullscreen: bool | None = None,
     ) -> None:
         self._surface = surface
         self._toolbar_context = toolbar_context
-        # Full-screen transcript surface (opt-in via AGENTOS_CHAT_FULLSCREEN).
-        # `_transcript` accumulates the ANSI-encoded conversation; a
-        # scrollable pane renders it above the pinned input frame.
-        # `_transcript_follow` latches auto-scroll-to-bottom; a user scroll
-        # up releases it. `_transcript_scroll` is the from-bottom line offset
-        # while not following.
-        self._fullscreen: bool = _fullscreen_enabled()
+        # Full-screen transcript surface. `_transcript` accumulates the
+        # ANSI-encoded conversation; a scrollable pane renders it above the
+        # pinned input frame. `_transcript_follow` latches
+        # auto-scroll-to-bottom; a user scroll up releases it.
+        # `_transcript_scroll` is the from-bottom line offset while not
+        # following. When ``fullscreen`` is not passed explicitly the
+        # constructor default stays native (env override honored) so a bare
+        # ``ChatApplication(...)`` — as tests build it — behaves as the plain
+        # native-scrollback surface; the real chat entry point
+        # (`open_terminal_surface`) resolves and passes the value.
+        if fullscreen is None:
+            env = _fullscreen_env()
+            fullscreen = env if env is not None else False
+        self._fullscreen: bool = fullscreen
         self._transcript: str = ""
         self._transcript_follow: bool = True
         self._transcript_scroll: int = 0

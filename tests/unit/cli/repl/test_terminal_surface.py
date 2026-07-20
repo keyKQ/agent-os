@@ -42,6 +42,11 @@ async def test_terminal_surface_wraps_existing_interactive_session(monkeypatch) 
         assert await tui_surface.next_line() is None
         tui_surface.redraw_callback()
 
+    assert len(yielded) == 1
+    # ``fullscreen`` is resolved by open_terminal_surface (TTY-dependent); pop
+    # it and assert type so the test is stable under captured/real stdout.
+    resolved_fullscreen = yielded[0].pop("fullscreen")
+    assert isinstance(resolved_fullscreen, bool)
     assert yielded == [
         {
             "surface": Surface.CLI_STANDALONE,
@@ -93,6 +98,9 @@ async def test_terminal_surface_honors_legacy_prompt_session_monkeypatch(
     ) as tui_surface:
         assert await tui_surface.next_line() == "patched"
 
+    assert len(yielded) == 1
+    resolved_fullscreen = yielded[0].pop("fullscreen")
+    assert isinstance(resolved_fullscreen, bool)
     assert yielded == [
         {
             "surface": Surface.CLI_STANDALONE,
