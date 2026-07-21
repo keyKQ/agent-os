@@ -197,6 +197,98 @@ export function esc(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+/* ── Slash commands — key/normalize/input-parse
+   ─────────────────────────────────────────────────────────────────────────────
+   Ported VERBATIM from static/js/views/chat.js:2597-2651. `slashCommandKey` +
+   `normalizeSlashCommand` shape the catalog; `parseSlashInput` decides whether
+   the menu opens for a given composer value (and with what filter query). All
+   three are pure — the RPC load, the menu render, and command execution live in
+   <SlashMenu>. */
+
+/** A slash command as the catalog holds it after `normalizeSlashCommand`. The
+ * raw RPC fields (`usage`, `execution`, `argument_choices`, …) ride through via
+ * the index signature so execution/dispatch can read them (chat.js:2606 spread). */
+export interface SlashCommand {
+  name: string
+  cmd: string
+  label: string
+  desc: string
+  aliases: string[]
+  execution?: { action?: string; kind?: string; rpc_method?: string } | null
+  [key: string]: unknown
+}
+
+/**
+ * chat.js:2597-2601 `_slashCommandKey`. Trim the value, take the first
+ * whitespace-delimited token, lowercase it, and prefix `/` when absent; an
+ * empty / whitespace / nullish value yields ''.
+ */
+export function slashCommandKey(value: string): string {
+  const raw = (
+    String(value || '')
+      .trim()
+      .split(/\s+/, 1)[0] || ''
+  ).toLowerCase()
+  if (!raw) return ''
+  return raw.startsWith('/') ? raw : '/' + raw
+}
+
+/**
+ * chat.js:2603-2613 `_normalizeSlashCommand`. Derive `name` from `name || cmd`,
+ * mirror it into `cmd`, default `label` to the name, resolve `desc` through
+ * `description || desc || usage || ''`, and coerce `aliases` to an array. The
+ * rest of the raw command (execution, usage, …) is preserved via spread.
+ */
+export function normalizeSlashCommand(cmd: {
+  name?: string
+  cmd?: string
+  label?: string
+  description?: string
+  desc?: string
+  usage?: string
+  aliases?: string[]
+  execution?: { action?: string; kind?: string; rpc_method?: string } | null
+  [key: string]: unknown
+}): SlashCommand {
+  const name = cmd?.name || cmd?.cmd || ''
+  return {
+    ...cmd,
+    name,
+    cmd: name,
+    label: cmd?.label || name,
+    desc: cmd?.description || cmd?.desc || cmd?.usage || '',
+    aliases: Array.isArray(cmd?.aliases) ? cmd.aliases : [],
+  }
+}
+
+/** The parse of a composer value for slash-menu purposes (chat.js:2637-2651). */
+export interface SlashInputParse {
+  /** Whether the menu should be considered open for this input shape. */
+  active: boolean
+  /** The lowercased filter query (the text after the leading `/`). */
+  query: string
+}
+
+/**
+ * chat.js:2637-2651 `_handleSlashInput` (the input-shape decision, without the
+ * DOM side effects). The menu is active ONLY when the raw value starts with a
+ * single `/` and contains no space; the `//` literal-slash escape (chat.js:2640)
+ * and any spaced/argument input close it. `query` is the post-`/` remainder,
+ * lowercased. Legacy additionally requires the filtered catalog to be non-empty
+ * to actually open (chat.js:2644) — that is the caller's concern (it has the
+ * catalog), so this pure parse reports the input-shape intent only.
+ */
+export function parseSlashInput(text: string): SlashInputParse {
+  const val = String(text ?? '')
+  // chat.js:2640 — `//…` is the literal-slash escape; never opens the menu.
+  if (val.startsWith('//')) return { active: false, query: '' }
+  // chat.js:2641 — a single `/` with no space is a command-in-progress.
+  if (val.startsWith('/') && !val.includes(' ')) {
+    return { active: true, query: val.slice(1).toLowerCase() }
+  }
+  return { active: false, query: '' }
+}
+
 /* ── Attachments — mime allowlist, caps, mime resolution, payload normalization
    ─────────────────────────────────────────────────────────────────────────────
    Ported verbatim from static/js/views/chat.js:251-334 (constants), 8291-8325

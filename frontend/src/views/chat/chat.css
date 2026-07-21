@@ -283,3 +283,67 @@
 .attachment-remove:hover {
   color: var(--primary);
 }
+
+/* ── Slash-command menu (chat.js:2654 `_renderSlashMenu`) ───────────────────
+   A terminal command palette above the composer: sharp corners (radius 0), a
+   phosphor border, mono type. Lime is signal-only — the ACTIVE/selected item
+   gets the lime accent (a left rail + accented command token); everything else
+   stays dim. Mounted inside the composer shell, above the input row. */
+.chat-slash {
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--card);
+  box-sizing: border-box;
+  margin: 0 32px 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+}
+@media (max-width: 768px) {
+  .chat-slash {
+    margin: 0 16px 6px;
+    max-height: 200px;
+  }
+}
+
+.chat-slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 10px 6px 8px;
+  min-width: 0;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  /* A transparent left rail so the active state can light it lime without a
+     layout shift. */
+  border-left: 2px solid transparent;
+}
+
+/* Hover is a quiet surface change; the lime signal is reserved for the ACTIVE
+   (keyboard-selected) item so there is exactly one lime cue at a time. */
+.chat-slash-item:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.chat-slash-item--active {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border-left-color: var(--primary);
+}
+
+.chat-slash-cmd {
+  font-weight: 500;
+  flex: 0 0 auto;
+  min-width: 88px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.chat-slash-item--active .chat-slash-cmd {
+  color: var(--primary);
+}
+
+.chat-slash-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}

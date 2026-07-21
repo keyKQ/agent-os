@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { sendButtonState, shouldAutofocusComposer } from './logic'
 
@@ -32,9 +32,36 @@ import { sendButtonState, shouldAutofocusComposer } from './logic'
 const MIN_TEXTAREA_HEIGHT = 40 // chat.js:2590 fallback when minHeight is unset.
 const MAX_TEXTAREA_HEIGHT = 160 // chat.js:2592 cap.
 
+/** Imperative handle exposed via `composerRef` — clears the textarea. */
+export interface ComposerHandle {
+  clear: () => void
+}
+
 export interface ComposerProps {
   /** Send the composed text. Wired to chat.send by ChatPage (chat.js:6193). */
   onSend: (text: string) => void
+  /**
+   * The live composer value, pushed up so ChatPage can drive the slash menu's
+   * open/filter state (chat.js:2639 `_handleSlashInput` reads `_textarea.value`).
+   * Called on every input change; the composer remains the value's owner.
+   */
+  onValueChange?: (value: string) => void
+  /**
+   * Slash-menu keyboard intercept (chat.js:2654-2662/2675). Consulted BEFORE the
+   * composer's own history/send/ESC handling while the menu is open; returns true
+   * when the menu consumed the key (the composer then does nothing further).
+   */
+  onSlashKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => boolean
+  /**
+   * Imperative handle so an out-of-band selection (a slash-menu mouse click,
+   * chat.js:2686 `_textarea.value = ''`) can clear the composer's textarea.
+   */
+  composerRef?: React.Ref<ComposerHandle>
+  /**
+   * The rendered slash menu, mounted above the input row (chat.js:2664 inserts
+   * the menu just above the composer). Null / absent when there is no menu.
+   */
+  slashMenu?: React.ReactNode
   /** Abort the in-flight turn. Wired to chat.abort by ChatPage (chat.js:8444). */
   onAbort?: () => void
   /** Streaming in flight (legacy `_isStreaming`) — drives the Abort affordance. */
@@ -72,6 +99,10 @@ export interface ComposerProps {
 
 export function Composer({
   onSend,
+  onValueChange,
+  onSlashKeyDown,
+  slashMenu,
+  composerRef,
   onAbort,
   busy,
   pendingCompaction = false,
@@ -120,9 +151,13 @@ export function Composer({
           /* ignore (jsdom / detached) */
         }
       }
+      // Programmatic writes (send-clear, ESC-clear, history cycling) also drive
+      // the slash-menu mirror so it re-evaluates on the new value (chat.js:2405
+      // — `_handleSlashInput` runs on every `_textarea.value` change).
+      onValueChange?.(text)
       autoResize()
     },
-    [autoResize],
+    [autoResize, onValueChange],
   )
 
   // Autofocus on mount when the environment warrants it (chat.js:1353-1360).
@@ -131,6 +166,19 @@ export function Composer({
       textareaRef.current?.focus()
     }
   }, [])
+
+  // Out-of-band clear (chat.js:2686 — a slash-menu mouse click clears the input).
+  useImperativeHandle(
+    composerRef,
+    (): ComposerHandle => ({
+      clear: () => {
+        setProgrammatic('')
+        historyIdxRef.current = null
+        historyDraftRef.current = ''
+      },
+    }),
+    [setProgrammatic],
+  )
 
   // chat.js:8711-8741 `_cycleHistory`. dir < 0 = older, dir > 0 = newer.
   // Returns true when the cursor moved (so the caller can preventDefault).
@@ -185,6 +233,10 @@ export function Composer({
       // IME composition guard (chat.js:2416).
       if (e.nativeEvent.isComposing || e.keyCode === 229) return
 
+      // Slash menu first (chat.js:2654-2662/2675 — arrow/enter/escape are owned by
+      // the open menu). When it consumes the key the composer does nothing else.
+      if (onSlashKeyDown?.(e)) return
+
       // ESC: abort the stream when busy (chat.js:2530 `_onStop`), else clear the
       // input when there is text (chat.js:2449). Slash-menu/pending ESC branches
       // are Task-9 seams.
@@ -232,18 +284,21 @@ export function Composer({
         doSend()
       }
     },
-    [busy, onAbort, cycleHistory, doSend, setProgrammatic],
+    [busy, onAbort, cycleHistory, doSend, setProgrammatic, onSlashKeyDown],
   )
 
-  // chat.js:2402-2409 — user typing resets the history cursor + resizes.
+  // chat.js:2402-2409 — user typing resets the history cursor + resizes. The
+  // value is pushed up (chat.js:2405 `_handleSlashInput`) so the slash menu can
+  // re-open/filter/close from the current input.
   const onChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setValue(e.target.value)
       historyIdxRef.current = null
       historyDraftRef.current = ''
+      onValueChange?.(e.target.value)
       autoResize()
     },
-    [autoResize],
+    [autoResize, onValueChange],
   )
 
   const { disabled: sendDisabled, label: sendLabel } = sendButtonState(
@@ -266,6 +321,7 @@ export function Composer({
   return (
     <div className="chat-composer-shell">
       {tray}
+      {slashMenu}
       <div className="chat-composer">
         {onAttachFiles ? (
           <>

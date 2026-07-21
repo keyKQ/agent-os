@@ -21,11 +21,14 @@ import {
   PAGE_DUMP_CHARS,
   messageTranscriptId,
   normalizeOutgoingComposerPayload,
+  normalizeSlashCommand,
   pageDumpMarkerScore,
+  parseSlashInput,
   readSessionFromUrl,
   resolveAttachmentMime,
   sendButtonState,
   shouldAutofocusComposer,
+  slashCommandKey,
   webchatSessionKey,
   type PendingAttachment,
 } from './logic'
@@ -420,5 +423,90 @@ describe('attachment helpers (parity chat.js:8299-8325)', () => {
     )
     expect(attachmentDownloadHref({ dataUrl: 'javascript:alert(1)' }, 'text/plain')).toBe('')
     expect(attachmentDownloadHref(null, 'text/plain')).toBe('')
+  })
+})
+
+// ── Slash commands (chat.js:2597-2643) ──────────────────────────────────────
+
+// Parity: chat.js:2597-2601 `_slashCommandKey` — trim, take the first
+// whitespace-delimited token, lowercase, and prefix `/` when absent; empty → ''.
+describe('slashCommandKey', () => {
+  it('lowercases and prefixes a bare command word (chat.js:2600)', () => {
+    expect(slashCommandKey('Help')).toBe('/help')
+    expect(slashCommandKey('NEW')).toBe('/new')
+  })
+  it('keeps an existing leading slash (chat.js:2600)', () => {
+    expect(slashCommandKey('/Compact')).toBe('/compact')
+  })
+  it('takes only the first whitespace-delimited token (chat.js:2598)', () => {
+    expect(slashCommandKey('/model gpt-4  extra')).toBe('/model')
+    expect(slashCommandKey('  usage   cost ')).toBe('/usage')
+  })
+  it('returns "" for empty / whitespace / nullish input (chat.js:2599)', () => {
+    expect(slashCommandKey('')).toBe('')
+    expect(slashCommandKey('   ')).toBe('')
+    expect(slashCommandKey(null as unknown as string)).toBe('')
+    expect(slashCommandKey(undefined as unknown as string)).toBe('')
+  })
+})
+
+// Parity: chat.js:2603-2613 `_normalizeSlashCommand` — derive name from
+// `name || cmd`, mirror it into `cmd`, default `label` to name, `desc` to
+// `description || desc || usage || ''`, and coerce `aliases` to an array.
+describe('normalizeSlashCommand', () => {
+  it('derives name/cmd/label/desc from the RPC serialize shape (chat.js:2604-2611)', () => {
+    // The gateway serializes commands with name/usage/description/aliases
+    // (rpc_commands.py:27-33). `desc` falls back through description → usage.
+    const out = normalizeSlashCommand({
+      name: '/help',
+      usage: '/help',
+      description: 'Show the command list',
+      aliases: ['/?'],
+    })
+    expect(out.name).toBe('/help')
+    expect(out.cmd).toBe('/help')
+    expect(out.label).toBe('/help')
+    expect(out.desc).toBe('Show the command list')
+    expect(out.aliases).toEqual(['/?'])
+  })
+  it('falls back name → cmd and desc → usage (chat.js:2604/2610)', () => {
+    const out = normalizeSlashCommand({ cmd: '/model', usage: '/model [name]' })
+    expect(out.name).toBe('/model')
+    expect(out.cmd).toBe('/model')
+    expect(out.label).toBe('/model')
+    expect(out.desc).toBe('/model [name]')
+  })
+  it('defaults an empty name and coerces a non-array aliases to [] (chat.js:2604/2611)', () => {
+    const out = normalizeSlashCommand({ aliases: 'nope' as unknown as string[] })
+    expect(out.name).toBe('')
+    expect(out.cmd).toBe('')
+    expect(out.label).toBe('')
+    expect(out.desc).toBe('')
+    expect(out.aliases).toEqual([])
+  })
+})
+
+// Parity: chat.js:2637-2651 `_handleSlashInput` — the slash menu opens only when
+// the raw value starts with a single `/` and has NO space; `//` (the literal
+// escape) never opens it. `query` is the post-`/` remainder, lowercased.
+describe('parseSlashInput', () => {
+  it('is active on a bare "/" with an empty query (chat.js:2641-2642)', () => {
+    expect(parseSlashInput('/')).toEqual({ active: true, query: '' })
+  })
+  it('is active on a "/prefix" and lowercases the query (chat.js:2642)', () => {
+    expect(parseSlashInput('/he')).toEqual({ active: true, query: 'he' })
+    expect(parseSlashInput('/HELP')).toEqual({ active: true, query: 'help' })
+  })
+  it('is NOT active for the "//" literal-slash escape (chat.js:2640)', () => {
+    expect(parseSlashInput('//')).toEqual({ active: false, query: '' })
+    expect(parseSlashInput('//help')).toEqual({ active: false, query: '' })
+  })
+  it('is NOT active once a space appears — args mode (chat.js:2641)', () => {
+    expect(parseSlashInput('/model gpt')).toEqual({ active: false, query: '' })
+    expect(parseSlashInput('/help ')).toEqual({ active: false, query: '' })
+  })
+  it('is NOT active for plain (non-slash) text', () => {
+    expect(parseSlashInput('hello')).toEqual({ active: false, query: '' })
+    expect(parseSlashInput('')).toEqual({ active: false, query: '' })
   })
 })

@@ -1,9 +1,11 @@
 import './chat.css'
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRpc } from '@/app/providers'
 import { Attachments, useAttachments } from './Attachments'
-import { Composer } from './Composer'
+import { Composer, type ComposerHandle } from './Composer'
 import { canonicalSessionKey, hasPendingAttachmentWork, readSessionFromUrl } from './logic'
+import { SlashMenu, type SlashMenuHandle } from './SlashMenu'
+import { useSlashCommands } from './useSlashCommands'
 import { useTranscript } from './useTranscript'
 
 /**
@@ -29,22 +31,77 @@ export function ChatPage() {
   const { containerRef, send, abort, busy, history } = useTranscript({ sessionKey })
   const attachments = useAttachments()
 
+  // The composer value mirror (chat.js:2639 `_textarea.value`) — drives the slash
+  // menu's open/filter state. Owned here so the menu + composer share one value.
+  const [composerValue, setComposerValue] = useState('')
+  const slashHandleRef = useRef<SlashMenuHandle>(null)
+  const composerHandleRef = useRef<ComposerHandle>(null)
+
+  // Slash catalog + execution (chat.js:2615/2842). `new_chat` / `compact` are the
+  // session/stream-mutating actions; they are FLAGGED as later-task seams inside
+  // the hook (no `onSessionAction` wired yet — the session-swap primitives are a
+  // later task). Every RPC-backed command (reset/usage/model/router.hold) works.
+  const { commands, execute: executeSlash } = useSlashCommands({ sessionKey })
+
   useEffect(() => {
     document.title = 'Chat - AgentOS Control'
   }, [])
 
-  // The composer's send: normalize the raw text against the pending buffer
-  // (large-paste / page-dump → generated .txt), then fire chat.send with the
-  // resulting attachments, and clear the buffer (chat.js:6078-6174).
+  // The composer's send. Resolves the Task-9 `//` literal-slash escape + the
+  // slash-command interception, verbatim from `_onSend` (chat.js:6062-6118):
+  //   1. `//…`  → strip ONE leading `/`, send as a LITERAL message (not a command).
+  //   2. `/cmd` → intercept + execute the slash command; do NOT send as text.
+  //   3. else   → normalize (large-paste / page-dump → generated .txt) + chat.send.
   const onComposerSend = useCallback(
-    async (text: string) => {
-      // Not a slash command surface yet (Task 10) → allowSlashCommand:false.
-      const normalized = await attachments.normalizeForSend(text, false)
+    async (rawText: string) => {
+      let text = rawText
+      let isLiteralSlash = false
+      // chat.js:6072-6076 — `//` escape: strip one slash, mark literal.
+      if (text.startsWith('//')) {
+        isLiteralSlash = true
+        text = text.slice(1)
+      }
+      // chat.js:6077 — a real (non-escaped) `/`-prefixed line is a slash command.
+      const isSlashCommand = !isLiteralSlash && text.startsWith('/')
+
+      // chat.js:6113-6116 — intercept + execute; a handled command never sends as
+      // text. (The streaming-enqueue branch at chat.js:6091 is a Task-13 seam; a
+      // send while busy is currently a no-op in useTranscript.send.)
+      if (isSlashCommand) {
+        setComposerValue('')
+        if (executeSlash(text)) return
+      }
+
+      // chat.js:6078-6082 — normalize with the resolved slash flag (a real slash
+      // command bypasses paste/page-dump normalization; here it already returned).
+      const normalized = await attachments.normalizeForSend(text, isSlashCommand)
       if (!normalized) return // over the text hard cap; the helper already toasted.
+      setComposerValue('')
       send(normalized.text, normalized.attachments)
       attachments.clear()
     },
-    [attachments, send],
+    [attachments, send, executeSlash],
+  )
+
+  // The composer's slash-key intercept — consult the menu handle before the
+  // composer runs its own history/send/ESC handling (chat.js:2654-2662/2675).
+  const onSlashKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean =>
+      slashHandleRef.current?.handleKeyDown(e) ?? false,
+    [],
+  )
+
+  // A menu selection (Enter/click) executes the command AND clears the composer
+  // textarea (chat.js:2685-2687 `_selectSlashCmd` closes + clears then runs). The
+  // keyboard-Enter path already clears via the composer's doSend, but a mouse
+  // click bypasses it, so clear imperatively here for both.
+  const onMenuExecute = useCallback(
+    (text: string) => {
+      composerHandleRef.current?.clear()
+      setComposerValue('')
+      void onComposerSend(text)
+    },
+    [onComposerSend],
   )
 
   // chat.js:2543-2555 — drag-and-drop files onto the thread stage the files.
@@ -85,6 +142,17 @@ export function ChatPage() {
       <div className="chat-thread" ref={containerRef} />
       <Composer
         onSend={onComposerSend}
+        onValueChange={setComposerValue}
+        onSlashKeyDown={onSlashKeyDown}
+        composerRef={composerHandleRef}
+        slashMenu={
+          <SlashMenu
+            value={composerValue}
+            commands={commands}
+            onExecute={onMenuExecute}
+            handleRef={slashHandleRef}
+          />
+        }
         onAbort={abort}
         busy={busy}
         history={history}
