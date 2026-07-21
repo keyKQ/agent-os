@@ -1,12 +1,46 @@
 import './chat.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
+import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { Attachments, useAttachments } from './Attachments'
 import { Composer, type ComposerHandle } from './Composer'
-import { canonicalSessionKey, hasPendingAttachmentWork, readSessionFromUrl } from './logic'
+import {
+  ACTIVE_SESSION_STORAGE_KEY,
+  agentIdFromSessionKey,
+  canonicalSessionKey,
+  hasPendingAttachmentWork,
+  readAgentFromUrl,
+  readSessionFromUrl,
+  webchatSessionKey,
+} from './logic'
+import { SessionChip } from './SessionChip'
 import { SlashMenu, type SlashMenuHandle } from './SlashMenu'
 import { useSlashCommands } from './useSlashCommands'
 import { useTranscript } from './useTranscript'
+
+// chat.js:1155-1157 `_genKey` — a fresh webchat key in the CURRENT agent, with a
+// random suffix, so `/new` (and the new-chat button) start an empty session.
+function genSessionKey(currentKey: string): string {
+  return webchatSessionKey(
+    agentIdFromSessionKey(currentKey),
+    Math.random().toString(36).slice(2, 10),
+  )
+}
+
+// chat.js:1211-1214 — the initial session key priority: URL `?session=` >
+// `?agent=` (→ its webchat key) > localStorage > the canonical webchat default.
+function resolveInitialSessionKey(search: string): string {
+  const urlSession = readSessionFromUrl(search) ?? ''
+  const urlAgent = readAgentFromUrl(search) ?? ''
+  let stored = ''
+  try {
+    stored = localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) || ''
+  } catch {
+    stored = ''
+  }
+  return canonicalSessionKey(urlSession || (urlAgent ? webchatSessionKey(urlAgent) : stored))
+}
 
 /**
  * Chat view — full-bleed shell.
@@ -18,15 +52,67 @@ import { useTranscript } from './useTranscript'
  * attachments into `chat.send` (chat.js:6078/6157).
  */
 export function ChatPage() {
-  // Read the RPC client so the provider seam is wired from the foundation
-  // (parity chat.js:1200); consumed by useTranscript for history/stream/send.
-  useRpc()
+  const rpc = useRpc()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  // Resolve the initial session key from the URL (chat.js:1182-1187 →
-  // canonicalized, chat.js:1159-1165), falling back to the stable webchat key.
-  const sessionKey = canonicalSessionKey(
-    readSessionFromUrl(typeof window !== 'undefined' ? window.location.search : '') ?? '',
+  // The active session key is REACTIVE state (legacy `_sessionKey`, chat.js:1170)
+  // — changing it re-points `useTranscript`, which parks the old session's stream,
+  // re-subscribes, and reloads history (the React equivalent of legacy's
+  // imperative `_switchToSession`, chat.js:1809). Seeded once from the URL /
+  // stored key priority (chat.js:1211-1214), reading the URL through react-router
+  // (`useSearchParams`) so it works under a MemoryRouter / basename, not just the
+  // raw `window.location`.
+  const [sessionKey, setSessionKey] = useState(() =>
+    resolveInitialSessionKey('?' + searchParams.toString()),
   )
+
+  // chat.js:1167-1180 `_persistSession` — mirror the canonical key into
+  // localStorage + the URL `?session=` (dropping `?agent=`) so a reload / shared
+  // link reopens the same session. Kept as a ref-free callback; the URL write
+  // goes through react-router's `setSearchParams` (replace, no history entry).
+  const persistSession = useCallback(
+    (key: string) => {
+      try {
+        localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, key)
+      } catch {
+        /* storage unavailable — non-fatal */
+      }
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('session', key)
+          next.delete('agent')
+          return next
+        },
+        { replace: true },
+      )
+    },
+    [setSearchParams],
+  )
+
+  // chat.js:1809 `_switchToSession` — canonicalize, then re-point the transcript
+  // (state change) + persist. A no-op when the key is unchanged (chat.js:1810).
+  const switchToSession = useCallback(
+    (rawKey: string) => {
+      const key = canonicalSessionKey(rawKey)
+      if (!key || key === sessionKey) return
+      setSessionKey(key)
+      persistSession(key)
+    },
+    [sessionKey, persistSession],
+  )
+
+  // Persist the initial resolved key on mount (legacy calls `_persistSession`
+  // immediately after resolving it — chat.js:1215) so the URL/storage reflect the
+  // canonical key even when the tab opened with a bare `?agent=` or nothing.
+  const persistedInitialRef = useRef(false)
+  useEffect(() => {
+    if (persistedInitialRef.current) return
+    persistedInitialRef.current = true
+    persistSession(sessionKey)
+    // Only on mount: subsequent persists ride through switchToSession / new_chat.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const { containerRef, send, abort, busy, history } = useTranscript({ sessionKey })
   const attachments = useAttachments()
@@ -37,11 +123,45 @@ export function ChatPage() {
   const slashHandleRef = useRef<SlashMenuHandle>(null)
   const composerHandleRef = useRef<ComposerHandle>(null)
 
-  // Slash catalog + execution (chat.js:2615/2842). `new_chat` / `compact` are the
-  // session/stream-mutating actions; they are FLAGGED as later-task seams inside
-  // the hook (no `onSessionAction` wired yet — the session-swap primitives are a
-  // later task). Every RPC-backed command (reset/usage/model/router.hold) works.
-  const { commands, execute: executeSlash } = useSlashCommands({ sessionKey })
+  // chat.js:2692-2715 `new_chat` — start a fresh session in the current agent.
+  // Task 10 left `onSessionAction('new_chat', …)` UNWIRED (the session-swap
+  // primitives were a later task — THIS one). We now own them: generate a new
+  // key (chat.js:2696 `_genKey`) and switch to it. `switchToSession` re-points
+  // `useTranscript`, which parks the outgoing session's stream, unsubscribes,
+  // re-subscribes the new (empty) session, and reloads its (empty) history —
+  // exactly the unsubscribe → park → new key → reset → subscribe sequence legacy
+  // did inline (chat.js:2694-2712). The composer clear + empty-state repaint are
+  // handled by the composer / transcript on the key change.
+  const onSessionAction = useCallback(
+    (action: string) => {
+      if (action === 'new_chat') {
+        const key = genSessionKey(sessionKey)
+        switchToSession(key)
+        toast.info('New chat session in the current agent: ' + key)
+      }
+      // `compact_context` stays delegated to the compaction controller (Task 7)
+      // via the hook's own RPC fallback — not a session-swap concern.
+    },
+    [sessionKey, switchToSession],
+  )
+
+  // chat.js:2723 `sessions.reset` — the chip's reset control + the `/reset` slash
+  // command both reset the CURRENT session in place (no key change). Fire the RPC
+  // and let the terminal `sessions.changed` resync history (useTranscript owns
+  // that path); toast the outcome.
+  const resetSession = useCallback(() => {
+    rpc
+      .call('sessions.reset', { key: sessionKey })
+      .then(() => toast.info('Session reset'))
+      .catch((err: unknown) =>
+        toast.error('Reset failed: ' + (err instanceof Error ? err.message : String(err))),
+      )
+  }, [rpc, sessionKey])
+
+  // Slash catalog + execution (chat.js:2615/2842). `new_chat` is now WIRED through
+  // `onSessionAction` (this task owns the session-swap primitives); every
+  // RPC-backed command (reset/usage/model/router.hold) already worked.
+  const { commands, execute: executeSlash } = useSlashCommands({ sessionKey, onSessionAction })
 
   useEffect(() => {
     document.title = 'Chat - AgentOS Control'
@@ -139,6 +259,12 @@ export function ChatPage() {
 
   return (
     <div className="chat-stage" onDrop={onDrop} onDragOver={onDragOver} onPaste={onPaste}>
+      {/* Session chip + switcher (chat.js:1219-1229 topbar-center). The React
+          view owns its own header row (no shared topbar-center slot); the chip
+          drives switch / copy / reset over the reactive session key. */}
+      <header className="chat-session-bar">
+        <SessionChip sessionKey={sessionKey} onSwitch={switchToSession} onReset={resetSession} />
+      </header>
       <div className="chat-thread" ref={containerRef} />
       <Composer
         onSend={onComposerSend}

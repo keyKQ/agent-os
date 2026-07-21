@@ -54,6 +54,187 @@ export function canonicalSessionKey(key: string): string {
   return value
 }
 
+/** chat.js:1173 — the localStorage key the active session persists under. */
+export const ACTIVE_SESSION_STORAGE_KEY = 'agentos_active_session'
+
+/**
+ * A session-list item is either a bare key string or an object carrying the
+ * key under `key` / `session` / `sessionKey` (chat.js:1858 `_itemKey`).
+ */
+export type SessionListItem =
+  | string
+  | {
+      key?: string
+      session?: string
+      sessionKey?: string
+      channel_kind?: string
+      channelKind?: string
+      channel?: string
+      source_kind?: string
+      sourceKind?: string
+      // Run-status fields (chat.js:1611 reads these off the item too).
+      run_status?: string
+      runStatus?: string
+      active_task?: RunTask | null
+      activeTask?: RunTask | null
+      last_task?: RunTask | null
+      lastTask?: RunTask | null
+      [k: string]: unknown
+    }
+
+/** Extract the key from a session-list item (chat.js:1858-1860 `_itemKey`). */
+export function sessionItemKey(item: SessionListItem): string {
+  if (typeof item === 'string') return item
+  return item.key || item.session || item.sessionKey || ''
+}
+
+/**
+ * The switcher-group buckets (chat.js:1903 group order). A session item that
+ * classifies to `null` (empty / `unknown` key) is dropped from the list.
+ */
+export type SessionGroup = 'Web chat' | 'CLI' | 'Sub-agents' | 'Agents' | 'Sessions' | 'Other'
+
+/**
+ * Bucket a session item into a switcher group (chat.js:1862-1881 `_classifyKey`).
+ * An explicit channel/source kind wins; otherwise the key's shape decides.
+ * Returns null for an empty / `unknown` key (so it is skipped in the list).
+ */
+export function classifySessionKey(item: SessionListItem): SessionGroup | null {
+  const key = sessionItemKey(item)
+  if (!key || key === 'unknown') return null
+  const obj = typeof item === 'object' && item ? item : null
+  const channelKind = obj ? obj.channel_kind || obj.channelKind || obj.channel || '' : ''
+  const sourceKind = obj ? obj.source_kind || obj.sourceKind || '' : ''
+  if (channelKind === 'webchat' || sourceKind === 'webui') return 'Web chat'
+  if (channelKind === 'cli' || sourceKind === 'cli') return 'CLI'
+  if (key.startsWith('agent:')) {
+    if (key.includes(':webchat')) return 'Web chat'
+    if (key.includes(':cli:') || key.includes(':standalone:')) return 'CLI'
+    if (key.includes(':subagent')) return 'Sub-agents'
+    return 'Agents'
+  }
+  if (key.startsWith('sess-')) return 'Sessions'
+  return 'Other'
+}
+
+/* ── Run status (chat.js:1571-1621) ──────────────────────────────────────── */
+
+/** A run task carried on a session/task payload (chat.js:1613-1619). */
+export interface RunTask {
+  status?: string
+  task_id?: string
+  terminal_reason?: string
+  terminalReason?: string
+  queue_position?: number
+  queuePosition?: number
+  [k: string]: unknown
+}
+
+/** The normalized run status vocabulary (chat.js:1591). */
+export type RunStatus =
+  | 'idle'
+  | 'queued'
+  | 'running'
+  | 'approval_pending'
+  | 'interrupted'
+  | 'failed'
+  | 'timeout'
+  | 'cancelled'
+
+/** The source a run status is derived from (chat.js:1611-1620). */
+export interface RunStatusSource {
+  run_status?: string
+  runStatus?: string
+  active_task?: RunTask | null
+  activeTask?: RunTask | null
+  last_task?: RunTask | null
+  lastTask?: RunTask | null
+  [k: string]: unknown
+}
+
+/** The resolved run status (chat.js:1620). */
+export interface RunStatusResult {
+  status: RunStatus
+  label: string
+  task: RunTask | null
+}
+
+/** chat.js:1571-1583 — the human label for a normalized run status. */
+export function runStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    queued: 'Queued',
+    running: 'Running',
+    approval_pending: 'Waiting for approval',
+    interrupted: 'Interrupted',
+    failed: 'Failed',
+    timeout: 'Timed out',
+    cancelled: 'Cancelled',
+    idle: 'Idle',
+  }
+  return labels[status] || 'Idle'
+}
+
+/** chat.js:1585-1595 — collapse legacy synonyms onto the normalized vocabulary. */
+export function normalizeRunStatus(status: unknown): RunStatus {
+  const value = String(status || '').toLowerCase()
+  if (value === 'abandoned') return 'interrupted'
+  if (value === 'killed') return 'cancelled'
+  if (value === 'waiting for approval') return 'approval_pending'
+  if (value === 'succeeded' || value === 'success' || value === 'complete') return 'idle'
+  if (
+    [
+      'queued',
+      'running',
+      'approval_pending',
+      'interrupted',
+      'failed',
+      'timeout',
+      'cancelled',
+    ].includes(value)
+  ) {
+    return value as RunStatus
+  }
+  return 'idle'
+}
+
+/**
+ * chat.js:1600-1609 — the chip color class for the header run-status pill. Idle
+ * and cancelled stay muted (plain chip) so finished sessions don't compete for
+ * attention; the rest map to warn / ok / danger tones.
+ */
+export function runStatusChipClass(status: string): string {
+  const map: Record<string, string> = {
+    queued: 'chip-warn',
+    running: 'chip-ok',
+    approval_pending: 'chip-warn',
+    interrupted: 'chip-warn',
+    failed: 'chip-danger',
+    timeout: 'chip-warn',
+  }
+  return map[status] || ''
+}
+
+/**
+ * chat.js:1611-1621 `_sessionRunStatus` — derive `{ status, label, task }` from
+ * a session/task source. `run_status` (camel or snake) is the base, falling back
+ * to the active/last task's status; an active task that is queued/running/
+ * approval_pending overrides the base status (so a live turn shows through even
+ * when `run_status` lags at idle). The winning task is `active || last || null`.
+ */
+export function sessionRunStatus(source: RunStatusSource | null | undefined): RunStatusResult {
+  const src = source || {}
+  const active = src.active_task || src.activeTask || null
+  const last = src.last_task || src.lastTask || null
+  const activeStatus = active ? normalizeRunStatus(active.status) : ''
+  const rawStatus = src.run_status || src.runStatus || active?.status || last?.status || ''
+  let status = normalizeRunStatus(rawStatus)
+  if (active && ['queued', 'running', 'approval_pending'].includes(activeStatus)) {
+    status = activeStatus as RunStatus
+  }
+  const task = active || last || null
+  return { status, label: runStatusLabel(status), task }
+}
+
 /**
  * Read `?session=` from a search string (chat.js:1182-1187), pure over the
  * injected search rather than `window.location.search`. Returns the value or
@@ -64,6 +245,21 @@ export function readSessionFromUrl(search: string): string | null {
   try {
     const params = new URLSearchParams(search)
     return params.get('session')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read `?agent=` from a search string (chat.js:1189-1194). Pure over the injected
+ * search; returns the value or `null` when absent / unparseable. The initial
+ * session priority is URL `?session=` > `?agent=` (→ webchat key) > stored
+ * (chat.js:1211-1214).
+ */
+export function readAgentFromUrl(search: string): string | null {
+  try {
+    const params = new URLSearchParams(search)
+    return params.get('agent')
   } catch {
     return null
   }

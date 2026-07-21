@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { useEffect } from 'react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { ChatPage } from './ChatPage'
 
 vi.mock('sonner', () => ({
@@ -69,17 +71,54 @@ vi.mock('@/app/providers', () => ({
   }),
 }))
 
-function renderPage() {
+// A location probe so tests can assert the URL `?session=` after a switch. Held
+// on a mutable object (not a reassigned module `let`) so the effect write is a
+// property mutation, which the react-hooks lint rules permit.
+const probe = { search: '' }
+function LocationProbe() {
+  const loc = useLocation()
+  useEffect(() => {
+    probe.search = loc.search
+  }, [loc.search])
+  return null
+}
+
+function renderPage(initialEntry = '/chat') {
+  probe.search = ''
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider
         client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
       >
         <ChatPage />
+        <LocationProbe />
       </QueryClientProvider>
     </MemoryRouter>,
   )
 }
+
+beforeEach(() => {
+  // The SessionChip fetches /api/sessions on open (chat.js:2026). Stub a default
+  // OK response; individual tests override as needed.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessions: ['agent:main:webchat:default', 'agent:main:webchat:other'],
+      }),
+    }),
+  )
+  try {
+    localStorage.clear()
+  } catch {
+    /* ignore */
+  }
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('ChatPage', () => {
   it('renders the full-bleed chat shell with a thread region', () => {
@@ -217,5 +256,147 @@ describe('ChatPage', () => {
       const params = aborts[0]![1] as Record<string, unknown>
       expect(params.sessionKey).toBe('agent:main:webchat:default')
     })
+  })
+
+  /* ── Session chip + lifecycle (Task 11) ─────────────────────────────────── */
+
+  it('opens ?session=<key> and subscribes that session (chat.js:1211/2857)', async () => {
+    mockRpc = makeRpc()
+    renderPage('/chat?session=agent%3Atrader%3Awebchat%3Adefault')
+    // The chip shows the URL session; the transcript subscribes it.
+    expect(screen.getByText('agent:trader:webchat:default')).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith('sessions.messages.subscribe', {
+        key: 'agent:trader:webchat:default',
+      }),
+    )
+  })
+
+  it('opens ?agent=<id> as that agent’s webchat key (chat.js:1214)', async () => {
+    mockRpc = makeRpc()
+    renderPage('/chat?agent=trader')
+    expect(screen.getByText('agent:trader:webchat:default')).toBeInTheDocument()
+    // Persisted → the URL is rewritten to ?session= and ?agent= dropped (chat.js:1177).
+    await waitFor(() => {
+      expect(probe.search).toContain('session=agent%3Atrader%3Awebchat%3Adefault')
+      expect(probe.search).not.toContain('agent=')
+    })
+  })
+
+  it('switching sessions via the chip updates the URL ?session= (chat.js:1176/1809)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    fireEvent.click(await screen.findByText('agent:main:webchat:other'))
+    await waitFor(() => expect(probe.search).toContain('session=agent%3Amain%3Awebchat%3Aother'))
+    // The new session is subscribed (re-point → re-subscribe, chat.js:1832).
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith('sessions.messages.subscribe', {
+        key: 'agent:main:webchat:other',
+      }),
+    )
+  })
+
+  it('persists the active session to localStorage (chat.js:1173)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    fireEvent.click(await screen.findByText('agent:main:webchat:other'))
+    await waitFor(() =>
+      expect(localStorage.getItem('agentos_active_session')).toBe('agent:main:webchat:other'),
+    )
+  })
+
+  it('copies the session key from the chip (chat.js:1782)', async () => {
+    mockRpc = makeRpc()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /copy session key/i }))
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('agent:main:webchat:default')
+      expect(toast.info).toHaveBeenCalledWith('Session key copied')
+    })
+  })
+
+  it('resets the current session from the chip via sessions.reset (chat.js:2723)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /reset session/i }))
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith('sessions.reset', {
+        key: 'agent:main:webchat:default',
+      }),
+    )
+  })
+
+  it('the "/new" slash command starts a new chat + subscribes it (chat.js:2692 via onSessionAction)', async () => {
+    // Catalog carries a /new command whose action is new_chat.
+    mockRpc = makeRpc()
+    mockRpc.call = vi.fn((...args: unknown[]) => {
+      if (args[0] === 'commands.list_for_surface') {
+        return Promise.resolve({
+          surface: 'web_chat',
+          commands: [
+            {
+              name: '/new',
+              usage: '/new',
+              description: 'New chat',
+              aliases: [],
+              execution: { action: 'new_chat' },
+            },
+          ],
+        })
+      }
+      return Promise.resolve({})
+    }) as typeof mockRpc.call
+    renderPage()
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    await waitFor(() =>
+      expect(mockRpc.call).toHaveBeenCalledWith('commands.list_for_surface', {
+        surface: 'web_chat',
+      }),
+    )
+    // Type "/new " (space closes the menu → args mode) and send it as a command.
+    fireEvent.change(ta, { target: { value: '/new ' } })
+    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+    // onSessionAction('new_chat') → a fresh key in the SAME agent, switched to +
+    // subscribed. The new key is a webchat key with a random suffix.
+    await waitFor(() => {
+      const subs = mockRpc.call.mock.calls
+        .filter(([m]) => m === 'sessions.messages.subscribe')
+        .map(([, p]) => (p as { key: string }).key)
+      const newKey = subs.find(
+        (k) => k.startsWith('agent:main:webchat:') && k !== 'agent:main:webchat:default',
+      )
+      expect(newKey).toBeTruthy()
+    })
+    // A new-chat toast fired, and no chat.send (the command was intercepted).
+    expect(toast.info).toHaveBeenCalledWith(
+      expect.stringContaining('New chat session in the current agent'),
+    )
+    expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(0)
+  })
+
+  it('parks the live stream on switch away and restores it on switch back (chat.js:1813/1831)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // Drive a live stream on the default session → a stream bubble appears.
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 1, text: 'streaming…' }, {})
+    })
+    const thread = document.querySelector('.chat-thread') as HTMLElement
+    await waitFor(() => expect(thread.querySelector('.msg.assistant')).not.toBeNull())
+
+    // Switch to another session — the outgoing session's live stream is parked
+    // (its bubble removed from the DOM), and the new session subscribes.
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    fireEvent.click(await screen.findByText('agent:main:webchat:other'))
+    await waitFor(() => expect(thread.querySelector('.msg.assistant')).toBeNull())
+
+    // Switch back — the parked stream bubble is restored to the thread.
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    fireEvent.click(await screen.findByText('agent:main:webchat:default'))
+    await waitFor(() => expect(thread.querySelector('.msg.assistant')).not.toBeNull())
   })
 })

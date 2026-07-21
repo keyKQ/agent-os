@@ -6,6 +6,7 @@ import {
   attachmentHardCapBytes,
   canonicalSessionKey,
   canStageAttachmentMime,
+  classifySessionKey,
   estimateTextTokens,
   hasPendingAttachmentWork,
   historyFallbackMessageIdentity,
@@ -27,9 +28,12 @@ import {
   readSessionFromUrl,
   resolveAttachmentMime,
   sendButtonState,
+  sessionItemKey,
+  sessionRunStatus,
   shouldAutofocusComposer,
   slashCommandKey,
   webchatSessionKey,
+  ACTIVE_SESSION_STORAGE_KEY,
   type PendingAttachment,
 } from './logic'
 import type { ChatMessage } from './types'
@@ -508,5 +512,112 @@ describe('parseSlashInput', () => {
   it('is NOT active for plain (non-slash) text', () => {
     expect(parseSlashInput('hello')).toEqual({ active: false, query: '' })
     expect(parseSlashInput('')).toEqual({ active: false, query: '' })
+  })
+})
+
+// Parity: chat.js:1611 `_sessionRunStatus` — derives the run status from a
+// session/task source (active_task/last_task/run_status, camel or snake),
+// normalized (chat.js:1585) into a status + human label + the winning task.
+describe('sessionRunStatus', () => {
+  it('defaults to idle for an empty / nullish source', () => {
+    expect(sessionRunStatus(undefined)).toEqual({ status: 'idle', label: 'Idle', task: null })
+    expect(sessionRunStatus({})).toEqual({ status: 'idle', label: 'Idle', task: null })
+  })
+  it('reads run_status and labels it (chat.js:1616/1571)', () => {
+    expect(sessionRunStatus({ run_status: 'running' })).toEqual({
+      status: 'running',
+      label: 'Running',
+      task: null,
+    })
+    expect(sessionRunStatus({ runStatus: 'queued' })).toMatchObject({
+      status: 'queued',
+      label: 'Queued',
+    })
+  })
+  it('normalizes legacy synonyms (chat.js:1585-1594)', () => {
+    expect(sessionRunStatus({ run_status: 'abandoned' }).status).toBe('interrupted')
+    expect(sessionRunStatus({ run_status: 'killed' }).status).toBe('cancelled')
+    expect(sessionRunStatus({ run_status: 'waiting for approval' }).status).toBe('approval_pending')
+    expect(sessionRunStatus({ run_status: 'succeeded' }).status).toBe('idle')
+    expect(sessionRunStatus({ run_status: 'complete' }).status).toBe('idle')
+    expect(sessionRunStatus({ run_status: 'bogus' }).status).toBe('idle')
+  })
+  it('lets an active task in queued/running/approval_pending win over run_status (chat.js:1618)', () => {
+    const source = { run_status: 'idle', active_task: { status: 'running', task_id: 't1' } }
+    const out = sessionRunStatus(source)
+    expect(out.status).toBe('running')
+    expect(out.label).toBe('Running')
+    expect(out.task).toEqual({ status: 'running', task_id: 't1' })
+  })
+  it('does NOT let a terminal active task override an explicit run_status (chat.js:1616-1618)', () => {
+    // rawStatus = run_status ('idle', truthy) so it wins; only a queued/running/
+    // approval_pending active task bumps the status. The task is still returned.
+    const source = { run_status: 'idle', active_task: { status: 'failed', task_id: 't2' } }
+    const out = sessionRunStatus(source)
+    expect(out.status).toBe('idle')
+    expect(out.task).toEqual({ status: 'failed', task_id: 't2' })
+  })
+  it('falls back to a terminal active task status when run_status is absent (chat.js:1616)', () => {
+    // No run_status → rawStatus falls back to active.status → 'failed'.
+    const out = sessionRunStatus({ active_task: { status: 'failed', task_id: 't3' } })
+    expect(out.status).toBe('failed')
+    expect(out.task).toEqual({ status: 'failed', task_id: 't3' })
+  })
+  it('accepts camelCase activeTask/lastTask (chat.js:1613-1614)', () => {
+    const out = sessionRunStatus({ activeTask: { status: 'approval_pending' } })
+    expect(out.status).toBe('approval_pending')
+    expect(out.label).toBe('Waiting for approval')
+  })
+  it('falls back to last_task status when no active task (chat.js:1616/1619)', () => {
+    const out = sessionRunStatus({ last_task: { status: 'succeeded', task_id: 'done' } })
+    expect(out.status).toBe('idle')
+    expect(out.task).toEqual({ status: 'succeeded', task_id: 'done' })
+  })
+})
+
+// Parity: chat.js:1858 `_itemKey` — a session list item is either a bare string
+// key or an object carrying key/session/sessionKey.
+describe('sessionItemKey', () => {
+  it('returns a bare string item unchanged', () => {
+    expect(sessionItemKey('agent:main:webchat:default')).toBe('agent:main:webchat:default')
+  })
+  it('reads key/session/sessionKey off an object (chat.js:1859)', () => {
+    expect(sessionItemKey({ key: 'k1' })).toBe('k1')
+    expect(sessionItemKey({ session: 's1' })).toBe('s1')
+    expect(sessionItemKey({ sessionKey: 'sk1' })).toBe('sk1')
+    expect(sessionItemKey({})).toBe('')
+  })
+})
+
+// Parity: chat.js:1862 `_classifyKey` — buckets a session item into a switcher
+// group by its channel/source kind or the shape of the key.
+describe('classifySessionKey', () => {
+  it('returns null for an empty / "unknown" key (chat.js:1864)', () => {
+    expect(classifySessionKey('')).toBeNull()
+    expect(classifySessionKey('unknown')).toBeNull()
+  })
+  it('honors an explicit channel/source kind (chat.js:1871-1872)', () => {
+    expect(classifySessionKey({ key: 'x', channel_kind: 'webchat' })).toBe('Web chat')
+    expect(classifySessionKey({ key: 'x', source_kind: 'webui' })).toBe('Web chat')
+    expect(classifySessionKey({ key: 'x', channel_kind: 'cli' })).toBe('CLI')
+    expect(classifySessionKey({ key: 'x', sourceKind: 'cli' })).toBe('CLI')
+  })
+  it('classifies an agent: key by its shape (chat.js:1873-1878)', () => {
+    expect(classifySessionKey('agent:main:webchat:default')).toBe('Web chat')
+    expect(classifySessionKey('agent:main:cli:default')).toBe('CLI')
+    expect(classifySessionKey('agent:main:standalone:x')).toBe('CLI')
+    expect(classifySessionKey('agent:main:subagent:x')).toBe('Sub-agents')
+    expect(classifySessionKey('agent:main:something')).toBe('Agents')
+  })
+  it('classifies a sess- key as Sessions, otherwise Other (chat.js:1879-1880)', () => {
+    expect(classifySessionKey('sess-abc')).toBe('Sessions')
+    expect(classifySessionKey('random-key')).toBe('Other')
+  })
+})
+
+// Parity: chat.js:1173 — the active session persists under this localStorage key.
+describe('ACTIVE_SESSION_STORAGE_KEY', () => {
+  it('is the legacy key so a returning tab reopens the same session', () => {
+    expect(ACTIVE_SESSION_STORAGE_KEY).toBe('agentos_active_session')
   })
 })

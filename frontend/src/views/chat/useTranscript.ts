@@ -270,6 +270,11 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
   )
 
   // Keep the session-key + seams holders current (effect, never during render).
+  // Declared BEFORE the subscription effect so on a session-key change this body
+  // runs first (React runs effect bodies in declaration order) — the controller's
+  // `getSessionKey()` therefore returns the NEW key by the time the subscription
+  // effect re-subscribes + restores. On teardown, cleanups run before any body,
+  // so the subscription effect's cleanup still sees the OLD key when it parks.
   useEffect(() => {
     sessionKeyRef.current = opts.sessionKey
   }, [opts.sessionKey])
@@ -887,11 +892,29 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       }),
     )
 
+    // Restore any live stream state PARKED for this session on a previous switch
+    // (chat.js:1831 `_restoreLiveStreamStateForSession`, called from
+    // `_switchToSession` right before re-subscribing). The park map is a
+    // controller-lifetime module state (chat.js:57), so a session we switch back
+    // to gets its in-flight stream bubble / router strips / thinking indicator
+    // re-attached. On a first mount for a key this is a no-op (nothing parked).
+    // `sessionKeyRef` is already the NEW key here (its effect runs before this
+    // one), so restore keys on the correct session.
+    controller.restoreLiveStreamStateForSession(sessionKey)
+
     // Kick off the subscription (mirrors legacy's subscribe-on-view-entry).
     void subscribe()
 
     return () => {
       cancelled = true
+      // Park the OUTGOING session's live stream state before we tear the
+      // subscription down (chat.js:1813 `_parkCurrentSessionStreamState`, called
+      // from `_switchToSession` before `_unsubscribeSession`). Cleanups run
+      // before any effect body on a re-render, so `getSessionKey()` still returns
+      // the OLD key here — the state is stashed under the session we're leaving
+      // and restored if we switch back. On real unmount the final cleanup at the
+      // bottom of this hook clears view-local stream state unconditionally.
+      controller.parkCurrentSessionStreamState('session_switch')
       // StrictMode-safe teardown: drop every registered rpc.on handler and
       // unsubscribe from the session so a re-mount never double-registers.
       unsubs.forEach((off) => off())
