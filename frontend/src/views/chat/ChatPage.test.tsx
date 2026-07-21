@@ -262,6 +262,87 @@ describe('ChatPage', () => {
     })
   })
 
+  it('drops a late text_delta after abort — the killed stream is NOT resurrected (chat.js:6652)', async () => {
+    // Fix 1: `isAborted` must be wired into the controller. Without it,
+    // `appendDelta`'s abort guard (stream.ts:839) is dead: a `text_delta`
+    // buffered on the socket after the user hits Stop re-opens a stream bubble
+    // and appends text to a turn the user explicitly killed.
+    mockRpc = makeRpc()
+    renderPage()
+    const thread = document.querySelector('.chat-thread') as HTMLElement
+
+    // Stream a delta → a streaming assistant bubble appears with committed text.
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 1, text: 'partial ' }, {})
+    })
+    await waitFor(() => expect(thread.querySelector('.msg.assistant')).not.toBeNull())
+
+    // User hits Stop → abort() sets abortedRef + ends streaming (aborted). The
+    // bubble carried text, so it is finalized (streaming class dropped, an
+    // `interrupted` mark added) — it is NOT still a live streaming bubble.
+    const abort = await screen.findByRole('button', { name: /abort|stop/i })
+    fireEvent.click(abort)
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.abort').length).toBe(1),
+    )
+    await waitFor(() => expect(thread.querySelector('.msg.assistant.streaming')).toBeNull())
+
+    // Snapshot the finalized thread — a correctly-guarded late delta leaves it
+    // byte-for-byte unchanged.
+    const threadHtmlAfterAbort = thread.innerHTML
+    const assistantCountAfterAbort = thread.querySelectorAll('.msg.assistant').length
+
+    // A late `text_delta` still buffered on the socket now arrives. The abort
+    // guard (stream.ts:839) must DROP it: no resurrected streaming bubble, no
+    // second assistant bubble, no 'zombie text' appended to the killed turn.
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 2, text: 'zombie text' }, {})
+    })
+    // Let any (buggy) rAF-batched render flush before asserting.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(thread.querySelector('.msg.assistant.streaming')).toBeNull()
+    expect(thread.querySelectorAll('.msg.assistant').length).toBe(assistantCountAfterAbort)
+    expect(thread.textContent).not.toContain('zombie text')
+    expect(thread.innerHTML).toBe(threadHtmlAfterAbort)
+  })
+
+  it('renders a "Response timed out" row when the stream idle timer fires (stream.ts:522)', async () => {
+    // Fix 2: `addMessage` must be wired into the controller. Without it, the
+    // idle-timeout row (stream.ts:522) silently no-ops and a stalled stream ends
+    // with no user-visible explanation. Drive the idle timer with fake timers +
+    // a short grace negotiated via the `_hello` RPC policy.
+    vi.useFakeTimers()
+    try {
+      mockRpc = makeRpc()
+      renderPage()
+      const thread = document.querySelector('.chat-thread') as HTMLElement
+
+      // Negotiate a short idle grace so the backstop timer fires quickly
+      // (applyRpcPolicy, stream.ts:547 → webui_stream_idle_grace_ms).
+      act(() => {
+        mockRpc.emit('_hello', { policy: { webui_stream_idle_grace_ms: 1000 } })
+      })
+      // Start a stream (arms the idle timer at the negotiated grace).
+      act(() => {
+        mockRpc.emit('session.event.text_delta', { seq: 1, text: 'working…' }, {})
+      })
+      expect(thread.querySelector('.msg.assistant')).not.toBeNull()
+
+      // Advance past the idle grace → the timer finalizes the stream and appends
+      // the 'Response timed out' error row via the now-wired `addMessage` dep.
+      act(() => {
+        vi.advanceTimersByTime(1100)
+      })
+      const errRow = thread.querySelector('.msg.error') as HTMLElement | null
+      expect(errRow).not.toBeNull()
+      expect(errRow!.textContent).toContain('Response timed out')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   /* ── Session chip + lifecycle (Task 11) ─────────────────────────────────── */
 
   it('opens ?session=<key> and subscribes that session (chat.js:1211/2857)', async () => {

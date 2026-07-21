@@ -198,6 +198,31 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     pendingQueueLength: () => 0,
   })
 
+  // Reset the abort flag for a new turn (legacy `_aborted`, chat.js:6121). The
+  // controller drops deltas while aborted (chat.js:6652); a fresh send clears it.
+  // Declared BEFORE the controller init so the `isAborted` dep can read it (refs
+  // are stable, so identifier ordering — not creation timing — is what matters).
+  const abortedRef = useRef(false)
+
+  // The minimal message-row builder the controller's `addMessage` +
+  // `addMessageWithOptions` deps share (chat.js:7851 `_addMessage`). No real
+  // `_addMessage` DOM builder exists in the frontend yet (router-fx/turn-meta
+  // entangled — a later task); this faithful minimal row lets a subagent
+  // disclosure, an idle-timeout row (stream.ts:522), and a keep-alive row
+  // (stream.ts:653) render standalone. Reads `containerRef.current` lazily.
+  const appendMinimalRow = (role: string, text: string): HTMLElement | null => {
+    const th = containerRef.current
+    if (!th) return null
+    const empty = th.querySelector('.chat-empty')
+    if (empty) empty.remove()
+    const div = document.createElement('div')
+    div.className = `msg ${role}`
+    div.setAttribute('data-history-role', role)
+    div.innerHTML = `<div class="msg-body">${esc(text || '')}</div>`
+    th.appendChild(div)
+    return div
+  }
+
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
     createStreamController(containerRef, {
@@ -231,22 +256,21 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
         pendingDelegatesRef.current.schedulePendingDrainAfterTerminal(),
       popAllPendingIntoComposer: () => pendingDelegatesRef.current.popAllPendingIntoComposer(),
       pendingQueueLength: () => pendingDelegatesRef.current.pendingQueueLength(),
+      // chat.js:6652 — the abort flag `appendDelta` guards on (stream.ts:839): a
+      // late `text_delta` buffered on the socket after the user hit Stop must NOT
+      // re-open the killed stream bubble. `abort()` sets `abortedRef.current=true`
+      // and a fresh send/session-switch clears it, matching legacy `_aborted`.
+      isAborted: () => abortedRef.current,
+      // chat.js:7851 `_addMessage` (3-arg timeout/error/keep-alive form). The
+      // idle-timeout row (stream.ts:522) and keep-alive row (stream.ts:653) call
+      // this — without it a stalled stream ends with no user-visible explanation.
+      // Shares the minimal row builder with `addMessageWithOptions` below.
+      addMessage: (role, text) => appendMinimalRow(role, text),
       // Subagent-completion system row (chat.js:7814 `_addMessage`). No real
       // `_addMessage` DOM builder exists in the frontend yet (router-fx/turn-meta
       // entangled — a later task); provide the same faithful minimal row the
       // history renderer uses so a subagent disclosure renders standalone.
-      addMessageWithOptions: (role, text) => {
-        const th = containerRef.current
-        if (!th) return null
-        const empty = th.querySelector('.chat-empty')
-        if (empty) empty.remove()
-        const div = document.createElement('div')
-        div.className = `msg ${role}`
-        div.setAttribute('data-history-role', role)
-        div.innerHTML = `<div class="msg-body">${esc(text || '')}</div>`
-        th.appendChild(div)
-        return div
-      },
+      addMessageWithOptions: (role, text) => appendMinimalRow(role, text),
     }),
   )
 
@@ -354,9 +378,9 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
 
   /* ── Send / Abort (chat.js:6062 `_onSend` / 8439 `_onStop`) ─────────────── */
 
-  // Reset the abort flag for a new turn (legacy `_aborted`, chat.js:6121). The
-  // controller drops deltas while aborted (chat.js:6652); a fresh send clears it.
-  const abortedRef = useRef(false)
+  // `abortedRef` (legacy `_aborted`, chat.js:6121) is declared above the
+  // controller init so the `isAborted` dep can read it. Set true on abort, and
+  // cleared on a fresh send / session switch below.
 
   // Legacy `_stopRequestedByUser` (chat.js:346). `abort()` (the `_onStop` path,
   // chat.js:8442) sets it true right before `abortAndRecover` recovers pending
