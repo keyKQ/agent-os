@@ -56,6 +56,12 @@ export interface UseAttachments {
   remove: (localId: number) => void
   /** Clear the whole buffer after a successful send (chat.js:6173). */
   clear: () => void
+  /**
+   * Replace the whole buffer (chat.js:8546/8611 — the pending drain / recover
+   * paths write `_pendingAttachments` directly). Used by the pending-queue
+   * recover/drain to stack the queued attachments into the composer buffer.
+   */
+  setAll: (attachments: PendingAttachment[]) => void
   /** The inline cap/mime rejection to show in the tray (chat.js:8055/8059), or null. */
   rejection: string | null
   /**
@@ -91,6 +97,9 @@ export function useAttachments(opts?: {
   }, [])
 
   const clear = useCallback(() => setAttachments([]), [])
+
+  // chat.js:8546/8611 — replace the buffer wholesale (pending drain / recover).
+  const setAll = useCallback((next: PendingAttachment[]) => setAttachments(next), [])
 
   // chat.js:8127-8161 `_uploadAttachmentStaged` — multipart POST to the bridge.
   const defaultUpload = useCallback(
@@ -242,7 +251,7 @@ export function useAttachments(opts?: {
     [attachments, nextLocalId],
   )
 
-  return { attachments, addFiles, remove, clear, rejection, normalizeForSend }
+  return { attachments, addFiles, remove, clear, setAll, rejection, normalizeForSend }
 }
 
 /* ── Presentational tray (chat.js:8346 `_renderAttachmentPreview`) ─────────── */

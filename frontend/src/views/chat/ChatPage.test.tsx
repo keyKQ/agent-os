@@ -399,4 +399,127 @@ describe('ChatPage', () => {
     fireEvent.click(await screen.findByText('agent:main:webchat:default'))
     await waitFor(() => expect(thread.querySelector('.msg.assistant')).not.toBeNull())
   })
+
+  // ── Pending queue (chat.js:6091-6110 enqueue-while-busy) ───────────────────
+
+  const typeAndSend = (text: string) => {
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: text } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+  }
+
+  it('enqueues a send while a turn is streaming — the pending rail renders (chat.js:6091)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // First send starts streaming (the controller flips _isStreaming synchronously).
+    typeAndSend('first message')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1),
+    )
+    // Second send while busy → enqueue, NOT a second chat.send.
+    await act(async () => typeAndSend('queued while busy'))
+    await waitFor(() => expect(screen.getByText('Pending 1/5')).toBeInTheDocument())
+    expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1)
+    expect(screen.getByText('queued while busy')).toBeInTheDocument()
+  })
+
+  it('caps the pending queue at MAX_PENDING (5) and toasts when full (chat.js:8511)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('turn')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1),
+    )
+    for (let i = 0; i < 5; i++) {
+      await act(async () => typeAndSend(`q${i}`))
+    }
+    await waitFor(() => expect(screen.getByText('Pending 5/5')).toBeInTheDocument())
+    // A sixth enqueue is rejected with a "queue full" warning.
+    await act(async () => typeAndSend('overflow'))
+    expect(screen.getByText('Pending 5/5')).toBeInTheDocument()
+    expect(toast.warning).toHaveBeenCalledWith(
+      expect.stringContaining('Pending queue full (5)'),
+      expect.anything(),
+    )
+  })
+
+  it('recovers ALL pending into the composer on ESC (abort > recover, chat.js:2535/8596)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('turn')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1),
+    )
+    await act(async () => typeAndSend('alpha'))
+    await act(async () => typeAndSend('beta'))
+    await waitFor(() => expect(screen.getByText('Pending 2/5')).toBeInTheDocument())
+
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    // ESC while streaming: aborts (chat.abort) AND recovers pending into the input.
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: 'Escape' })
+    })
+    await waitFor(() => {
+      const aborts = mockRpc.call.mock.calls.filter(([m]) => m === 'chat.abort')
+      expect(aborts.length).toBe(1)
+    })
+    // The queue is emptied and its texts joined into the composer (FIFO).
+    await waitFor(() => expect(screen.queryByText('Pending 2/5')).not.toBeInTheDocument())
+    expect(ta.value).toContain('alpha')
+    expect(ta.value).toContain('beta')
+  })
+
+  it('removing a pending chip drops just that item (chat.js:8459)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('turn')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1),
+    )
+    await act(async () => typeAndSend('keep'))
+    await act(async () => typeAndSend('drop'))
+    await waitFor(() => expect(screen.getByText('Pending 2/5')).toBeInTheDocument())
+    const removeButtons = screen.getAllByRole('button', { name: /^Remove Pending message/ })
+    fireEvent.click(removeButtons[1] as HTMLElement)
+    await waitFor(() => expect(screen.getByText('Pending 1/5')).toBeInTheDocument())
+    expect(screen.getByText('keep')).toBeInTheDocument()
+    expect(screen.queryByText('drop')).not.toBeInTheDocument()
+  })
+
+  // ── Markdown export (chat.js:8389) ─────────────────────────────────────────
+
+  it('exports the transcript as a Markdown download (chat.js:8389-8408)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // Seed a rendered user message into the thread (the export source).
+    typeAndSend('exported line')
+    await waitFor(() => expect(document.querySelector('.msg.user')).not.toBeNull())
+
+    // jsdom lacks URL.createObjectURL/revokeObjectURL — define them so the Blob
+    // download path runs. Capture the anchor the export creates + clicks.
+    const createObjectURL = vi.fn().mockReturnValue('blob:mock')
+    const revokeObjectURL = vi.fn()
+    ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = createObjectURL
+    ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = revokeObjectURL
+    const clickSpy = vi.fn()
+    const origCreate = document.createElement.bind(document)
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag) as HTMLElement
+      if (tag === 'a') (el as HTMLAnchorElement).click = clickSpy
+      return el
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
+    expect(clickSpy).toHaveBeenCalledTimes(1)
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(toast.info).toHaveBeenCalledWith('Exported as Markdown')
+    createSpy.mockRestore()
+  })
+
+  it('toasts and skips export when the transcript is empty (chat.js:8390)', () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
+    expect(toast.warning).toHaveBeenCalledWith('No messages to export')
+  })
 })

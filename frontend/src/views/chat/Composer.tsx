@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { sendButtonState, shouldAutofocusComposer } from './logic'
+import { MAX_PENDING, sendButtonState, shouldAutofocusComposer } from './logic'
 
 /**
  * The chat command line (React).
@@ -32,9 +32,17 @@ import { sendButtonState, shouldAutofocusComposer } from './logic'
 const MIN_TEXTAREA_HEIGHT = 40 // chat.js:2590 fallback when minHeight is unset.
 const MAX_TEXTAREA_HEIGHT = 160 // chat.js:2592 cap.
 
-/** Imperative handle exposed via `composerRef` — clears the textarea. */
+/** Imperative handle exposed via `composerRef` — clears / sets the textarea. */
 export interface ComposerHandle {
   clear: () => void
+  /**
+   * Programmatically set the composer value + focus with the caret at the end
+   * (chat.js:8608-8618 — the pending-recover / drain-head write path). Resets the
+   * ↑/↓ history cursor since the content is now user-editable text (chat.js:8623).
+   */
+  setValue: (text: string) => void
+  /** The current composer text (chat.js:6063 `_textarea.value.trim()` reads). */
+  getValue: () => string
 }
 
 export interface ComposerProps {
@@ -101,6 +109,22 @@ export interface ComposerProps {
    * `chat-toolbar-wrap`). Absent when the view has no toolbar.
    */
   toolbar?: React.ReactNode
+  /**
+   * The current pending-queue length (legacy `_pendingQueue.length`). Drives the
+   * ESC priority chain (chat.js:2449/2535) + the Alt+↓ enqueue cap guard
+   * (chat.js:2464). Default 0.
+   */
+  pendingCount?: number
+  /**
+   * ESC pending-recover rung (chat.js:2535 `_popAllPendingIntoComposer`). Called
+   * when ESC is pressed while NOT streaming but the queue is non-empty. ChatPage
+   * owns the queue → recovers it into the composer. Returns true if it recovered.
+   */
+  onRecoverPending?: () => boolean
+  /** Alt+↑ — pop the most-recent pending item into the composer (chat.js:2457). */
+  onPopPendingTail?: () => void
+  /** Alt+↓ — enqueue the current composer text (chat.js:2464). */
+  onEnqueueCurrent?: () => void
 }
 
 export function Composer({
@@ -118,6 +142,10 @@ export function Composer({
   onAttachFiles,
   tray,
   toolbar,
+  pendingCount = 0,
+  onRecoverPending,
+  onPopPendingTail,
+  onEnqueueCurrent,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const [toolbarOpen, setToolbarOpen] = useState(false)
@@ -184,6 +212,16 @@ export function Composer({
         historyIdxRef.current = null
         historyDraftRef.current = ''
       },
+      // chat.js:8608-8624 — the pending-recover / drain write: set the value,
+      // focus with the caret at the end, and reset the history cursor since the
+      // content is now user-editable text.
+      setValue: (text: string) => {
+        setProgrammatic(text)
+        historyIdxRef.current = null
+        historyDraftRef.current = ''
+        textareaRef.current?.focus()
+      },
+      getValue: () => textareaRef.current?.value ?? '',
     }),
     [setProgrammatic],
   )
@@ -227,14 +265,17 @@ export function Composer({
       return
     }
     // chat.js:6064/6118 — `hasPayload = text || _pendingAttachments.length > 0`;
-    // an attachments-only send (empty text) is allowed. The enqueue-while-
-    // streaming branch (chat.js:6091) is a Task-13 seam; until then inert while busy.
-    if ((!text && !hasPendingAttachments) || busy) return
+    // an attachments-only send (empty text) is allowed. When busy, we STILL call
+    // `onSend` — ChatPage's `_onSend` port owns the enqueue-while-streaming/
+    // compacting decision (chat.js:6091-6110), enqueuing rather than sending. The
+    // composer no longer swallows the busy send; it just clears its input, since
+    // either a send fired or the payload moved to the pending queue.
+    if (!text && !hasPendingAttachments) return
     onSend(text)
     setProgrammatic('')
     historyIdxRef.current = null
     historyDraftRef.current = ''
-  }, [value, busy, hasPendingAttachments, hasPendingWork, onSend, setProgrammatic])
+  }, [value, hasPendingAttachments, hasPendingWork, onSend, setProgrammatic])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -245,13 +286,23 @@ export function Composer({
       // the open menu). When it consumes the key the composer does nothing else.
       if (onSlashKeyDown?.(e)) return
 
-      // ESC: abort the stream when busy (chat.js:2530 `_onStop`), else clear the
-      // input when there is text (chat.js:2449). Slash-menu/pending ESC branches
-      // are Task-9 seams.
+      // ESC priority chain (chat.js:2530-2538 doc-level + 2449 textarea):
+      //   1. streaming        → abort the turn (chat.js:2530-2533 `_onStop`; the
+      //      stop path itself recovers pending, so the recover rung is skipped).
+      //   2. pending non-empty → recover the whole queue into the composer
+      //      (chat.js:2535-2537 `_popAllPendingIntoComposer`).
+      //   3. has text          → clear the input (chat.js:2449-2453).
+      // (The from-anywhere variant of rungs 1–2 lives on ChatPage's document
+      //  keydown; this handles ESC while the composer itself is focused.)
       if (e.key === 'Escape') {
         if (busy) {
           e.preventDefault()
           onAbort?.()
+          return
+        }
+        if (pendingCount > 0) {
+          e.preventDefault()
+          onRecoverPending?.()
           return
         }
         if (textareaRef.current?.value) {
@@ -261,6 +312,27 @@ export function Composer({
           historyDraftRef.current = ''
           return
         }
+        return
+      }
+
+      // Alt+↑ — pop the most-recent pending item into the composer for editing
+      // (chat.js:2457-2460). Only when the queue is non-empty.
+      if (e.key === 'ArrowUp' && e.altKey && pendingCount > 0) {
+        e.preventDefault()
+        onPopPendingTail?.()
+        return
+      }
+
+      // Alt+↓ — enqueue the current composer text (chat.js:2464-2467). Only when
+      // there is text and the queue is not at the cap (MAX_PENDING).
+      if (
+        e.key === 'ArrowDown' &&
+        e.altKey &&
+        textareaRef.current?.value &&
+        pendingCount < MAX_PENDING
+      ) {
+        e.preventDefault()
+        onEnqueueCurrent?.()
         return
       }
 
@@ -292,7 +364,18 @@ export function Composer({
         doSend()
       }
     },
-    [busy, onAbort, cycleHistory, doSend, setProgrammatic, onSlashKeyDown],
+    [
+      busy,
+      onAbort,
+      cycleHistory,
+      doSend,
+      setProgrammatic,
+      onSlashKeyDown,
+      pendingCount,
+      onRecoverPending,
+      onPopPendingTail,
+      onEnqueueCurrent,
+    ],
   )
 
   // chat.js:2402-2409 — user typing resets the history cursor + resizes. The

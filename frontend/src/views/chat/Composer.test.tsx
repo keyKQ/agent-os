@@ -172,4 +172,118 @@ describe('Composer', () => {
     fireEvent.change(ta, { target: { value: 'a\nb\nc' } })
     expect(ta.style.height).not.toBe('')
   })
+
+  // ── ESC priority chain (chat.js:2530-2538 / 2449) ──────────────────────────
+
+  describe('ESC priority chain (abort > pending-recover > clear)', () => {
+    it('ESC while streaming aborts the turn — the top rung (chat.js:2530)', () => {
+      const onAbort = vi.fn()
+      const onRecoverPending = vi.fn()
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={true}
+          onAbort={onAbort}
+          pendingCount={3}
+          onRecoverPending={onRecoverPending}
+        />,
+      )
+      fireEvent.keyDown(textbox(), { key: 'Escape' })
+      expect(onAbort).toHaveBeenCalledTimes(1)
+      // The recover rung is NOT reached while streaming.
+      expect(onRecoverPending).not.toHaveBeenCalled()
+    })
+
+    it('ESC while idle with a non-empty queue recovers pending — the middle rung (chat.js:2535)', () => {
+      const onRecoverPending = vi.fn(() => true)
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={false}
+          pendingCount={2}
+          onRecoverPending={onRecoverPending}
+        />,
+      )
+      const ta = textbox()
+      fireEvent.change(ta, { target: { value: 'draft' } })
+      fireEvent.keyDown(ta, { key: 'Escape' })
+      expect(onRecoverPending).toHaveBeenCalledTimes(1)
+      // The clear rung is skipped — the draft was folded into the recovery, so
+      // the composer does not additionally blank the input here.
+      expect(ta.value).toBe('draft')
+    })
+
+    it('ESC while idle with an empty queue clears the input — the bottom rung (chat.js:2449)', () => {
+      const onRecoverPending = vi.fn()
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={false}
+          pendingCount={0}
+          onRecoverPending={onRecoverPending}
+        />,
+      )
+      const ta = textbox()
+      fireEvent.change(ta, { target: { value: 'some text' } })
+      fireEvent.keyDown(ta, { key: 'Escape' })
+      expect(onRecoverPending).not.toHaveBeenCalled()
+      expect(ta.value).toBe('')
+    })
+  })
+
+  describe('pending Alt-key affordances', () => {
+    it('Alt+↑ pops the most-recent pending item when the queue is non-empty (chat.js:2457)', () => {
+      const onPopPendingTail = vi.fn()
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={false}
+          pendingCount={2}
+          onPopPendingTail={onPopPendingTail}
+        />,
+      )
+      fireEvent.keyDown(textbox(), { key: 'ArrowUp', altKey: true })
+      expect(onPopPendingTail).toHaveBeenCalledTimes(1)
+    })
+
+    it('Alt+↓ enqueues the current text when there is room (chat.js:2464)', () => {
+      const onEnqueueCurrent = vi.fn()
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={false}
+          pendingCount={0}
+          onEnqueueCurrent={onEnqueueCurrent}
+        />,
+      )
+      const ta = textbox()
+      fireEvent.change(ta, { target: { value: 'queue me' } })
+      fireEvent.keyDown(ta, { key: 'ArrowDown', altKey: true })
+      expect(onEnqueueCurrent).toHaveBeenCalledTimes(1)
+    })
+
+    it('Alt+↓ does NOT enqueue when the queue is at the cap (chat.js:2464)', () => {
+      const onEnqueueCurrent = vi.fn()
+      render(
+        <Composer
+          onSend={() => {}}
+          busy={false}
+          pendingCount={5}
+          onEnqueueCurrent={onEnqueueCurrent}
+        />,
+      )
+      const ta = textbox()
+      fireEvent.change(ta, { target: { value: 'over cap' } })
+      fireEvent.keyDown(ta, { key: 'ArrowDown', altKey: true })
+      expect(onEnqueueCurrent).not.toHaveBeenCalled()
+    })
+  })
+
+  it('exposes setValue on the imperative handle — the pending-recover write (chat.js:8608)', () => {
+    const ref = { current: null } as React.RefObject<import('./Composer').ComposerHandle | null>
+    render(<Composer onSend={() => {}} busy={false} composerRef={ref} />)
+    ref.current?.setValue('recovered text')
+    expect(textbox().value).toBe('recovered text')
+    expect(ref.current?.getValue()).toBe('recovered text')
+  })
 })

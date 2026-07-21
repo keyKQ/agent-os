@@ -9,6 +9,7 @@ import {
   normalizeElevatedMode,
   type ElevatedMode,
 } from '@/services/approval-monitor'
+import { artifactDownloadUrl, type Artifact } from './transcript/artifacts'
 import type { ChatMessage, Role } from './types'
 
 // The elevated-mode model is SHARED with the approvals view: the storage keys,
@@ -932,5 +933,185 @@ export function normalizeSessionUsage(row: UsageRow): SessionUsage {
     cacheWrite: num(row.cache_write_tokens ?? row.cacheWriteTokens),
     cost: cost > 0 ? cost : null,
     model: row.model || '',
+  }
+}
+
+/* ─── Pending queue + markdown export (chat.js:8389-8663, 335) ─────────────── */
+
+// chat.js:335 — the pending-queue cap. The QUEUE cap (queued sends while busy),
+// distinct from the attachment tray. Verbatim value.
+export const MAX_PENDING = 5
+
+// chat.js:336 — a queued send: `{ text, attachments, intent }`. `intent` is the
+// per-send session intent (e.g. 'new_chat') that rides along when it drains.
+export interface PendingItem {
+  text: string
+  attachments: PendingAttachment[]
+  intent: string | null
+}
+
+// chat.js:673-679 (`_displayRoleLabel`) — the export/transcript role label:
+// user→You, assistant→Cap, subagent→Sub-agent, else Capitalized, ''→''.
+export function displayRoleLabel(role: string): string {
+  if (role === 'user') return 'You'
+  if (role === 'assistant') return 'Cap'
+  if (role === 'subagent') return 'Sub-agent'
+  if (role) return role.charAt(0).toUpperCase() + role.slice(1)
+  return ''
+}
+
+// chat.js:8425-8435 (`_artifactExportDownloadUrl`) — the clean relative download
+// URL (artifactDownloadUrl strips sessionKey) with the export session key
+// re-appended. Empty when the artifact has no resolvable URL (chat.js:8427).
+export function artifactExportDownloadUrl(
+  artifact: Artifact | null | undefined,
+  sessionKey: string,
+): string {
+  const raw = artifactDownloadUrl(artifact || {})
+  if (!raw) return ''
+  try {
+    const url = new URL(raw, window.location.origin)
+    if (sessionKey) url.searchParams.set('sessionKey', sessionKey)
+    return url.href
+  } catch {
+    return raw
+  }
+}
+
+// chat.js:8411-8423 (`_artifactMarkdownLines`) — the "Artifacts:" block appended
+// after a message body. '' when there are no artifacts. Each line is a Download
+// link with an optional `mime · size` suffix; size is KB, rounded, 1 KB floor.
+export function artifactMarkdownLines(
+  artifacts: Artifact[] | null | undefined,
+  sessionKey: string,
+): string {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) return ''
+  const lines = artifacts.map((artifact) => {
+    const name = artifact && artifact.name ? String(artifact.name) : 'artifact'
+    const mime = artifact && artifact.mime ? String(artifact.mime) : ''
+    const size =
+      artifact && artifact.size ? `${Math.max(1, Math.round(Number(artifact.size) / 1024))} KB` : ''
+    const url = artifactExportDownloadUrl(artifact || {}, sessionKey)
+    const meta = [mime, size].filter(Boolean).join(' · ')
+    const suffix = meta ? ` - ${meta}` : ''
+    return `- [Download ${name}](${url})${suffix}`
+  })
+  return `\n\nArtifacts:\n${lines.join('\n')}`
+}
+
+// A transcript message as it appears in the export (legacy `_messages` rows:
+// chat.js:6130 — `{ role, text, ts, artifacts }`). Kept separate from the
+// narrower on-screen `ChatMessage` because export rows carry `ts` + `artifacts`.
+export interface ExportMessage {
+  role: string
+  text: string
+  ts?: number | null
+  artifacts?: Artifact[]
+}
+
+// chat.js:8389-8409 (`_exportMarkdown`) — build the export document. Returns null
+// for an empty transcript (chat.js:8390, the caller toasts + skips). The Blob /
+// anchor download itself is the side effect the caller performs; this builder is
+// pure so it can be unit-tested. Header uses an em-dash (chat.js:8394).
+export function exportMarkdownDocument(
+  messages: ExportMessage[],
+  sessionKey: string,
+): string | null {
+  if (messages.length === 0) return null
+  let md = `# Chat Export — ${sessionKey}\n\n`
+  md += `Exported: ${new Date().toISOString()}\n\n---\n\n`
+  messages.forEach((msg) => {
+    const role = displayRoleLabel(msg.role) || msg.role
+    const time = msg.ts ? ` _(${new Date(msg.ts).toLocaleString()})_` : ''
+    md += `### ${role}${time}\n\n${msg.text}${artifactMarkdownLines(msg.artifacts || [], sessionKey)}\n\n---\n\n`
+  })
+  return md
+}
+
+/** The result of a pending-queue mutation: the next queue + whether it changed. */
+export interface EnqueueResult {
+  ok: boolean
+  queue: PendingItem[]
+}
+
+// chat.js:8505-8533 (`_enqueuePendingInput`) — append a send to the queue. When
+// the queue is at MAX_PENDING the enqueue is REJECTED (ok=false) and the SAME
+// queue reference is returned unchanged (the caller toasts "queue full"). The
+// pushed item's attachments are shallow-cloned per element (chat.js:8522) so a
+// later mutation of the source attachments does not leak into the queued copy.
+export function enqueuePending(queue: PendingItem[], item: PendingItem): EnqueueResult {
+  if (queue.length >= MAX_PENDING) return { ok: false, queue }
+  const cloned: PendingItem = {
+    text: item.text,
+    attachments: item.attachments.map((a) => ({ ...a })),
+    intent: item.intent,
+  }
+  return { ok: true, queue: [...queue, cloned] }
+}
+
+/**
+ * The result of recovering pending back into the composer (chat.js:8596/8560):
+ * the composer draft to set, the stacked attachments, the resolved intent, the
+ * now-emptied (pop-all) or trimmed (tail) queue, and whether anything was
+ * recovered. Pure — the DOM writes (textarea value / focus / history reset) are
+ * the caller's, mirroring how legacy split the model from `_textarea` mutation.
+ */
+export interface RecoverResult {
+  text: string
+  attachments: PendingAttachment[]
+  intent: string | null
+  queue: PendingItem[]
+  recovered: boolean
+}
+
+// chat.js:8596-8626 (`_popAllPendingIntoComposer`) — recover the ENTIRE queue
+// into the composer. Queued texts join the current draft with newlines (FIFO,
+// empties dropped, chat.js:8599-8605); attachments stack current-then-queued
+// (chat.js:8611); intent keeps the current, else the head's (chat.js:8612). The
+// queue is emptied. recovered=false (queue unchanged, draft passed through) when
+// the queue was already empty (chat.js:8598).
+export function popAllPendingIntoComposer(
+  queue: PendingItem[],
+  currentText: string,
+  currentAttachments: PendingAttachment[],
+  currentIntent: string | null,
+): RecoverResult {
+  if (queue.length === 0) {
+    return {
+      text: currentText,
+      attachments: currentAttachments,
+      intent: currentIntent,
+      queue: [],
+      recovered: false,
+    }
+  }
+  const queuedTexts = queue.map((p) => (typeof p.text === 'string' ? p.text : '')).filter(Boolean)
+  const queuedAttachments = queue.flatMap((p) => p.attachments || [])
+  const headIntent = queue[0] ? queue[0].intent : null
+  const joined = [currentText, ...queuedTexts].filter(Boolean).join('\n')
+  return {
+    text: joined,
+    attachments: [...currentAttachments, ...queuedAttachments],
+    intent: currentIntent || headIntent || null,
+    queue: [],
+    recovered: true,
+  }
+}
+
+// chat.js:8560-8570 (`_popPendingTail`) — Alt+↑: pop the MOST-RECENT item into
+// the composer (replacing the draft, not joining). recovered=false + unchanged
+// queue when empty (chat.js:8561).
+export function popPendingTail(queue: PendingItem[]): RecoverResult {
+  if (queue.length === 0) {
+    return { text: '', attachments: [], intent: null, queue: [], recovered: false }
+  }
+  const next = queue.slice()
+  const tail = next.pop() as PendingItem
+  return {
+    text: tail.text || '',
+    attachments: tail.attachments || [],
+    intent: tail.intent || null,
+    queue: next,
+    recovered: true,
   }
 }

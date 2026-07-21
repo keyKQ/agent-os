@@ -9,14 +9,20 @@ import {
   ACTIVE_SESSION_STORAGE_KEY,
   agentIdFromSessionKey,
   canonicalSessionKey,
+  exportMarkdownDocument,
   hasPendingAttachmentWork,
   readAgentFromUrl,
   readSessionFromUrl,
   webchatSessionKey,
+  type ExportMessage,
+  type PendingAttachment,
 } from './logic'
+import { PendingQueue } from './PendingQueue'
 import { SessionChip } from './SessionChip'
 import { SlashMenu, type SlashMenuHandle } from './SlashMenu'
 import { Toolbar } from './Toolbar'
+import { useApprovalPending } from './useApprovalPending'
+import { usePendingQueue, type PendingComposerBridge } from './usePendingQueue'
 import { useSlashCommands } from './useSlashCommands'
 import { useTranscript } from './useTranscript'
 
@@ -41,6 +47,37 @@ function resolveInitialSessionKey(search: string): string {
     stored = ''
   }
   return canonicalSessionKey(urlSession || (urlAgent ? webchatSessionKey(urlAgent) : stored))
+}
+
+/**
+ * Collect the export source from the rendered thread (chat.js:8396 iterates
+ * `_messages`). The React view renders the transcript imperatively into the DOM;
+ * each `.msg` row carries `data-history-role` + `data-history-raw-text`, and any
+ * artifact cards carry `data-artifact-name` / `-download` / `-id`. Reading them
+ * back at export time reconstructs the same `{role, text, artifacts}` rows legacy
+ * mirrored into `_messages`, without a parallel reactive message store. Rows
+ * without a role (separators, scope rows, router-fx sliders) are skipped.
+ */
+function collectExportMessages(thread: HTMLElement | null): ExportMessage[] {
+  if (!thread) return []
+  const out: ExportMessage[] = []
+  thread.querySelectorAll<HTMLElement>('.msg[data-history-role]').forEach((row) => {
+    const role = row.getAttribute('data-history-role') || ''
+    if (!role) return
+    // Prefer the stamped raw text; fall back to the rendered body text.
+    const text =
+      row.getAttribute('data-history-raw-text') ??
+      (row.querySelector('.msg-body')?.textContent || '')
+    const artifacts = Array.from(row.querySelectorAll<HTMLElement>('[data-artifact-name]')).map(
+      (card) => ({
+        id: card.getAttribute('data-artifact-id') || undefined,
+        name: card.getAttribute('data-artifact-name') || undefined,
+        download_url: card.getAttribute('data-artifact-download') || undefined,
+      }),
+    )
+    out.push({ role, text, artifacts })
+  })
+  return out
 }
 
 /**
@@ -115,7 +152,17 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { containerRef, controller, send, abort, busy, history } = useTranscript({ sessionKey })
+  const {
+    containerRef,
+    controller,
+    send,
+    abort,
+    busy,
+    history,
+    isCompactInFlightForCurrentSession,
+    setStreamIdlePausedForApproval,
+    setPendingDelegates,
+  } = useTranscript({ sessionKey })
   const attachments = useAttachments()
 
   // The composer value mirror (chat.js:2639 `_textarea.value`) — drives the slash
@@ -123,6 +170,76 @@ export function ChatPage() {
   const [composerValue, setComposerValue] = useState('')
   const slashHandleRef = useRef<SlashMenuHandle>(null)
   const composerHandleRef = useRef<ComposerHandle>(null)
+
+  // The per-send session intent (chat.js:335 `_pendingSessionIntent`) — rides on
+  // the next send (e.g. 'new_chat'), and is carried through the pending queue
+  // (chat.js:8523/8547/8612). A ref: it is not rendered, only read at send time.
+  const pendingIntentRef = useRef<string | null>(null)
+
+  // chat.js:6091-6110 — the pending QUEUE (queued sends while streaming/compacting).
+  // The bridge lets the queue write back into the composer + attachments + intent
+  // on drain/recover, and read the live stream/compaction state for the debounce
+  // re-check. `sendDrainedHead` is bound below to the normalize-then-send path.
+  const sendDrainedHeadRef = useRef<
+    (text: string, atts: PendingAttachment[], intent: string | null) => void
+  >(() => {})
+  const bridge: PendingComposerBridge = {
+    getComposerText: () => composerHandleRef.current?.getValue() ?? '',
+    setComposerText: (text) => {
+      composerHandleRef.current?.setValue(text)
+      setComposerValue(text)
+    },
+    getAttachments: () => attachments.attachments,
+    setAttachments: (next) => attachments.setAll(next),
+    getIntent: () => pendingIntentRef.current,
+    setIntent: (intent) => {
+      pendingIntentRef.current = intent
+    },
+    sendDrainedHead: (text, atts, intent) => sendDrainedHeadRef.current(text, atts, intent),
+    isStreaming: () => busy,
+    isCompactInFlight: () => isCompactInFlightForCurrentSession(),
+  }
+  const pending = usePendingQueue(bridge)
+
+  // chat.js:4685-4693 + 6216-6233 — the inline-approval gate. When an approval is
+  // pending for THIS session (shared `useApprovals` store — no divergent state),
+  // pause the stream-idle timer + flip the run-status chip to "Waiting for
+  // approval"; clearing it (resolve in the approvals view → monitor re-poll)
+  // resumes 'running'. NOTE: the approve/deny BUTTONS are NOT a chat-view surface
+  // (they live in the migrated approvals view); the chat thread never rendered an
+  // inline approve/deny card (confirmed against chat.js). This hook is that whole
+  // surface for the chat view.
+  useApprovalPending(sessionKey, setStreamIdlePausedForApproval)
+
+  // Install the pending-queue drain/recover delegates on the transcript
+  // controller (chat.js:8681/8685 — the compaction-settle drives the drain; the
+  // terminal-event backstop calls popAll/scheduleDrain). Kept current in an
+  // effect so the controller always calls the latest closures.
+  useEffect(() => {
+    setPendingDelegates({
+      schedulePendingDrainAfterTerminal: pending.scheduleDrainAfterTerminal,
+      popAllPendingIntoComposer: pending.popAllIntoComposer,
+      pendingQueueLength: () => pending.length,
+    })
+  }, [
+    setPendingDelegates,
+    pending.scheduleDrainAfterTerminal,
+    pending.popAllIntoComposer,
+    pending.length,
+  ])
+
+  // chat.js:8439-8450 `_onStop` — abort the turn AND recover any pending queue
+  // into the composer (chat.js:8448), so a user who stops mid-turn keeps their
+  // queued messages for editing rather than losing them. The composer's Abort
+  // button + its ESC-while-busy rung both call this (not the bare `abort`), and
+  // the doc-level ESC does the same for the from-anywhere case.
+  const abortAndRecover = useCallback(
+    (source = 'webui_stop_button') => {
+      abort(source)
+      pending.popAllIntoComposer()
+    },
+    [abort, pending],
+  )
 
   // chat.js:2692-2715 `new_chat` — start a fresh session in the current agent.
   // Task 10 left `onSessionAction('new_chat', …)` UNWIRED (the session-swap
@@ -185,24 +302,75 @@ export function ChatPage() {
       // chat.js:6077 — a real (non-escaped) `/`-prefixed line is a slash command.
       const isSlashCommand = !isLiteralSlash && text.startsWith('/')
 
-      // chat.js:6113-6116 — intercept + execute; a handled command never sends as
-      // text. (The streaming-enqueue branch at chat.js:6091 is a Task-13 seam; a
-      // send while busy is currently a no-op in useTranscript.send.)
+      // chat.js:6078-6082 — normalize with the resolved slash flag (a real slash
+      // command bypasses paste/page-dump normalization).
+      const normalized = await attachments.normalizeForSend(text, isSlashCommand)
+      if (!normalized) return // over the text hard cap; the helper already toasted.
+      const outText = normalized.text
+      const busyOrCompacting = busy || isCompactInFlightForCurrentSession()
+
+      // chat.js:6091-6110 — while a turn is streaming OR a compaction is in flight,
+      // Send ENQUEUES instead of sending. A slash command while busy is rejected
+      // (you can't queue a command); an empty payload while busy is a no-op.
+      if (busyOrCompacting) {
+        if (!isLiteralSlash && outText.startsWith('/')) {
+          const waitReason = isCompactInFlightForCurrentSession()
+            ? 'context compaction'
+            : 'the current response'
+          toast.warning(`Wait for ${waitReason} before running ${outText.split(/\s+/, 1)[0]}.`, {
+            duration: 2500,
+          })
+          return
+        }
+        const hasPayload = Boolean(outText.trim()) || normalized.attachments.length > 0
+        if (!hasPayload) return // empty + busy = no-op (chat.js:6099)
+        const compacting = isCompactInFlightForCurrentSession()
+        const queued = pending.enqueue(
+          {
+            text: outText,
+            attachments: normalized.attachments,
+            intent: pendingIntentRef.current,
+          },
+          {
+            toastMessage: compacting ? 'Message queued until compaction finishes' : undefined,
+            waitReason: compacting ? 'context compaction' : 'the current response',
+          },
+        )
+        if (queued) {
+          // The enqueue cleared the composer/attachments/intent via the bridge.
+          setComposerValue('')
+          attachments.clear()
+        }
+        return
+      }
+
+      // chat.js:6113-6116 — NOT busy: intercept + execute a slash command; a
+      // handled command never sends as text.
       if (isSlashCommand) {
         setComposerValue('')
         if (await executeSlash(text)) return
       }
 
-      // chat.js:6078-6082 — normalize with the resolved slash flag (a real slash
-      // command bypasses paste/page-dump normalization; here it already returned).
-      const normalized = await attachments.normalizeForSend(text, isSlashCommand)
-      if (!normalized) return // over the text hard cap; the helper already toasted.
+      // chat.js:6150-6205 — the real send.
       setComposerValue('')
-      send(normalized.text, normalized.attachments)
+      const intent = pendingIntentRef.current
+      pendingIntentRef.current = null
+      send(outText, normalized.attachments, intent)
       attachments.clear()
     },
-    [attachments, send, executeSlash],
+    [attachments, send, executeSlash, busy, isCompactInFlightForCurrentSession, pending],
   )
+
+  // The drained-queue-head send (chat.js:8549). Fires the send path a live send
+  // would. A drained head is already-normalized text + attachments (normalized at
+  // enqueue time), so it sends directly rather than re-normalizing. Installed in
+  // an effect (never a ref write during render) so the debounce-drain timer's
+  // late-bound callback always reaches the latest `send` closure.
+  useEffect(() => {
+    sendDrainedHeadRef.current = (text, atts, intent) => {
+      send(text, atts, intent)
+    }
+  }, [send])
 
   // The composer's slash-key intercept — consult the menu handle before the
   // composer runs its own history/send/ESC handling (chat.js:2654-2662/2675).
@@ -258,6 +426,77 @@ export function ChatPage() {
     [attachments],
   )
 
+  // chat.js:8474 Alt+↓ enqueue-current: queue the composer text as a pending item
+  // (chat.js:2464-2467 → `_enqueueCurrentInput`). Reuses the same enqueue path.
+  const onEnqueueCurrent = useCallback(() => {
+    const text = composerHandleRef.current?.getValue() ?? ''
+    if (!text && attachments.attachments.length === 0) return
+    const queued = pending.enqueue({
+      text,
+      attachments: attachments.attachments,
+      intent: pendingIntentRef.current,
+    })
+    if (queued) {
+      setComposerValue('')
+      attachments.clear()
+    }
+  }, [attachments, pending])
+
+  // chat.js:8389-8409 `_exportMarkdown` — build the document from the transcript
+  // and trigger a Blob download. The export source is read from the rendered
+  // thread (the DOM `.msg` rows carry `data-history-role` + `data-history-raw-text`
+  // + artifact cards) — the same content legacy mirrored into `_messages`.
+  const onExportMarkdown = useCallback(() => {
+    const messages = collectExportMessages(containerRef.current)
+    const md = exportMarkdownDocument(messages, sessionKey)
+    if (md === null) {
+      toast.warning('No messages to export')
+      return
+    }
+    const blob = new Blob([md], { type: 'text/markdown' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `chat-${sessionKey}.md`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    toast.info('Exported as Markdown')
+  }, [containerRef, sessionKey])
+
+  // chat.js:2518-2539 `_onDocKeydown` — the from-anywhere ESC priority chain:
+  //   1. streaming        → abort the turn (which recovers pending).
+  //   2. pending non-empty → recover the whole queue into the composer.
+  // Deferred to overlays (a visible modal/popover owns its own ESC) and to other
+  // editable targets (an ESC inside a different input is theirs). The composer's
+  // own ESC (Composer.tsx) handles the focused-composer case + the clear rung; a
+  // guard here skips when the composer is the target so it isn't double-handled.
+  useEffect(() => {
+    const onDocKeydown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (e.defaultPrevented) return
+      // Defer to any visible overlay's own dismiss handler (chat.js:8583-8588).
+      if (document.querySelector('.modal-backdrop, .chat-session-popover')) return
+      const target = e.target as HTMLElement | null
+      const isEditable =
+        !!target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      // An ESC inside ANY editable (incl. the composer) is handled by that
+      // element's own handler — the composer runs the full chain there.
+      if (isEditable) return
+      if (busy) {
+        e.preventDefault()
+        // chat.js:8448 — the stop path also recovers pending into the composer.
+        abortAndRecover('webui_escape')
+        return
+      }
+      if (pending.length > 0) {
+        e.preventDefault()
+        pending.popAllIntoComposer()
+      }
+    }
+    document.addEventListener('keydown', onDocKeydown)
+    return () => document.removeEventListener('keydown', onDocKeydown)
+  }, [busy, abortAndRecover, pending])
+
   return (
     <div className="chat-stage" onDrop={onDrop} onDragOver={onDragOver} onPaste={onPaste}>
       {/* Session chip + switcher (chat.js:1219-1229 topbar-center). The React
@@ -265,8 +504,18 @@ export function ChatPage() {
           drives switch / copy / reset over the reactive session key. */}
       <header className="chat-session-bar">
         <SessionChip sessionKey={sessionKey} onSwitch={switchToSession} onReset={resetSession} />
+        <button
+          type="button"
+          className="chat-export-btn"
+          title="Export this chat as Markdown"
+          aria-label="Export chat as Markdown"
+          onClick={onExportMarkdown}
+        >
+          Export .md
+        </button>
       </header>
       <div className="chat-thread" ref={containerRef} />
+      <PendingQueue queue={pending.queue} onRemove={pending.remove} onClearAll={pending.clearAll} />
       <Composer
         onSend={onComposerSend}
         onValueChange={setComposerValue}
@@ -280,9 +529,14 @@ export function ChatPage() {
             handleRef={slashHandleRef}
           />
         }
-        onAbort={abort}
+        onAbort={abortAndRecover}
         busy={busy}
         history={history}
+        pendingCount={pending.length}
+        onRecoverPending={pending.popAllIntoComposer}
+        onPopPendingTail={pending.popTail}
+        onEnqueueCurrent={onEnqueueCurrent}
+        pendingCompaction={isCompactInFlightForCurrentSession()}
         hasPendingAttachments={attachments.attachments.length > 0}
         hasPendingWork={hasPendingAttachmentWork(attachments.attachments)}
         onAttachFiles={attachments.addFiles}

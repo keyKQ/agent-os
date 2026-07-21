@@ -105,6 +105,22 @@ function isCurrentSessionPayload(
   return !key || !sessionKey || key === sessionKey
 }
 
+/**
+ * Pending-queue drain/recover delegates the controller calls on terminal /
+ * compaction-settle events (chat.js:8644/8596/8681). The QUEUE itself lives in
+ * ChatPage (composer-adjacent state); ChatPage installs these via
+ * `setPendingDelegates` so the controller can drive the real drain without the
+ * queue leaking into the transcript layer.
+ */
+export interface PendingDelegates {
+  /** chat.js:8644 — debounced FIFO drain after a natural terminal event. */
+  schedulePendingDrainAfterTerminal: () => void
+  /** chat.js:8596 — recover the whole queue into the composer (returns recovered). */
+  popAllPendingIntoComposer: () => boolean
+  /** chat.js:8683 — the current queue length (for preservePending). */
+  pendingQueueLength: () => number
+}
+
 export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEventSeams }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   controller: StreamController
@@ -113,13 +129,29 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
    * `chat.send`, chat.js:6193). Attachments ride on the RPC params as legacy
    * (`displayText` + `attachments` + `inputProvenance`, chat.js:6157-6167).
    */
-  send: (text: string, attachments?: PendingAttachment[]) => void
+  send: (text: string, attachments?: PendingAttachment[], intent?: string | null) => void
   /** Abort the in-flight turn (chat.js:8439 `_onStop` → `chat.abort`, chat.js:8444). */
   abort: (source?: string) => void
   /** Reactive streaming flag (legacy `_isStreaming`) — drives the composer's busy prop. */
   busy: boolean
   /** The user's sent-message history, oldest→newest (legacy `_messages`, chat.js:8712). */
   history: string[]
+  /**
+   * True while a compaction is in flight for the CURRENT session (chat.js:8660
+   * `_isCompactInFlightForCurrentSession`). ChatPage reads it for the
+   * enqueue-while-busy branch (chat.js:6091).
+   */
+  isCompactInFlightForCurrentSession: () => boolean
+  /**
+   * chat.js:6216 `_setStreamIdlePausedForApproval` — pause the idle timer + flip
+   * run-status to `approval_pending` (or resume). Wired to `useApprovalPending`.
+   */
+  setStreamIdlePausedForApproval: (paused: boolean) => void
+  /**
+   * Install the pending-queue drain/recover delegates (ChatPage owns the queue).
+   * Called in an effect after ChatPage's `usePendingQueue` primitives exist.
+   */
+  setPendingDelegates: (delegates: PendingDelegates) => void
 } {
   const rpc = useRpc()
   const queryClient = useQueryClient()
@@ -156,6 +188,16 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
   // real getter is installed in an effect once `pagingRef` exists.
   const historyCompactionSummariesRef = useRef<() => CompactionSummary[]>(() => [])
 
+  // Pending-queue drain/recover delegates (chat.js:8596/8644/8681). The QUEUE is
+  // owned by ChatPage (composer-adjacent); ChatPage installs the real delegates
+  // via `setPendingDelegates` after mount. Held in a ref so the once-created
+  // controller reads the latest without re-creating. Faithful no-ops until wired.
+  const pendingDelegatesRef = useRef<PendingDelegates>({
+    schedulePendingDrainAfterTerminal: () => {},
+    popAllPendingIntoComposer: () => false,
+    pendingQueueLength: () => 0,
+  })
+
   // eslint-disable-next-line react-hooks/refs -- factory stores the refs and reads .current only later, inside methods invoked outside render (never at creation)
   const [controller] = useState<StreamController>(() =>
     createStreamController(containerRef, {
@@ -180,8 +222,15 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
         void queryClient.invalidateQueries({
           queryKey: ['chat', 'history', sessionKeyRef.current],
         }),
-      // Pending-queue recovery (chat.js:8596/8644) is owned by the send flow (a
-      // later task); leave the faithful no-op defaults until then.
+      // Pending-queue drain/recovery (chat.js:8596/8644). Task 13 fills these
+      // seams: the pending QUEUE lives in ChatPage (composer-adjacent), so the
+      // delegates are installed via `setPendingDelegates` after mount and read
+      // lazily through `pendingDelegatesRef` — the controller's compaction-settle
+      // (chat.js:8681/8685) then drives the real drain/recover.
+      schedulePendingDrainAfterTerminal: () =>
+        pendingDelegatesRef.current.schedulePendingDrainAfterTerminal(),
+      popAllPendingIntoComposer: () => pendingDelegatesRef.current.popAllPendingIntoComposer(),
+      pendingQueueLength: () => pendingDelegatesRef.current.pendingQueueLength(),
       // Subagent-completion system row (chat.js:7814 `_addMessage`). No real
       // `_addMessage` DOM builder exists in the frontend yet (router-fx/turn-meta
       // entangled — a later task); provide the same faithful minimal row the
@@ -306,7 +355,7 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
   // UI, and fire `chat.send` with the legacy `{ message, sessionKey }` shape
   // (chat.js:6150). The already-wired subscription renders the resulting stream.
   const send = useCallback(
-    (text: string, attachments: PendingAttachment[] = []) => {
+    (text: string, attachments: PendingAttachment[] = [], intent: string | null = null) => {
       const trimmed = (text ?? '').trim()
       const sessionKey = sessionKeyRef.current
       const atts = attachments ?? []
@@ -369,6 +418,8 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       // for a normalization-generated attachment. Intent / _source elevated mode
       // are later-task seams.
       const params: Record<string, unknown> = { message: providerText, sessionKey }
+      // chat.js:6153-6156 — the per-send session intent rides on the params.
+      if (intent) params.intent = intent
       if (atts.length > 0) {
         params.displayText = userText
         params.attachments = atts.map(outgoingAttachment)
@@ -839,15 +890,27 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
             if (typeof finalText === 'string' && finalText) {
               controller.reconcileFinalStreamText(finalText)
             }
-            const wasAborted = (rawPayload as { reason?: string })?.reason === 'aborted'
+            const wasAborted =
+              abortedRef.current || (rawPayload as { reason?: string })?.reason === 'aborted'
             if (controller.isStreaming())
               controller.endStreaming(wasAborted ? { reason: 'aborted' } : undefined)
+            // chat.js:5120-5131 — on abort recover pending into the composer (the
+            // user explicitly stopped, so auto-firing queued sends is wrong); on
+            // a natural completion drain the queue head (FIFO).
+            if (wasAborted) {
+              abortedRef.current = false
+              pendingDelegatesRef.current.popAllPendingIntoComposer()
+            } else {
+              pendingDelegatesRef.current.schedulePendingDrainAfterTerminal()
+            }
             resyncHistory()
           } else if (
             rawEvent.endsWith('.error') &&
             isCurrentSessionPayload(rawPayload, sessionKeyRef.current)
           ) {
             if (controller.isStreaming()) controller.endStreaming()
+            // chat.js:5146 — recover pending after a failed turn.
+            pendingDelegatesRef.current.popAllPendingIntoComposer()
             resyncHistory()
           }
         }
@@ -948,5 +1011,34 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     }
   }, [controller])
 
-  return { containerRef, controller, send, abort, busy, history }
+  // Install the pending-queue drain/recover delegates (ChatPage owns the queue).
+  // A stable setter that writes the ref the controller reads lazily.
+  const setPendingDelegates = useCallback((delegates: PendingDelegates) => {
+    pendingDelegatesRef.current = delegates
+  }, [])
+
+  // chat.js:6216 `_setStreamIdlePausedForApproval` — a stable pass-through to the
+  // controller so `useApprovalPending` can pause/resume the idle timer + chip.
+  const setStreamIdlePausedForApproval = useCallback(
+    (paused: boolean) => controller.setStreamIdlePausedForApproval(paused),
+    [controller],
+  )
+
+  // chat.js:8660 — the enqueue-while-busy branch (chat.js:6091) queries this.
+  const isCompactInFlightForCurrentSession = useCallback(
+    () => controller.isCompactInFlightForCurrentSession(),
+    [controller],
+  )
+
+  return {
+    containerRef,
+    controller,
+    send,
+    abort,
+    busy,
+    history,
+    isCompactInFlightForCurrentSession,
+    setStreamIdlePausedForApproval,
+    setPendingDelegates,
+  }
 }

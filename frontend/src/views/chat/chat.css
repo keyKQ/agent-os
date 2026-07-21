@@ -376,6 +376,127 @@
   position: relative;
   min-width: 0;
 }
+
+/* Export .md — a quiet mono affordance pinned to the right of the session bar.
+   Neutral by default (lime stays signal-only); brightens the border on hover. */
+.chat-export-btn {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  cursor: pointer;
+}
+.chat-export-btn:hover {
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
+.chat-export-btn:focus-visible {
+  outline: 1px solid var(--foreground);
+  outline-offset: 1px;
+}
+
+/* ── Pending queue rail (chat.js:8474 `_renderPendingQueue`) ─────────────────
+   Queued sends shown above the composer while a turn is streaming / compacting.
+   One severity rail (never stacked gutters); neutral mono treatment — lime is
+   reserved as a signal, so nothing here glows. Radius 0 throughout. */
+.chat-pending {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 32px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--tone, var(--warn)) 6%, var(--card));
+  border-left: 2px solid var(--tone, var(--warn));
+}
+@media (max-width: 768px) {
+  .chat-pending {
+    padding: 8px 16px;
+  }
+}
+.chat-pending-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-pending-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: lowercase;
+  color: var(--dim);
+}
+.chat-pending-clear {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: lowercase;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  cursor: pointer;
+}
+.chat-pending-clear:hover {
+  color: var(--foreground);
+  border-color: var(--foreground);
+}
+.chat-pending-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 6px 3px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 0;
+}
+.chat-pending-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-pending-attch {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 0.7rem;
+}
+.chat-pending-chip-remove {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--dim);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+.chat-pending-chip-remove:hover {
+  color: var(--foreground);
+}
 .chat-session-label {
   font-family: var(--font-mono);
   font-size: 0.7rem;

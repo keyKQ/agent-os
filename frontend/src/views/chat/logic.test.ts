@@ -37,7 +37,16 @@ import {
   slashCommandKey,
   webchatSessionKey,
   ACTIVE_SESSION_STORAGE_KEY,
+  MAX_PENDING,
+  artifactExportDownloadUrl,
+  artifactMarkdownLines,
+  displayRoleLabel,
+  enqueuePending,
+  exportMarkdownDocument,
+  popAllPendingIntoComposer,
+  popPendingTail,
   type PendingAttachment,
+  type PendingItem,
 } from './logic'
 import type { ChatMessage } from './types'
 
@@ -697,5 +706,243 @@ describe('normalizeSessionUsage', () => {
       cost: null,
       model: '',
     })
+  })
+})
+
+// ─── Markdown export (chat.js:8389 `_exportMarkdown` / 8411 `_artifactMarkdownLines`) ───
+
+// chat.js:673-679 — the role label used in the export headers + the transcript.
+describe('displayRoleLabel', () => {
+  it('maps user → You (chat.js:674)', () => {
+    expect(displayRoleLabel('user')).toBe('You')
+  })
+  it('maps assistant → Cap (chat.js:675)', () => {
+    expect(displayRoleLabel('assistant')).toBe('Cap')
+  })
+  it('maps subagent → Sub-agent (chat.js:676)', () => {
+    expect(displayRoleLabel('subagent')).toBe('Sub-agent')
+  })
+  it('capitalizes any other non-empty role (chat.js:677)', () => {
+    expect(displayRoleLabel('system')).toBe('System')
+  })
+  it('returns empty string for an empty role (chat.js:678)', () => {
+    expect(displayRoleLabel('')).toBe('')
+  })
+})
+
+// chat.js:8425-8435 — the export download URL re-adds the session key onto the
+// clean relative URL (which artifactDownloadUrl strips).
+describe('artifactExportDownloadUrl', () => {
+  it('appends sessionKey to the clean download URL (chat.js:8430)', () => {
+    const url = artifactExportDownloadUrl(
+      { id: 'a1', download_url: '/api/v1/artifacts/a1' },
+      'agent:main:webchat:default',
+    )
+    expect(url).toContain('/api/v1/artifacts/a1')
+    expect(url).toContain('sessionKey=agent%3Amain%3Awebchat%3Adefault')
+  })
+  it('derives the download URL from the id when download_url is absent (chat.js:7482)', () => {
+    const url = artifactExportDownloadUrl({ id: 'x/y' }, 'sess')
+    expect(url).toContain('/api/v1/artifacts/x%2Fy')
+    expect(url).toContain('sessionKey=sess')
+  })
+  it('returns empty string when the artifact has no id and no download_url (chat.js:8427)', () => {
+    expect(artifactExportDownloadUrl({}, 'sess')).toBe('')
+  })
+  it('omits the sessionKey param when the session key is empty (chat.js:8430)', () => {
+    const url = artifactExportDownloadUrl({ id: 'a1' }, '')
+    expect(url).toContain('/api/v1/artifacts/a1')
+    expect(url).not.toContain('sessionKey')
+  })
+})
+
+// chat.js:8411-8423 — the "Artifacts:" block appended after a message body.
+describe('artifactMarkdownLines', () => {
+  it('returns empty string for no artifacts (chat.js:8412)', () => {
+    expect(artifactMarkdownLines([], 'sess')).toBe('')
+    expect(artifactMarkdownLines(undefined, 'sess')).toBe('')
+  })
+  it('renders a Download link with mime · size meta (chat.js:8413-8422)', () => {
+    const out = artifactMarkdownLines(
+      [{ id: 'a1', name: 'report.md', mime: 'text/markdown', size: 4096 }],
+      'sess',
+    )
+    expect(out.startsWith('\n\nArtifacts:\n')).toBe(true)
+    expect(out).toContain('- [Download report.md](')
+    expect(out).toContain('text/markdown · 4 KB')
+  })
+  it('falls back to the name "artifact" when unnamed (chat.js:8414)', () => {
+    const out = artifactMarkdownLines([{ id: 'a1' }], 'sess')
+    expect(out).toContain('[Download artifact]')
+  })
+  it('rounds size to KB with a 1 KB floor (chat.js:8416)', () => {
+    const out = artifactMarkdownLines([{ id: 'a1', name: 'n', size: 100 }], 'sess')
+    expect(out).toContain('1 KB')
+  })
+  it('omits the meta suffix entirely when neither mime nor size is present (chat.js:8418-8419)', () => {
+    const out = artifactMarkdownLines([{ id: 'a1', name: 'n' }], 'sess')
+    expect(out).toContain('[Download n](')
+    expect(out).not.toContain(' - ')
+  })
+  it('joins multiple artifacts with newlines (chat.js:8421)', () => {
+    const out = artifactMarkdownLines(
+      [
+        { id: 'a', name: 'a.txt', mime: 'text/plain' },
+        { id: 'b', name: 'b.txt', mime: 'text/plain' },
+      ],
+      'sess',
+    )
+    expect(out.split('\n').filter((l) => l.startsWith('- [Download'))).toHaveLength(2)
+  })
+})
+
+// chat.js:8389-8409 — the full document builder. The Blob/anchor download is the
+// side effect that the caller performs; the pure builder returns the markdown.
+describe('exportMarkdownDocument', () => {
+  const sess = 'agent:main:webchat:default'
+  it('builds the header with the session key + em-dash (chat.js:8394)', () => {
+    const md = exportMarkdownDocument([{ role: 'user', text: 'hi' }], sess)
+    expect(md).not.toBeNull()
+    expect(md!.startsWith(`# Chat Export — ${sess}\n\n`)).toBe(true)
+    expect(md).toContain('Exported: ')
+    expect(md).toContain('\n\n---\n\n')
+  })
+  it('renders each message as ### {roleLabel} then the body (chat.js:8397-8399)', () => {
+    const md = exportMarkdownDocument(
+      [
+        { role: 'user', text: 'question' },
+        { role: 'assistant', text: 'answer' },
+      ],
+      sess,
+    )
+    expect(md).toContain('### You\n\nquestion')
+    expect(md).toContain('### Cap\n\nanswer')
+  })
+  it('appends a localized time suffix when the message has a ts (chat.js:8398)', () => {
+    const md = exportMarkdownDocument([{ role: 'user', text: 'hi', ts: 1_600_000_000_000 }], sess)
+    // The exact locale string is environment-dependent; assert the italic wrapper.
+    expect(md).toMatch(/### You _\(.*\)_\n\nhi/)
+  })
+  it('inlines the artifact block after the message body (chat.js:8399)', () => {
+    const md = exportMarkdownDocument(
+      [{ role: 'assistant', text: 'here', artifacts: [{ id: 'a1', name: 'out.md' }] }],
+      sess,
+    )
+    expect(md).toContain('here\n\nArtifacts:\n- [Download out.md]')
+  })
+  it('returns null for an empty transcript so the caller can toast + skip (chat.js:8390)', () => {
+    expect(exportMarkdownDocument([], sess)).toBeNull()
+  })
+})
+
+// ─── Pending queue model (chat.js:8474 render / 8505 enqueue / 8596 pop-all) ───
+
+describe('MAX_PENDING', () => {
+  it('is 5 (chat.js:335)', () => {
+    expect(MAX_PENDING).toBe(5)
+  })
+})
+
+// chat.js:8505-8533 — enqueue: reject when full, else push a cloned item.
+describe('enqueuePending', () => {
+  const item = (text: string): PendingItem => ({ text, attachments: [], intent: null })
+  it('appends the item when the queue has room (chat.js:8520)', () => {
+    const next = enqueuePending([], item('one'))
+    expect(next.ok).toBe(true)
+    expect(next.queue).toHaveLength(1)
+    expect(next.queue[0]?.text).toBe('one')
+  })
+  it('rejects (ok=false, queue unchanged) when at MAX_PENDING (chat.js:8511)', () => {
+    const full: PendingItem[] = Array.from({ length: MAX_PENDING }, (_, i) => item(`m${i}`))
+    const next = enqueuePending(full, item('overflow'))
+    expect(next.ok).toBe(false)
+    expect(next.queue).toBe(full)
+  })
+  it('deep-clones the item attachments so later mutation is isolated (chat.js:8522)', () => {
+    const atts: PendingAttachment[] = [
+      { kind: 'inline', local_id: 1, name: 'x', mime: 'image/png', size: 1 },
+    ]
+    const next = enqueuePending([], { text: 't', attachments: atts, intent: null })
+    expect(next.queue[0]?.attachments[0]).not.toBe(atts[0])
+    expect(next.queue[0]?.attachments[0]).toEqual(atts[0])
+  })
+})
+
+// chat.js:8596-8626 — pop ALL pending into the composer (ESC recover / abort).
+describe('popAllPendingIntoComposer', () => {
+  it('joins the current draft + queued texts with newlines, FIFO (chat.js:8605)', () => {
+    const queue: PendingItem[] = [
+      { text: 'first', attachments: [], intent: null },
+      { text: 'second', attachments: [], intent: null },
+    ]
+    const out = popAllPendingIntoComposer(queue, 'draft', [], null)
+    expect(out.recovered).toBe(true)
+    expect(out.text).toBe('draft\nfirst\nsecond')
+    expect(out.queue).toHaveLength(0)
+  })
+  it('drops empty texts from the join (chat.js:8600-8601/8605)', () => {
+    const queue: PendingItem[] = [
+      { text: '', attachments: [], intent: null },
+      { text: 'kept', attachments: [], intent: null },
+    ]
+    const out = popAllPendingIntoComposer(queue, '', [], null)
+    expect(out.text).toBe('kept')
+  })
+  it('stacks the current attachments then the queued ones (chat.js:8611)', () => {
+    const cur: PendingAttachment[] = [
+      { kind: 'inline', local_id: 1, name: 'c', mime: 'image/png', size: 1 },
+    ]
+    const queued: PendingAttachment[] = [
+      { kind: 'inline', local_id: 2, name: 'q', mime: 'image/png', size: 1 },
+    ]
+    const out = popAllPendingIntoComposer(
+      [{ text: 't', attachments: queued, intent: null }],
+      '',
+      cur,
+      null,
+    )
+    expect(out.attachments.map((a) => a.name)).toEqual(['c', 'q'])
+  })
+  it('keeps the current intent, else the head intent (chat.js:8612)', () => {
+    const out = popAllPendingIntoComposer(
+      [{ text: 't', attachments: [], intent: 'new_chat' }],
+      '',
+      [],
+      null,
+    )
+    expect(out.intent).toBe('new_chat')
+    const out2 = popAllPendingIntoComposer(
+      [{ text: 't', attachments: [], intent: 'new_chat' }],
+      '',
+      [],
+      'existing',
+    )
+    expect(out2.intent).toBe('existing')
+  })
+  it('returns recovered=false and an unchanged queue when empty (chat.js:8598)', () => {
+    const out = popAllPendingIntoComposer([], 'draft', [], null)
+    expect(out.recovered).toBe(false)
+    expect(out.text).toBe('draft')
+    expect(out.queue).toHaveLength(0)
+  })
+})
+
+// chat.js:8560-8570 — Alt+↑ pops just the most-recent item into the composer.
+describe('popPendingTail', () => {
+  it('pops the tail item into the composer, replacing the draft (chat.js:8562-8565)', () => {
+    const queue: PendingItem[] = [
+      { text: 'a', attachments: [], intent: null },
+      { text: 'b', attachments: [], intent: 'x' },
+    ]
+    const out = popPendingTail(queue)
+    expect(out.recovered).toBe(true)
+    expect(out.text).toBe('b')
+    expect(out.intent).toBe('x')
+    expect(out.queue.map((p) => p.text)).toEqual(['a'])
+  })
+  it('returns recovered=false on an empty queue (chat.js:8561)', () => {
+    const out = popPendingTail([])
+    expect(out.recovered).toBe(false)
+    expect(out.queue).toHaveLength(0)
   })
 })
