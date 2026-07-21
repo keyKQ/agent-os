@@ -5,7 +5,13 @@ import { toast } from 'sonner'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
-import { isApprovalBypassMode, setBrowserElevated, useApprovals } from '@/services/approval-monitor'
+import {
+  approvalMonitor,
+  isApprovalBypassMode,
+  setBrowserElevated,
+  useApprovals,
+} from '@/services/approval-monitor'
+import { routerFxLoadPref, routerFxSavePref, type RouterFxPref } from './transcript/routerFx'
 import { ElevatedPill } from './ElevatedPill'
 import {
   effectiveElevatedMode,
@@ -35,7 +41,22 @@ function tokens(n: number): string {
 // (services/approval-monitor.ts) — this component reads the session override off
 // the same reactive store and persists through the same setBrowserElevated, so
 // there is exactly one elevated-mode source of truth.
-export function Toolbar({ sessionKey }: { sessionKey: string }) {
+export function Toolbar({
+  sessionKey,
+  routerFxEnabled,
+  onRouterFxToggle,
+}: {
+  sessionKey: string
+  // The LIVE `_routerFx.enabled` from the stream controller, used to reflect the
+  // toggle on mount (chat.js:1484-1485). Optional so the component renders
+  // standalone (tests) — then the initial state is hydrated from localStorage.
+  routerFxEnabled?: boolean
+  // The controller's `setRouterFxEnabled` — mutates the live pref object the
+  // engine reads AND persists it (chat.js:1425-1426). When omitted (tests /
+  // no controller), the toggle persists locally via `routerFxSavePref`, matching
+  // legacy `_routerFxSavePref` exactly.
+  onRouterFxToggle?: (enabled: boolean) => void
+}) {
   const rpc = useRpc()
 
   // ── Elevated mode ─────────────────────────────────────────────────────────
@@ -81,6 +102,13 @@ export function Toolbar({ sessionKey }: { sessionKey: string }) {
           return
         }
         if (!resp.ok) throw new Error('HTTP ' + resp.status)
+        // chat.js:2305-2308 — if the POST resolved any pending approvals as a
+        // side effect (enabling bypass auto-approves them), re-poll now so the
+        // badge/modal refresh immediately instead of waiting for the next tick.
+        const payload = await resp.json().catch(() => ({}))
+        if (payload?.resolvedPending) {
+          void approvalMonitor.pollNow()
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         toast.error('Failed to sync bypass mode: ' + message, { duration: 3500 })
@@ -155,6 +183,34 @@ export function Toolbar({ sessionKey }: { sessionKey: string }) {
     [rpc, configQuery],
   )
 
+  // ── Visual effects (router-fx) toggle ─────────────────────────────────────
+  // chat.js:1272-1278 markup + chat.js:1422-1439 handler + 1483-1485 hydrate.
+  // Reflects the router-fx engine's `_routerFx.enabled` (key `agentos-router-fx`,
+  // shape {enabled}). Initial state: the live pref from the controller when
+  // threaded in, else hydrated from localStorage (defaults ON like legacy).
+  const [routerFxChecked, setRouterFxChecked] = useState<boolean>(() => {
+    if (typeof routerFxEnabled === 'boolean') return routerFxEnabled
+    const pref: RouterFxPref = { enabled: true, variant: 'default' }
+    routerFxLoadPref(pref)
+    return pref.enabled
+  })
+
+  const onRouterFxChange = useCallback(
+    (next: boolean) => {
+      setRouterFxChecked(next)
+      if (onRouterFxToggle) {
+        // The controller mutates its live pref + persists (chat.js:1425-1426).
+        onRouterFxToggle(next)
+      } else {
+        // Standalone: persist the exact `{enabled}` shape (chat.js:3411-3416).
+        routerFxSavePref({ enabled: next, variant: 'default' })
+      }
+      // chat.js:1437 — user-visible confirmation.
+      toast.info('Visual effects: ' + (next ? 'ON' : 'OFF'))
+    },
+    [onRouterFxToggle],
+  )
+
   // ── Usage readout ─────────────────────────────────────────────────────────
   // chat.js:599-625 (_loadCurrentSessionUsage) — the per-session token totals.
   const usageQuery = useQuery<SessionUsage | null>({
@@ -194,6 +250,20 @@ export function Toolbar({ sessionKey }: { sessionKey: string }) {
             type="checkbox"
             checked={routerChecked}
             onChange={(e) => void onRouterToggle(e.target.checked)}
+          />
+          <span className="chat-toggle-track" aria-hidden="true">
+            <span className="chat-toggle-thumb" />
+          </span>
+        </label>
+      </div>
+
+      <div className="chat-toolbar-row">
+        <span className="chat-toolbar-row-label t-label">Visual effects</span>
+        <label className="chat-toggle" aria-label="Visual effects">
+          <input
+            type="checkbox"
+            checked={routerFxChecked}
+            onChange={(e) => onRouterFxChange(e.target.checked)}
           />
           <span className="chat-toggle-track" aria-hidden="true">
             <span className="chat-toggle-thumb" />

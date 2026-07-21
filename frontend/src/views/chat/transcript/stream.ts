@@ -23,6 +23,7 @@ import {
   createRouterFxRenderer,
   createRouterFxRegistry,
   routerFxLoadPref,
+  routerFxSavePref,
   type RouterFxRenderer,
   type RouterFxRegistry,
   type RouterFxPref,
@@ -1403,6 +1404,15 @@ export function createStreamController(
     suppressRouterFxForCompaction: routerFxRenderer.suppressForCompaction,
     routerFxRegistry,
     routerFxPref,
+    // chat.js:1424-1437 — the "Visual effects" toolbar toggle writes the live
+    // `_routerFx.enabled` and persists it. Ownership of the pref mutation stays
+    // in the controller (this module owns `routerFxPref`), so the toolbar calls
+    // this rather than mutating the object across the component boundary. The
+    // live engine reads `pref.enabled` off this SAME object → immediate pickup.
+    setRouterFxEnabled: (enabled: boolean): void => {
+      routerFxPref.enabled = enabled
+      routerFxSavePref(routerFxPref)
+    },
     // compaction (Task 7 — compaction.ts). `showCompactionToast` is the live
     // entry point routed by `session.event.compaction`; the rest is the history/
     // separator/in-flight surface the history renderer + send flow drive.

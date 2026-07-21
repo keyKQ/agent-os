@@ -115,7 +115,7 @@ export function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const { containerRef, send, abort, busy, history } = useTranscript({ sessionKey })
+  const { containerRef, controller, send, abort, busy, history } = useTranscript({ sessionKey })
   const attachments = useAttachments()
 
   // The composer value mirror (chat.js:2639 `_textarea.value`) — drives the slash
@@ -287,7 +287,13 @@ export function ChatPage() {
         hasPendingWork={hasPendingAttachmentWork(attachments.attachments)}
         onAttachFiles={attachments.addFiles}
         tray={<Attachments api={attachments} />}
-        toolbar={<Toolbar sessionKey={sessionKey} />}
+        toolbar={
+          <Toolbar
+            sessionKey={sessionKey}
+            routerFxEnabled={controller.routerFxPref.enabled}
+            onRouterFxToggle={controller.setRouterFxEnabled}
+          />
+        }
       />
     </div>
   )

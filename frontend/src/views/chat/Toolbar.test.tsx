@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
 import { Toolbar } from './Toolbar'
 import {
+  approvalMonitor,
   ELEVATED_MODE_KEY,
   ELEVATED_MODE_VERSION_KEY,
   useApprovals,
 } from '@/services/approval-monitor'
+import { ROUTER_FX_PREF_KEY, type RouterFxPref } from './transcript/routerFx'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -193,6 +195,93 @@ describe('Toolbar', () => {
     fireEvent.click(toggle)
 
     await waitFor(() => expect(vi.mocked(toast.error)).toHaveBeenCalled())
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('re-polls approvals immediately when the elevated-mode POST resolvedPending', async () => {
+    // chat.js:2305-2308 — resolvedPending>0 auto-approved pending items, so the
+    // badge/modal must refresh now rather than on the next ~1.5s tick.
+    const pollSpy = vi.spyOn(approvalMonitor, 'pollNow').mockResolvedValue(undefined)
+    const fetchSpy = fetchOk({ mode: 'bypass', resolvedPending: 3 })
+    vi.stubGlobal('fetch', fetchSpy)
+    render(<Toolbar sessionKey={SESSION} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /approval prompts/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /enable bypass/i }))
+
+    await waitFor(() => expect(pollSpy).toHaveBeenCalledTimes(1))
+  })
+
+  it('does NOT re-poll approvals when resolvedPending is 0', async () => {
+    const pollSpy = vi.spyOn(approvalMonitor, 'pollNow').mockResolvedValue(undefined)
+    const fetchSpy = fetchOk({ mode: 'bypass', resolvedPending: 0 })
+    vi.stubGlobal('fetch', fetchSpy)
+    render(<Toolbar sessionKey={SESSION} />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /approval prompts/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /enable bypass/i }))
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/elevated-mode',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+    expect(pollSpy).not.toHaveBeenCalled()
+  })
+
+  it('reflects the stored Visual-effects pref (OFF) on mount', async () => {
+    // chat.js:1483-1485 — hydrate the toggle from the stored `agentos-router-fx`.
+    localStorage.setItem(ROUTER_FX_PREF_KEY, JSON.stringify({ enabled: false }))
+    render(<Toolbar sessionKey={SESSION} />)
+    const toggle = await screen.findByRole('checkbox', { name: /visual effects/i })
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('Visual effects defaults ON when no pref is stored', async () => {
+    render(<Toolbar sessionKey={SESSION} />)
+    const toggle = await screen.findByRole('checkbox', { name: /visual effects/i })
+    expect(toggle).toBeChecked()
+  })
+
+  it('toggling Visual effects OFF writes the agentos-router-fx pref shape', async () => {
+    // chat.js:1425-1426/3411-3416 — write `{enabled}` under the exact key.
+    render(<Toolbar sessionKey={SESSION} />)
+    const toggle = await screen.findByRole('checkbox', { name: /visual effects/i })
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(JSON.parse(localStorage.getItem(ROUTER_FX_PREF_KEY)!)).toEqual({ enabled: false })
+    expect(vi.mocked(toast.info)).toHaveBeenCalledWith('Visual effects: OFF')
+  })
+
+  it('delegates to the controller setter (live pref) when threaded in', async () => {
+    // The controller mutates its LIVE `_routerFx` object + persists, so an
+    // already-mounted engine picks up the change (chat.js:1425). Here we assert
+    // the toolbar routes the toggle to that setter rather than persisting itself.
+    const setEnabled = vi.fn((enabled: boolean) => {
+      const pref: RouterFxPref = { enabled, variant: 'default' }
+      // Mimic the controller's setRouterFxEnabled: mutate + save.
+      localStorage.setItem(ROUTER_FX_PREF_KEY, JSON.stringify({ enabled: pref.enabled }))
+    })
+    render(<Toolbar sessionKey={SESSION} routerFxEnabled onRouterFxToggle={setEnabled} />)
+    const toggle = await screen.findByRole('checkbox', { name: /visual effects/i })
+    expect(toggle).toBeChecked()
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(setEnabled).toHaveBeenCalledWith(false)
+    expect(JSON.parse(localStorage.getItem(ROUTER_FX_PREF_KEY)!)).toEqual({ enabled: false })
+  })
+
+  it('reflects the live routerFxEnabled prop on mount over localStorage', async () => {
+    // chat.js:1484-1485 — the toggle mirrors the live `_routerFx.enabled`.
+    localStorage.setItem(ROUTER_FX_PREF_KEY, JSON.stringify({ enabled: true }))
+    render(<Toolbar sessionKey={SESSION} routerFxEnabled={false} onRouterFxToggle={vi.fn()} />)
+    const toggle = await screen.findByRole('checkbox', { name: /visual effects/i })
     expect(toggle).not.toBeChecked()
   })
 
