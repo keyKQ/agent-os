@@ -106,6 +106,22 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       getSessionKey: () => sessionKeyRef.current,
       applySessionRunState: (state) => seamsRef.current.applySessionRunState?.(state),
       diag: (event, detail) => seamsRef.current.diag?.(event, detail),
+      // Subagent-completion system row (chat.js:7814 `_addMessage`). No real
+      // `_addMessage` DOM builder exists in the frontend yet (router-fx/turn-meta
+      // entangled — a later task); provide the same faithful minimal row the
+      // history renderer uses so a subagent disclosure renders standalone.
+      addMessageWithOptions: (role, text) => {
+        const th = containerRef.current
+        if (!th) return null
+        const empty = th.querySelector('.chat-empty')
+        if (empty) empty.remove()
+        const div = document.createElement('div')
+        div.className = `msg ${role}`
+        div.setAttribute('data-history-role', role)
+        div.innerHTML = `<div class="msg-body">${esc(text || '')}</div>`
+        th.appendChild(div)
+        return div
+      },
     }),
   )
 
@@ -365,20 +381,22 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       }),
     )
 
-    // chat.js:4730 — tool_use_start → Task-4 seam (idle timer kept live here).
+    // chat.js:4730 — tool_use_start → controller tool renderer (Task 4).
     unsubs.push(
       onEvent('session.event.tool_use_start', (payload: StreamEventPayload) => {
         if (!gateStreamFrame('event.tool_use_start', payload)) return
         controller.resetStreamIdleTimer()
+        controller.appendToolCall(payload)
         seams().appendToolCall?.(payload)
       }),
     )
 
-    // chat.js:4750 — tool_result → Task-4 seam.
+    // chat.js:4750 — tool_result → controller tool renderer (Task 4).
     unsubs.push(
       onEvent('session.event.tool_result', (payload: StreamEventPayload) => {
         if (!gateStreamFrame('event.tool_result', payload)) return
         controller.resetStreamIdleTimer()
+        controller.appendToolResult(payload)
         seams().appendToolResult?.(payload)
       }),
     )
@@ -392,10 +410,11 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       }),
     )
 
-    // chat.js:4788 — subagent_completion → later-task seam.
+    // chat.js:4788 — subagent_completion → controller tool renderer (Task 4).
     unsubs.push(
       onEvent('session.event.subagent_completion', (payload: StreamEventPayload) => {
         if (!gateStreamFrame('event.subagent_completion', payload)) return
+        controller.appendSubagentCompletion(payload)
         seams().appendSubagentCompletion?.(payload)
       }),
     )

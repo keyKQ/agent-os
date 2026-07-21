@@ -17,6 +17,7 @@
 // mutation is verified by a live-browser sweep (parity matrix), not RTL.
 
 import type { StreamEventPayload } from '../types'
+import { createToolRenderer, type ToolRenderer } from './tools'
 
 /* ── Constants (ported verbatim from chat.js) ───────────────────────────── */
 
@@ -232,6 +233,24 @@ export interface StreamControllerDeps {
   isAborted?: () => boolean
   /** chat.js:* — the diagnostics ring (legacy `_chatDiag`). Default: no-op. */
   diag?: (event: string, detail: Record<string, unknown>) => void
+  /**
+   * chat.js:7311 `UI.modal` — open the "View full" tool-result modal. Owned by
+   * the UI/toast surface (a later task); default no-op so the tool card renders
+   * standalone (the "View full" button is inert until wired).
+   */
+  openModal?: (title: string, html: string, buttons: Array<Record<string, unknown>>) => void
+  /**
+   * chat.js:7814 `_addMessage` with provenance options — append the subagent
+   * completion system row. Distinct from `addMessage` above (which is the
+   * streaming timeout/error 3-arg form); this is the 4-arg provenance form the
+   * subagent path needs. Default: no-op (the real builder is a later task).
+   */
+  addMessageWithOptions?: (
+    role: string,
+    text: string,
+    timestamp: number,
+    options: Record<string, unknown>,
+  ) => HTMLElement | null
 }
 
 /* ── Default dep implementations ────────────────────────────────────────── */
@@ -302,6 +321,8 @@ export function createStreamController(
   const getSessionKey = deps.getSessionKey ?? (() => '')
   const isAborted = deps.isAborted ?? (() => false)
   const diag = deps.diag ?? (() => {})
+  const openModal = deps.openModal ?? (() => {})
+  const addMessageWithOptions = deps.addMessageWithOptions ?? (() => null)
 
   const thread = (): HTMLElement | null => containerRef.current
 
@@ -326,6 +347,11 @@ export function createStreamController(
   let _lastVisibleStreamEvent = ''
   let _streamBubble: HTMLElement | null = null
   let _autoScroll = true
+
+  // chat.js:443 — the sticky web_search provider label for the running/settled
+  // tool-card badge. Owned here so the tool renderer and the streaming path
+  // share one value across a turn.
+  let _searchProvider = ''
 
   // chat.js:436-437 render debouncing
   let _renderDirty = false
@@ -1121,6 +1147,46 @@ export function createStreamController(
     }
   }
 
+  /* ── web_search provider badge (chat.js:463-478) ──────────────────────── */
+
+  function refreshRunningSearchProviderBadges(provider: string): void {
+    // chat.js:463-469 — re-inject the badge onto every still-running web_search
+    // card so a provider learned late still labels the in-flight card.
+    const p = String(provider || '').trim()
+    const th = thread()
+    if (!th || !p) return
+    th.querySelectorAll(
+      '.chat-tools-collapse--running[data-tool-name="web_search"] .chat-tools-summary',
+    ).forEach((summary) => toolRenderer.injectProviderBadge(summary, p))
+  }
+
+  function setSearchProvider(provider: string, options: { refreshRunning?: boolean } = {}): void {
+    // chat.js:471-478
+    const p = String(provider || '').trim()
+    if (!p) return
+    _searchProvider = p
+    if (options.refreshRunning !== false) refreshRunningSearchProviderBadges(p)
+  }
+
+  /* ── tool-activity renderer (chat.js:7020-7455 / 7681-7815, tools.ts) ──── */
+
+  const toolRenderer: ToolRenderer = createToolRenderer({
+    ensureStreamBubble,
+    markVisibleStreamEvent,
+    flushPendingTextSegment,
+    newTextSegment,
+    scrollToBottom,
+    getAutoScroll: () => _autoScroll,
+    pushSegment: (seg) => _segments.push({ type: seg.type, raw: '', el: seg.el }),
+    getSearchProvider: () => _searchProvider,
+    setSearchProvider,
+    getSessionKey: () => _streamSessionKey || getSessionKey() || '',
+    addMessage: addMessageWithOptions,
+    pushMessage,
+    openModal,
+    diag,
+  })
+
   return {
     // seq
     acceptStreamSeq,
@@ -1151,6 +1217,13 @@ export function createStreamController(
     hasViewLocalStreamState,
     // scroll
     scrollToBottom,
+    // tool activity + subagent disclosure (Task 4 — tools.ts)
+    appendToolCall: toolRenderer.appendToolCall,
+    appendToolResult: toolRenderer.appendToolResult,
+    settleToolResultCard: toolRenderer.settleToolResultCard,
+    reconstructToolCalls: toolRenderer.reconstructToolCalls,
+    appendSubagentCompletion: toolRenderer.appendSubagentCompletion,
+    setSearchProvider,
     // introspection (for the transcript controller + tests)
     isStreaming: (): boolean => _isStreaming,
     streamSessionKey: (): string => _streamSessionKey,
