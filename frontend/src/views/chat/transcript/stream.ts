@@ -196,6 +196,8 @@ export interface StreamControllerDeps {
     stableIdentity: string,
     role: string,
     text: string,
+    transcriptId?: string | null,
+    ts?: string | number | null,
   ) => void
   /** chat.js:6819/748 — attach the hover Copy/Regenerate toolbar. */
   attachHoverActions?: (el: HTMLElement, role: string) => void

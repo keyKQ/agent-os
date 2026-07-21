@@ -116,6 +116,7 @@ export interface HistoryRenderDeps {
     role: string,
     text: string,
     transcriptId?: string | null,
+    ts?: string | number | null,
   ) => void
   /** chat.js:389/391/419 — assistant display-text sanitizers (default identity). */
   stripProtocolTextLeak: (t: string) => string
@@ -322,6 +323,8 @@ export function createHistoryRenderer(deps: HistoryRenderDeps) {
         msg.role,
         displayText,
         (msg as { transcript_id?: string | null }).transcript_id ?? null,
+        // chat.js:5648 — export mirrors `ts: msg.timestamp || msg.ts || null`.
+        timestamp,
       )
       deps.attachHoverActions(div, msg.role)
     })

@@ -293,7 +293,7 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
         return div
       },
       attachHoverActions: () => {},
-      stampHistoryElement: (el, stableIdentity, role, text, transcriptId = null) => {
+      stampHistoryElement: (el, stableIdentity, role, text, transcriptId = null, ts = null) => {
         if (stableIdentity) el.setAttribute('data-message-id', stableIdentity)
         el.setAttribute('data-history-role', role || '')
         el.setAttribute('data-history-raw-text', text || '')
@@ -305,6 +305,15 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
           el.dataset.transcriptId = String(transcriptId)
         } else {
           delete el.dataset.transcriptId
+        }
+        // chat.js:8398 — export emits `### role _(ts.toLocaleString())_` when the
+        // message carries a ts. Legacy sources it from `msg.timestamp || msg.ts`
+        // (chat.js:5648); a message with no ts omits the attribute (and the
+        // suffix), matching legacy's `msg.ts ? … : ''` branch.
+        if (ts != null && ts !== '') {
+          el.dataset.historyTs = String(ts)
+        } else {
+          delete el.dataset.historyTs
         }
       },
       stripProtocolTextLeak: (t) => t,
@@ -349,6 +358,14 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
   // controller drops deltas while aborted (chat.js:6652); a fresh send clears it.
   const abortedRef = useRef(false)
 
+  // Legacy `_stopRequestedByUser` (chat.js:346). `abort()` (the `_onStop` path,
+  // chat.js:8442) sets it true right before `abortAndRecover` recovers pending
+  // into the composer; the `.done`-wasAborted drain (chat.js:5126-5128) then
+  // SKIPS its own recover when this is already set — otherwise a message enqueued
+  // in the abort→done window would be pulled into the composer twice. Reset per
+  // turn on a fresh send and after the guarded drain runs (chat.js:5127).
+  const stopRequestedByUserRef = useRef(false)
+
   // chat.js:6062-6205 `_onSend`, plain-text path. The streaming-branch enqueue
   // (chat.js:6091), slash commands (chat.js:6113), and attachments (chat.js:6157)
   // are Task-9 seams. For plain text: add the user bubble, start the streaming
@@ -366,6 +383,9 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       if (!hasPayload || !sessionKey || controller.isStreaming()) return
 
       abortedRef.current = false
+      // A new turn clears the stop-recover guard (legacy resets `_stopRequestedByUser`
+      // per turn — chat.js:1722/8799) so the next abort→done cycle re-arms cleanly.
+      stopRequestedByUserRef.current = false
       // chat.js:6128 — history/↑↓ tracks the user's display text (not the provider
       // fallback). Only record non-empty text so an attachments-only send doesn't
       // seed a blank history entry.
@@ -386,6 +406,10 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
         const div = document.createElement('div')
         div.className = 'msg user'
         div.setAttribute('data-history-role', 'user')
+        // chat.js:6127-6130 — the send-path user bubble records its send time
+        // (`ts: new Date().toISOString()`) so the export emits the `_(time)_`
+        // suffix (chat.js:8398). Mirror it onto the DOM row the collector reads.
+        div.dataset.historyTs = new Date().toISOString()
         // chat.js:6136-6144 — render the attachments block when present.
         if (atts.length > 0) {
           const bodyText = userText ? `<div class="msg-attachment-text">${esc(userText)}</div>` : ''
@@ -463,6 +487,10 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     (source = 'webui_stop_button') => {
       if (!controller.isStreaming()) return
       abortedRef.current = true
+      // chat.js:8442 — mark that the user-initiated stop path ran (its caller,
+      // `abortAndRecover`, recovers pending immediately after) so the later
+      // `.done`-wasAborted drain skips a second recover (chat.js:5126-5128).
+      stopRequestedByUserRef.current = true
       const src = typeof source === 'string' && source ? source : 'webui_stop_button'
       rpc.call('chat.abort', { sessionKey: sessionKeyRef.current, source: src }).catch(() => {})
       controller.endStreaming({ reason: 'aborted' })
@@ -482,6 +510,15 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     setHistorySession(opts.sessionKey)
     setHistory([])
   }
+
+  // A session swap clears the abort/stop flags so a prior session's pending stop
+  // can't gate the new session's drain (legacy resets these on the session
+  // transition / destroy — chat.js:1722/8799). Ref writes live in an effect (not
+  // render) per the react-hooks/refs rule.
+  useEffect(() => {
+    abortedRef.current = false
+    stopRequestedByUserRef.current = false
+  }, [opts.sessionKey])
 
   /* ── History read via react-query (chat.js:5440 `_loadHistory`) ─────────── */
 
@@ -899,7 +936,16 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
             // a natural completion drain the queue head (FIFO).
             if (wasAborted) {
               abortedRef.current = false
-              pendingDelegatesRef.current.popAllPendingIntoComposer()
+              // chat.js:5126-5128 — the user-stop path (`abortAndRecover`) already
+              // recovered pending; this branch is only for the server-initiated
+              // cancel (timeout/external abort) where it never ran. Skip a second
+              // recover when the stop flag is already set, then clear it (5127) so
+              // a message enqueued in the abort→done window isn't pulled in twice.
+              if (stopRequestedByUserRef.current) {
+                stopRequestedByUserRef.current = false
+              } else {
+                pendingDelegatesRef.current.popAllPendingIntoComposer()
+              }
             } else {
               pendingDelegatesRef.current.schedulePendingDrainAfterTerminal()
             }

@@ -1005,7 +1005,10 @@ export function artifactMarkdownLines(
 export interface ExportMessage {
   role: string
   text: string
-  ts?: number | null
+  // chat.js:5648/6130 — `msg.timestamp || msg.ts` is an ISO string (history) or
+  // the send-time ISO string (user bubble); `new Date(ts)` accepts either an ISO
+  // string or an epoch number (chat.js:8398).
+  ts?: number | string | null
   artifacts?: Artifact[]
 }
 

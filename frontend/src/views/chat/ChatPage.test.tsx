@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
 import { ChatPage } from './ChatPage'
+import * as logicModule from './logic'
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -54,6 +55,9 @@ function makeRpc() {
     }),
     emit(event: string, ...args: unknown[]) {
       listeners.get(event)?.forEach((h) => h(...args))
+      // The real RPC also fans every frame out to `*` wildcard listeners (the
+      // transcript's terminal-event backstop registers there, chat.js:4965).
+      listeners.get('*')?.forEach((h) => h(event, ...args))
     },
   }
 }
@@ -516,10 +520,140 @@ describe('ChatPage', () => {
     createSpy.mockRestore()
   })
 
+  // Run the export and return the Markdown string handed to the download Blob.
+  // jsdom's Blob has no `.text()`, so capture the string ChatPage passes to
+  // `new Blob([md])` (chat.js:8402) by intercepting the Blob constructor.
+  async function runExportAndReadMarkdown(): Promise<string> {
+    let captured = ''
+    const RealBlob = globalThis.Blob
+    const BlobSpy = vi.fn((parts?: unknown[]) => {
+      if (Array.isArray(parts) && typeof parts[0] === 'string') captured = parts[0]
+      return new RealBlob((parts as BlobPart[]) ?? [])
+    })
+    vi.stubGlobal('Blob', BlobSpy)
+    ;(URL as unknown as { createObjectURL: unknown }).createObjectURL = vi
+      .fn()
+      .mockReturnValue('blob:mock')
+    ;(URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = vi.fn()
+    const origCreate = document.createElement.bind(document)
+    const createSpy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag) as HTMLElement
+      if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
+      return el
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
+    })
+    createSpy.mockRestore()
+    vi.stubGlobal('Blob', RealBlob)
+    return captured
+  }
+
+  it('export emits the `### role _(time)_` suffix for a row carrying data-history-ts (chat.js:8398)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // The send-path user bubble stamps data-history-ts with the send time
+    // (chat.js:6127-6130), so a plain send produces an export row with a ts.
+    typeAndSend('exported line')
+    await waitFor(() => expect(document.querySelector('.msg.user')).not.toBeNull())
+    const row = document.querySelector('.msg.user') as HTMLElement
+    // Pin a known timestamp so the asserted suffix is deterministic.
+    const iso = '2026-07-21T09:00:00.000Z'
+    row.dataset.historyTs = iso
+    row.setAttribute('data-history-raw-text', 'exported line')
+
+    const md = await runExportAndReadMarkdown()
+    // chat.js:8398 — the suffix is ` _(new Date(ts).toLocaleString())_`.
+    const expectedTime = new Date(iso).toLocaleString()
+    expect(md).toContain(`_(${expectedTime})_`)
+    // The header line is `### <role> _(<time>)_`.
+    expect(md).toMatch(/### .+_\(.+\)_/)
+  })
+
+  it('export omits the time suffix for a row WITHOUT data-history-ts (chat.js:8398 falsy branch)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('no ts line')
+    await waitFor(() => expect(document.querySelector('.msg.user')).not.toBeNull())
+    const row = document.querySelector('.msg.user') as HTMLElement
+    delete row.dataset.historyTs // simulate a message with no timestamp
+    row.setAttribute('data-history-raw-text', 'no ts line')
+
+    const md = await runExportAndReadMarkdown()
+    expect(md).toContain('no ts line')
+    expect(md).not.toMatch(/_\(.+\)_/)
+  })
+
+  it('export links an audio artifact via its child download anchor (chat.js:8411/8425)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('audio turn')
+    await waitFor(() => expect(document.querySelector('.msg.user')).not.toBeNull())
+    // Inject an audio artifact card matching the renderer's shape (artifacts.ts:297):
+    // data-artifact-name/-id on the card, data-artifact-download only on the child
+    // Download anchor. The collector must still find the URL for audio.
+    const row = document.querySelector('.msg.user') as HTMLElement
+    const body = row.querySelector('.msg-body') as HTMLElement
+    body.insertAdjacentHTML(
+      'beforeend',
+      `<div class="msg-artifact-card msg-artifact-card--audio" data-artifact-id="a1" data-artifact-name="clip.wav">
+         <audio class="msg-artifact-audio" controls src="/download/clip.wav?sessionKey=k"></audio>
+         <a class="msg-artifact-card__action" href="/download/clip.wav?sessionKey=k" download="clip.wav" data-artifact-download="/download/clip.wav">Download</a>
+       </div>`,
+    )
+
+    const md = await runExportAndReadMarkdown()
+    // chat.js:8420 — the artifact line is `- [Download <name>](<url>)`.
+    expect(md).toContain('[Download clip.wav]')
+    expect(md).toContain('/download/clip.wav')
+  })
+
   it('toasts and skips export when the transcript is empty (chat.js:8390)', () => {
     mockRpc = makeRpc()
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
     expect(toast.warning).toHaveBeenCalledWith('No messages to export')
+  })
+
+  // ── Abort → done double-recover guard (chat.js:5122-5128) ──────────────────
+
+  it('recovers pending ONCE across abort + the .done-wasAborted ack — no double drain (chat.js:5126-5128)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // Start a streaming turn, then enqueue a message while it streams.
+    typeAndSend('turn')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send').length).toBe(1),
+    )
+    await act(async () => typeAndSend('queued'))
+    await waitFor(() => expect(screen.getByText('Pending 1/5')).toBeInTheDocument())
+
+    // Spy on the recover model AFTER the queue is armed so we count only the
+    // abort→done cycle's invocations. `usePendingQueue.popAllIntoComposer` calls
+    // this model on every recover (usePendingQueue.ts:149), so a call here means
+    // the recover path actually fired (not the queue-empty short-circuit).
+    const recoverSpy = vi.spyOn(logicModule, 'popAllPendingIntoComposer')
+
+    // User-initiated stop (ESC) → abortAndRecover: aborts AND recovers pending
+    // into the composer (recover #1), and sets the stop-requested guard
+    // (chat.js:8442).
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.keyDown(ta, { key: 'Escape' })
+    })
+    await waitFor(() => expect(screen.queryByText('Pending 1/5')).not.toBeInTheDocument())
+    expect(ta.value).toContain('queued')
+    expect(recoverSpy).toHaveBeenCalledTimes(1)
+
+    // The server's `.done` (wasAborted) ack for the aborted turn arrives. The
+    // guard (chat.js:5126-5128) must SKIP a second recover because the user-stop
+    // path already ran — WITHOUT the guard this branch would call popAll again,
+    // so a message enqueued in the abort→done window would be pulled in twice.
+    await act(async () => {
+      mockRpc.emit('chat.done', { sessionKey: 'agent:main:webchat:default', reason: 'aborted' })
+    })
+    // Still exactly one recover — the `.done`-abort drain did not re-run.
+    expect(recoverSpy).toHaveBeenCalledTimes(1)
+    recoverSpy.mockRestore()
   })
 })

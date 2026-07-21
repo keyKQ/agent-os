@@ -68,14 +68,25 @@ function collectExportMessages(thread: HTMLElement | null): ExportMessage[] {
     const text =
       row.getAttribute('data-history-raw-text') ??
       (row.querySelector('.msg-body')?.textContent || '')
+    // chat.js:8398 — the export emits `### role _(ts.toLocaleString())_` when the
+    // message carries a ts (legacy `msg.timestamp || msg.ts`, stamped as
+    // `data-history-ts`). Absent → undefined so the suffix is dropped, matching
+    // legacy's `msg.ts ? … : ''` branch.
+    const ts = row.getAttribute('data-history-ts') || undefined
     const artifacts = Array.from(row.querySelectorAll<HTMLElement>('[data-artifact-name]')).map(
       (card) => ({
         id: card.getAttribute('data-artifact-id') || undefined,
         name: card.getAttribute('data-artifact-name') || undefined,
-        download_url: card.getAttribute('data-artifact-download') || undefined,
+        // chat.js:8425 — audio cards stamp `data-artifact-download` on the child
+        // Download anchor (the card itself lacks it); fall back to that anchor so
+        // audio artifacts export a real download URL like image/file cards.
+        download_url:
+          card.getAttribute('data-artifact-download') ||
+          card.querySelector('[data-artifact-download]')?.getAttribute('data-artifact-download') ||
+          undefined,
       }),
     )
-    out.push({ role, text, artifacts })
+    out.push({ role, text, ts, artifacts })
   })
   return out
 }
