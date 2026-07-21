@@ -276,7 +276,7 @@
 }
 .cfg-object .cfg-input--json {
   border: none;
-  border-radius: 0;
+  border-radius: var(--radius);
 }
 .cfg-json-error {
   padding: 6px 12px;

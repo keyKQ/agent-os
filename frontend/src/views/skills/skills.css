@@ -101,7 +101,7 @@
   border: 0;
   /* Left tone gutter only shows on the active cell (see .is-active). */
   border-left: 2px solid transparent;
-  border-radius: 0;
+  border-radius: var(--radius);
   cursor: pointer;
   text-align: left;
   transition:

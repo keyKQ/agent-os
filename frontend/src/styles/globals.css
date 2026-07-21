@@ -74,7 +74,9 @@
 :root[data-theme='dark'],
 :root {
   color-scheme: dark;
-  --radius: 0px; /* TTY posture: hard corners everywhere (ui-ux-pro-max: Terminal CLI radius 0) */
+  --radius: 6px; /* Soft-terminal posture: a small, consistent radius across the
+                    whole console (was 0px hard-TTY). --radius-sm/md/lg/xl derive
+                    from this, so every shadcn/Tailwind rounded-* surface follows. */
 
   --background: #060608; /* legacy --bg */
   --foreground: #ececef; /* legacy --text */
@@ -295,7 +297,7 @@
     font-size: 0.75rem;
     color: var(--foreground);
     border: 1px solid var(--border);
-    border-radius: 0; /* TTY: zero radius */
+    border-radius: var(--radius);
     background: transparent;
     padding: 7px 12px;
     display: inline-flex;
