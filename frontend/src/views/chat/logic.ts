@@ -102,3 +102,42 @@ export function historyStableMessageIdentity(msg: ChatMessage): string {
 export function historyFallbackMessageIdentity(role: Role, text: string): string {
   return `${role || ''}|${(text || '').trim()}`
 }
+
+// chat.js:430 — the "[<iso> <weekday> <tz>]\n" prefix the engine prepends to
+// user messages for the model; stripped from the display text.
+const TIME_PREFIX_RE =
+  /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}[+\-]\d{2}:\d{2} (?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Za-z0-9_+\-/]+\]\n/
+
+/** chat.js:431-433 — strip the leading time prefix from a user message. */
+export function stripTimePrefix(text: string): string {
+  return typeof text === 'string' ? text.replace(TIME_PREFIX_RE, '') : text
+}
+
+/** chat.js:7833-7838 — the `YYYY-MM-DD` day key for a timestamp ('' when bad). */
+export function dayKey(ts: string | number | null | undefined): string {
+  if (!ts) return ''
+  const d = typeof ts === 'number' ? new Date(ts) : new Date(ts)
+  if (isNaN(d.getTime())) return ''
+  return d.toISOString().slice(0, 10)
+}
+
+/** chat.js:7840-7849 — human label for a day key (Today/Yesterday/`Mon D`). */
+export function dayLabel(isoDay: string): string {
+  if (!isoDay) return ''
+  const today = new Date()
+  const todayKey = today.toISOString().slice(0, 10)
+  const yesterKey = new Date(today.getTime() - 86400000).toISOString().slice(0, 10)
+  if (isoDay === todayKey) return 'Today'
+  if (isoDay === yesterKey) return 'Yesterday'
+  const d = new Date(isoDay + 'T12:00:00')
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// chat.js:661 — minimal HTML-entity escape for text interpolated into innerHTML.
+export function esc(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
