@@ -6,6 +6,8 @@ import {
   historyStableMessageIdentity,
   messageTranscriptId,
   readSessionFromUrl,
+  sendButtonState,
+  shouldAutofocusComposer,
   webchatSessionKey,
 } from './logic'
 import type { ChatMessage } from './types'
@@ -110,5 +112,63 @@ describe('historyFallbackMessageIdentity', () => {
   })
   it('trims the text', () => {
     expect(historyFallbackMessageIdentity('assistant', '  hi  ')).toBe('assistant|hi')
+  })
+})
+
+// Parity: chat.js:1353-1360 `_shouldAutofocusComposer` — autofocus unless the
+// viewport is narrow (max-width:768px) OR the pointer is coarse (touch).
+// `matchMedia` is injected as an env probe so the pure helper is testable
+// without a real `window` (legacy reads `window.matchMedia`; the catch → true).
+describe('shouldAutofocusComposer', () => {
+  const env = (narrow: boolean, coarse: boolean) => ({
+    matchMedia: (q: string) => ({
+      matches: q.includes('max-width') ? narrow : q.includes('coarse') ? coarse : false,
+    }),
+  })
+  it('autofocuses on a wide, fine-pointer viewport', () => {
+    expect(shouldAutofocusComposer(env(false, false))).toBe(true)
+  })
+  it('does not autofocus on a narrow viewport', () => {
+    expect(shouldAutofocusComposer(env(true, false))).toBe(false)
+  })
+  it('does not autofocus on a coarse pointer', () => {
+    expect(shouldAutofocusComposer(env(false, true))).toBe(false)
+  })
+  it('autofocuses when matchMedia throws', () => {
+    expect(
+      shouldAutofocusComposer({
+        matchMedia: () => {
+          throw new Error('no matchMedia')
+        },
+      }),
+    ).toBe(true)
+  })
+  it('autofocuses when the env has no matchMedia', () => {
+    expect(shouldAutofocusComposer({})).toBe(true)
+  })
+})
+
+// Parity: chat.js:7002-7021 `_updateSendButton` (title) + 8768-8771
+// `_updateStopButton` (disabled reflects the React affordance — see logic.ts).
+describe('sendButtonState', () => {
+  it('disables send when the input is empty (React affordance; legacy relies on _onSend no-op)', () => {
+    expect(sendButtonState('', false, false).disabled).toBe(true)
+    expect(sendButtonState('   ', false, false).disabled).toBe(true)
+  })
+  it('enables send once there is non-whitespace input', () => {
+    expect(sendButtonState('hi', false, false).disabled).toBe(false)
+  })
+  it('labels a plain send "Send" (chat.js:7016)', () => {
+    expect(sendButtonState('hi', false, false).label).toBe('Send')
+  })
+  it('labels a streaming send as queueing after the response (chat.js:7015)', () => {
+    expect(sendButtonState('hi', true, false).label).toBe(
+      'Send (queues for after current response)',
+    )
+  })
+  it('labels a compaction-in-flight send as queueing until compaction (chat.js:7013)', () => {
+    // Compaction wins over streaming (legacy ternary order, chat.js:7012-7016).
+    expect(sendButtonState('hi', true, true).label).toBe('Send (queues until compaction finishes)')
+    expect(sendButtonState('hi', false, true).label).toBe('Send (queues until compaction finishes)')
   })
 })

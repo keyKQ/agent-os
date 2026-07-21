@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
@@ -62,5 +62,37 @@ describe('ChatPage', () => {
     renderPage()
     expect(document.querySelector('.chat-stage')).not.toBeNull()
     expect(document.querySelector('.chat-composer')).not.toBeNull()
+  })
+
+  it('sends the composed text via chat.send with the legacy payload (chat.js:6150/6193)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: 'hello world' } })
+    fireEvent.click(screen.getByRole('button', { name: /send/i }))
+    await waitFor(() => {
+      const sends = mockRpc.call.mock.calls.filter(([m]) => m === 'chat.send')
+      expect(sends.length).toBe(1)
+      const params = sends[0]![1] as Record<string, unknown>
+      expect(params.message).toBe('hello world')
+      expect(params.sessionKey).toBe('agent:main:webchat:default')
+    })
+  })
+
+  it('aborts the in-flight turn via chat.abort while streaming (chat.js:8444)', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    // Drive the controller into a streaming state via a live text_delta frame.
+    await act(async () => {
+      mockRpc.emit('session.event.text_delta', { seq: 1, text: 'hi' }, {})
+    })
+    const abort = await screen.findByRole('button', { name: /abort|stop/i })
+    fireEvent.click(abort)
+    await waitFor(() => {
+      const aborts = mockRpc.call.mock.calls.filter(([m]) => m === 'chat.abort')
+      expect(aborts.length).toBe(1)
+      const params = aborts[0]![1] as Record<string, unknown>
+      expect(params.sessionKey).toBe('agent:main:webchat:default')
+    })
   })
 })

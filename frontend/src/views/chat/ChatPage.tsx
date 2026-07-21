@@ -1,6 +1,7 @@
 import './chat.css'
 import { useEffect } from 'react'
 import { useRpc } from '@/app/providers'
+import { Composer } from './Composer'
 import { canonicalSessionKey, readSessionFromUrl } from './logic'
 import { useTranscript } from './useTranscript'
 
@@ -25,7 +26,7 @@ export function ChatPage() {
     readSessionFromUrl(typeof window !== 'undefined' ? window.location.search : '') ?? '',
   )
 
-  const { containerRef } = useTranscript({ sessionKey })
+  const { containerRef, send, abort, busy, history } = useTranscript({ sessionKey })
 
   useEffect(() => {
     document.title = 'Chat - AgentOS Control'
@@ -34,9 +35,9 @@ export function ChatPage() {
   return (
     <div className="chat-stage">
       <div className="chat-thread" ref={containerRef} />
-      {/* Placeholder composer row — pinned; a later task fills it with the
-          real command-line composer. */}
-      <div className="chat-composer" />
+      {/* The command-line composer (Task 8). Send → chat.send, abort → chat.abort,
+          both wired through the transcript controller (chat.js:6193 / 8444). */}
+      <Composer onSend={send} onAbort={abort} busy={busy} history={history} />
     </div>
   )
 }

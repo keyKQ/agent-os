@@ -133,6 +133,55 @@ export function dayLabel(isoDay: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+/**
+ * Whether the composer should autofocus on view entry (chat.js:1353-1360
+ * `_shouldAutofocusComposer`). Legacy returns false on a narrow viewport
+ * (`max-width:768px`) or a coarse pointer (touch), else true; a `matchMedia`
+ * throw falls through to true. Ported pure over an injected env (an object
+ * exposing `matchMedia`) so it is testable without a real `window` — the
+ * component passes `window`.
+ */
+export function shouldAutofocusComposer(env: {
+  matchMedia?: (query: string) => { matches: boolean }
+}): boolean {
+  try {
+    const mm = env?.matchMedia
+    if (typeof mm !== 'function') return true
+    if (mm('(max-width: 768px)').matches) return false
+    if (mm('(pointer: coarse)').matches) return false
+  } catch {
+    /* legacy swallows matchMedia errors and autofocuses (chat.js:1357) */
+  }
+  return true
+}
+
+/**
+ * Send-button enable + label state.
+ *
+ * Label is the verbatim port of `_updateSendButton`'s title ternary
+ * (chat.js:7012-7016): compaction-in-flight wins over streaming, which wins
+ * over the plain "Send". Legacy keeps the button ALWAYS enabled (a click while
+ * streaming enqueues, chat.js:7004-7008) and lets `_onSend` no-op on an empty
+ * composer (chat.js:6118). The React composer instead disables Send when the
+ * trimmed input is empty — a UI affordance, NOT a legacy behavior — so the
+ * button visibly reflects "nothing to send". The enqueue-while-streaming path
+ * (and its attachments/slash nuances) lands in Task 9; until then `busy` only
+ * drives the label, never re-enabling an empty composer.
+ */
+export function sendButtonState(
+  input: string,
+  busy: boolean,
+  pendingCompaction: boolean,
+): { disabled: boolean; label: string } {
+  const disabled = (input ?? '').trim().length === 0
+  const label = pendingCompaction
+    ? 'Send (queues until compaction finishes)'
+    : busy
+      ? 'Send (queues for after current response)'
+      : 'Send'
+  return { disabled, label }
+}
+
 // chat.js:661 — minimal HTML-entity escape for text interpolated into innerHTML.
 export function esc(s: string): string {
   return String(s ?? '')

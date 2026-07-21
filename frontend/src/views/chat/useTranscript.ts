@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRpc } from '@/app/providers'
 import { createStreamController, type StreamController } from './transcript/stream'
@@ -99,10 +99,28 @@ function isCurrentSessionPayload(
 export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEventSeams }): {
   containerRef: React.RefObject<HTMLDivElement | null>
   controller: StreamController
+  /** Send composed text (chat.js:6062 `_onSend` → `chat.send`, chat.js:6193). */
+  send: (text: string) => void
+  /** Abort the in-flight turn (chat.js:8439 `_onStop` → `chat.abort`, chat.js:8444). */
+  abort: (source?: string) => void
+  /** Reactive streaming flag (legacy `_isStreaming`) — drives the composer's busy prop. */
+  busy: boolean
+  /** The user's sent-message history, oldest→newest (legacy `_messages`, chat.js:8712). */
+  history: string[]
 } {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   const containerRef = useRef<HTMLDivElement>(null)
+
+  // Reactive mirror of the imperative `_isStreaming` flag. The controller's
+  // `updateSendButton` dep fires on every stream lifecycle transition
+  // (chat.js:6571) — we re-read `controller.isStreaming()` there to sync React.
+  const [busy, setBusy] = useState(false)
+
+  // The user's sent-message history (legacy derives from `_messages` filtered
+  // to role 'user', chat.js:8712-8714). Held as React state so ↑/↓ cycling in
+  // the composer stays in sync with what was actually sent this session.
+  const [history, setHistory] = useState<string[]>([])
 
   // Live session key holder (legacy `_sessionKey`), read by the controller and
   // by the event handlers. A ref so the once-created controller + the stable
@@ -112,6 +130,11 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
   // Later-task seams, held in a ref so the (stable) subscription handlers always
   // read the latest without re-registering. Written in an effect.
   const seamsRef = useRef<TranscriptEventSeams>(opts.seams ?? {})
+
+  // Stable syncer the once-created controller calls (via its `updateSendButton`
+  // dep) to push the imperative `_isStreaming` flag into the reactive `busy`
+  // state. A ref so the controller initializer never closes over a stale setter.
+  const setBusyRef = useRef<() => void>(() => {})
 
   // chat.js `_historyCompactionSummaries` — the history summary rows, exposed to
   // the (once-created) compaction renderer via a late-bound getter ref so the
@@ -128,6 +151,11 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
       // (chat.js:7575/7657 `App.getAuthToken()`).
       getAuthToken,
       applySessionRunState: (state) => seamsRef.current.applySessionRunState?.(state),
+      // chat.js:6571 — the Send/Stop affordance refresh fires on every stream
+      // lifecycle transition (start/end/park/restore). Re-read the imperative
+      // `_isStreaming` flag here to keep the reactive `busy` mirror in sync so
+      // the composer swaps between Send and Abort.
+      updateSendButton: () => setBusyRef.current(),
       diag: (event, detail) => seamsRef.current.diag?.(event, detail),
       // Compaction (Task 7): the history summary rows the history load populates
       // live (chat.js `_historyCompactionSummaries`), read via a late-bound
@@ -241,6 +269,110 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     historyCompactionSummariesRef.current = () =>
       pagingRef.current.compactionSummaries as CompactionSummary[]
   }, [])
+  // Install the busy syncer: re-read the imperative streaming flag and mirror
+  // it into React (setState is a no-op when the value is unchanged, so the
+  // frequent lifecycle calls don't cause spurious re-renders).
+  useEffect(() => {
+    setBusyRef.current = () => setBusy(controller.isStreaming())
+  }, [controller])
+
+  /* ── Send / Abort (chat.js:6062 `_onSend` / 8439 `_onStop`) ─────────────── */
+
+  // Reset the abort flag for a new turn (legacy `_aborted`, chat.js:6121). The
+  // controller drops deltas while aborted (chat.js:6652); a fresh send clears it.
+  const abortedRef = useRef(false)
+
+  // chat.js:6062-6205 `_onSend`, plain-text path. The streaming-branch enqueue
+  // (chat.js:6091), slash commands (chat.js:6113), and attachments (chat.js:6157)
+  // are Task-9 seams. For plain text: add the user bubble, start the streaming
+  // UI, and fire `chat.send` with the legacy `{ message, sessionKey }` shape
+  // (chat.js:6150). The already-wired subscription renders the resulting stream.
+  const send = useCallback(
+    (text: string) => {
+      const trimmed = (text ?? '').trim()
+      const sessionKey = sessionKeyRef.current
+      // chat.js:6118 — empty payload or no session is a no-op. While streaming,
+      // legacy enqueues (Task-9 seam); until then a busy send is inert.
+      if (!trimmed || !sessionKey || controller.isStreaming()) return
+
+      abortedRef.current = false
+      setHistory((prev) => [...prev, trimmed])
+
+      // Show the user's message row (chat.js:6133 `_addMessage('user', …)`). The
+      // controller's minimal row builder (the same one history/subagent use)
+      // stands in until the full `_addMessage` lands with router-fx/turn-meta.
+      const th = containerRef.current
+      if (th) {
+        const empty = th.querySelector('.chat-empty')
+        if (empty) empty.remove()
+        const div = document.createElement('div')
+        div.className = 'msg user'
+        div.setAttribute('data-history-role', 'user')
+        div.innerHTML = `<div class="msg-body">${esc(trimmed)}</div>`
+        th.appendChild(div)
+      }
+
+      // Start streaming UI (chat.js:6178) + thinking indicator (chat.js:6190).
+      controller.startStreaming()
+      controller.showThinkingIndicator()
+      controller.scrollToBottom()
+
+      // chat.js:6150 — the RPC params. Attachments / intent / _source elevated
+      // mode ride on this object in legacy; those land in Task 9.
+      const params: Record<string, unknown> = { message: trimmed, sessionKey }
+      seamsRef.current.diag?.('send.start', { textLen: trimmed.length })
+      rpc
+        .call('chat.send', params)
+        .then((res) => {
+          const r = res as { sessionKey?: string } | null
+          seamsRef.current.diag?.('send.rpc.resolved', {
+            responseSessionKey: r?.sessionKey || '',
+          })
+        })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          seamsRef.current.diag?.('send.rpc.error', { message })
+          // chat.js:6202-6203 — end streaming + surface the failure inline.
+          if (controller.isStreaming()) controller.endStreaming()
+          const th2 = containerRef.current
+          if (th2) {
+            const div = document.createElement('div')
+            div.className = 'msg error'
+            div.innerHTML = `<div class="msg-body">${esc('Send failed: ' + message)}</div>`
+            th2.appendChild(div)
+          }
+        })
+    },
+    [rpc, controller],
+  )
+
+  // chat.js:8439-8450 `_onStop`. Abort only while streaming; set the abort flag,
+  // fire `chat.abort` with `{ sessionKey, source }` (chat.js:8444), and end the
+  // stream locally with `reason:'aborted'`. Pending-queue recovery (chat.js:8448)
+  // is a Task-9 seam.
+  const abort = useCallback(
+    (source = 'webui_stop_button') => {
+      if (!controller.isStreaming()) return
+      abortedRef.current = true
+      const src = typeof source === 'string' && source ? source : 'webui_stop_button'
+      rpc.call('chat.abort', { sessionKey: sessionKeyRef.current, source: src }).catch(() => {})
+      controller.endStreaming({ reason: 'aborted' })
+    },
+    [rpc, controller],
+  )
+
+  // Reset the sent-message history when the session changes (a switch must not
+  // let one session's ↑/↓ history bleed into another's; legacy `_messages` is
+  // per-session state rebuilt from history — chat.js destroy/rebind). React's
+  // "adjust state during render on a prop change" pattern
+  // (https://react.dev/learn/you-might-not-need-an-effect): track the previous
+  // key in STATE (not a ref) so the reset runs during render without a
+  // setState-in-effect cascade.
+  const [historySession, setHistorySession] = useState(opts.sessionKey)
+  if (historySession !== opts.sessionKey) {
+    setHistorySession(opts.sessionKey)
+    setHistory([])
+  }
 
   /* ── History read via react-query (chat.js:5440 `_loadHistory`) ─────────── */
 
@@ -740,5 +872,5 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
     }
   }, [controller])
 
-  return { containerRef, controller }
+  return { containerRef, controller, send, abort, busy, history }
 }
