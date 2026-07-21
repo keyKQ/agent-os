@@ -19,6 +19,14 @@
 import type { StreamEventPayload } from '../types'
 import { createToolRenderer, type ToolRenderer } from './tools'
 import { createArtifactRenderer, type Artifact, type ArtifactRenderer } from './artifacts'
+import {
+  createRouterFxRenderer,
+  createRouterFxRegistry,
+  routerFxLoadPref,
+  type RouterFxRenderer,
+  type RouterFxRegistry,
+  type RouterFxPref,
+} from './routerFx'
 
 /* ── Constants (ported verbatim from chat.js) ───────────────────────────── */
 
@@ -194,7 +202,34 @@ export interface StreamControllerDeps {
   updateSendButton?: () => void
   /** chat.js:6807 — record a finished assistant message for export. */
   pushMessage?: (message: Record<string, unknown>) => void
-  /** chat.js:6585/6726/6822/… — router-fx hooks. Defaults: no-ops. */
+  /* ── router-fx (Task 6 — routerFx.ts, composed below) ─────────────────────
+   * The controller composes `createRouterFxRenderer` and wires the stream
+   * lifecycle's router-fx hooks (settle-for-output, cancel-scan, staticize,
+   * pause/resume, live-strip/anchor lookups, dock predicate) to it. The
+   * renderer's inputs are injected here so the config loader (a later task) can
+   * feed the SAME tier registry + visualisation pref the config-load path
+   * populates. Sensible faithful defaults let the controller stand alone:
+   *   - `routerFxRegistry`  — a fresh empty registry (config unknown → strips
+   *      stay suppressed until config lands, matching legacy `configTiers===null`).
+   *   - `routerFxPref`      — enabled by default, hydrated from localStorage
+   *      (`agentos-router-fx`) via `routerFxLoadPref`.
+   *   - `routerFeatureEnabled` — false until the operator routing flag is known.
+   *   - `routerFxDock`      — legacy `_routerFxDock`: a DOM ELEMENT, not a flag.
+   *      Default null (no dock in the frontend yet) → all strips suppressed,
+   *      exactly as legacy `if (!_routerFxDock)` short-circuits. */
+  routerFxRegistry?: RouterFxRegistry
+  routerFxPref?: RouterFxPref
+  routerFeatureEnabled?: () => boolean
+  routerFxDock?: () => HTMLElement | null
+  /** chat.js:3569 — await the router-fx config-ready gate. Default: resolve now. */
+  routerFxAwaitConfig?: () => Promise<void>
+  /** chat.js `_historyHasRendered` — has the history render completed. Default: true. */
+  historyHasRendered?: () => boolean
+  /** chat.js `_historyHydrating` — is the history render in progress. Default: false. */
+  historyHydrating?: () => boolean
+  // Stream-lifecycle router-fx hook overrides. Default to the composed
+  // `routerFxRenderer` methods; kept overridable so a test / later task can
+  // stub them without re-composing the renderer.
   routerFxSettleForOutput?: () => void
   cancelPendingRouterFxScan?: (reason: string) => void
   routerFxStaticizeCompletedStrips?: (key: string) => void
@@ -207,11 +242,6 @@ export interface StreamControllerDeps {
     anchor: HTMLElement | null,
     bubble: HTMLElement | null,
   ) => void
-  // Legacy `if (_routerFxDock)` (chat.js:6940) tests DOM-element presence (the
-  // dock element itself), not a boolean flag. The router-fx task must wire
-  // this predicate to "dock element present" to preserve legacy semantics —
-  // not left as a plain feature-flag getter.
-  routerFxDock?: () => boolean
   /** chat.js:6383/6403 — compaction gate for the thinking indicator. */
   isCompactInFlightForCurrentSession?: () => boolean
   /** chat.js:6412 — true while any router strip is still scanning. */
@@ -309,18 +339,8 @@ export function createStreamController(
   const applySessionRunState = deps.applySessionRunState ?? (() => {})
   const updateSendButton = deps.updateSendButton ?? (() => {})
   const pushMessage = deps.pushMessage ?? (() => {})
-  const routerFxSettleForOutput = deps.routerFxSettleForOutput ?? (() => {})
-  const cancelPendingRouterFxScan = deps.cancelPendingRouterFxScan ?? (() => {})
-  const routerFxStaticizeCompletedStrips = deps.routerFxStaticizeCompletedStrips ?? (() => {})
-  const currentSessionLiveRouterStrips = deps.currentSessionLiveRouterStrips ?? (() => [])
-  const currentSessionLiveUserAnchor = deps.currentSessionLiveUserAnchor ?? (() => null)
-  const routerFxPauseScanTimers = deps.routerFxPauseScanTimers ?? (() => {})
-  const routerFxResumeLiveStrip = deps.routerFxResumeLiveStrip ?? (() => {})
-  const insertLiveRouterStripForAnchor = deps.insertLiveRouterStripForAnchor ?? (() => {})
-  const routerFxDock = deps.routerFxDock ?? (() => false)
   const isCompactInFlightForCurrentSession =
     deps.isCompactInFlightForCurrentSession ?? (() => false)
-  const routerScanActive = deps.routerScanActive ?? (() => false)
   const clearHistorySyncTimer = deps.clearHistorySyncTimer ?? (() => {})
   const liveStreamStateBySession =
     deps.liveStreamStateBySession ?? new Map<string, ParkedStreamState>()
@@ -333,6 +353,58 @@ export function createStreamController(
   const addMessageWithOptions = deps.addMessageWithOptions ?? (() => null)
 
   const thread = (): HTMLElement | null => containerRef.current
+
+  /* ── router-fx renderer (Task 6 — routerFx.ts) ────────────────────────────
+   * Composed exactly how the tool/artifact renderers are: the controller owns
+   * the tier registry + visualisation pref (so the config loader can feed the
+   * same instances later) and wires the stream lifecycle's router-fx hooks to
+   * the renderer's methods. `scrollToBottom` below is a hoisted `function`, safe
+   * to reference from here. */
+  const routerFxRegistry = deps.routerFxRegistry ?? createRouterFxRegistry()
+  const routerFxPref = deps.routerFxPref ?? { enabled: true, variant: 'default' }
+  if (!deps.routerFxPref) routerFxLoadPref(routerFxPref)
+  const routerFxRenderer: RouterFxRenderer = createRouterFxRenderer({
+    thread,
+    dock: deps.routerFxDock ?? (() => null),
+    getSessionKey: () => getSessionKey() || '',
+    registry: routerFxRegistry,
+    pref: routerFxPref,
+    routerFeatureEnabled: deps.routerFeatureEnabled ?? (() => false),
+    esc,
+    scrollToBottom: () => scrollToBottom(),
+    isCompactInFlightForCurrentSession,
+    historyHasRendered: deps.historyHasRendered ?? (() => true),
+    historyHydrating: deps.historyHydrating ?? (() => false),
+    awaitConfig: deps.routerFxAwaitConfig ?? (() => Promise.resolve()),
+    diag,
+  })
+
+  // Stream-lifecycle router-fx hooks now route to the composed renderer
+  // (chat.js:6585/6716/6907/…). Overridable, but the renderer is the default.
+  const routerFxSettleForOutput =
+    deps.routerFxSettleForOutput ?? (() => routerFxRenderer.settleForOutput())
+  const cancelPendingRouterFxScan =
+    deps.cancelPendingRouterFxScan ??
+    ((reason: string) => routerFxRenderer.cancelPendingRouterFxScan(reason))
+  const routerFxStaticizeCompletedStrips =
+    deps.routerFxStaticizeCompletedStrips ??
+    ((key: string) => routerFxRenderer.staticizeCompletedStrips(key))
+  const currentSessionLiveRouterStrips =
+    deps.currentSessionLiveRouterStrips ??
+    ((key: string) => routerFxRenderer.currentSessionLiveRouterStrips(key))
+  // The parked live-user anchor is a send-flow concept (a later task); the
+  // router-fx engine does not track it, so this stays null until wired.
+  const currentSessionLiveUserAnchor = deps.currentSessionLiveUserAnchor ?? (() => null)
+  const routerFxPauseScanTimers =
+    deps.routerFxPauseScanTimers ?? ((el: HTMLElement) => routerFxRenderer.pauseScanTimers(el))
+  const routerFxResumeLiveStrip =
+    deps.routerFxResumeLiveStrip ?? ((el: HTMLElement) => routerFxRenderer.resumeLiveStrip(el))
+  const insertLiveRouterStripForAnchor =
+    deps.insertLiveRouterStripForAnchor ??
+    ((el: HTMLElement) => routerFxRenderer.insertLiveRouterStripForAnchor(el))
+  // Legacy `if (_routerFxDock)` tests the dock ELEMENT's presence (chat.js:6940).
+  const routerFxDock = () => routerFxRenderer.hasDock()
+  const routerScanActive = deps.routerScanActive ?? (() => false)
 
   /* ── instance fields (legacy module-globals) ──────────────────────────── */
   const seqGate = createSeqGate()
@@ -1254,6 +1326,17 @@ export function createStreamController(
     renderArtifacts: artifactRenderer.renderArtifacts,
     renderStreamArtifacts: artifactRenderer.renderStreamArtifacts,
     downloadArtifact: artifactRenderer.downloadArtifact,
+    // router-fx (Task 6 — routerFx.ts). The live entry point routes the
+    // `session.event.router_decision` event; the rest is the send/history/
+    // compaction surface later tasks drive.
+    handleRouterDecision: routerFxRenderer.handleRouterDecision,
+    buildRouterFxFromUsage: routerFxRenderer.buildRouterFxFromUsage,
+    flushPendingRouterDecisions: routerFxRenderer.flushPendingRouterDecisions,
+    cachePendingRouterDecision: routerFxRenderer.cachePendingRouterDecision,
+    scheduleRouterFxBeginScan: routerFxRenderer.scheduleBeginScan,
+    suppressRouterFxForCompaction: routerFxRenderer.suppressForCompaction,
+    routerFxRegistry,
+    routerFxPref,
     // introspection (for the transcript controller + tests)
     isStreaming: (): boolean => _isStreaming,
     streamSessionKey: (): string => _streamSessionKey,

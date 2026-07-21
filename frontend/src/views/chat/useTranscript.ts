@@ -379,10 +379,11 @@ export function useTranscript(opts: { sessionKey: string; seams?: TranscriptEven
 
     // ── Register EVERY rpc.on(...) the legacy view registers ──────────────
 
-    // chat.js:4699 — router_decision → Task-6 seam.
+    // chat.js:4699 — router_decision → controller router-fx renderer (Task 6).
     unsubs.push(
       onEvent('session.event.router_decision', (payload: StreamEventPayload) => {
         if (!gateStreamFrame('event.router_decision', payload)) return
+        void controller.handleRouterDecision(payload as Record<string, unknown>)
         seams().handleRouterDecision?.(payload)
       }),
     )

@@ -521,6 +521,55 @@ Row format:
 | Re-render stream artifacts after a reconcile replace: clear `.msg-artifacts`, re-insert from `_streamArtifacts` | chat.js:7469-7478 | ported | artifacts.ts renderStreamArtifacts, composed into the controller (getStreamBubble/getStreamArtifacts deps). Called by stream.ts replaceStreamText (chat.js:6043) — replaces the Task-2 no-op `renderStreamArtifacts` seam with the real renderer. **Live-sweep pending (controller)** |
 | Download artifact (async): authenticated fetch (Bearer + x-agentos-session-key), blob → anchor click, toast on !ok | chat.js:7653-7679 | ported (delta) | artifacts.ts downloadArtifact (verbatim). **Delta:** `UI.toast` (chat.js:7667) has no frontend surface yet — injected as a `toast` dep, default no-op (a failed download degrades silently) until the UI/toast task, same pattern as tools.ts `openModal`. Exposed on the controller; not on a live event path (invoked by a card-click handler — the click wiring is a later DOM-binding task). **Live-sweep pending (controller)** |
 
+> **Plan 3 — Task 6 (router-fx animation engine, imperative).** The ~80-function
+> router-fx subsystem (chat.js:3263-4680) ported near-verbatim (design §2.1
+> owner-approved: a self-contained imperative DOM+timer animation engine, NOT
+> reactified) into `frontend/src/views/chat/transcript/routerFx.ts` as pure
+> top-level helpers + `createRouterFxRenderer(deps)`. Legacy module-globals
+> (`_routerFxSlotList`/`_routerFxModels`/`_routerFxTierConfigs`/`_routerFxConfigTiers`)
+> extracted into a `RouterFxRegistry` (fed by the config loader — a later task);
+> the pending-decision Map, the delayed-scan bookkeeping, and the compaction-
+> suppression sticky state are renderer instance fields. Composed into
+> `createStreamController` (the router-fx lifecycle hooks the stream path already
+> called as no-op deps — `settleForOutput`/`cancelPendingRouterFxScan`/
+> `staticizeCompletedStrips`/`pauseScanTimers`/`resumeLiveStrip`/
+> `insertLiveRouterStripForAnchor`/`routerFxDock` — now route to the renderer);
+> the `session.event.router_decision` seam in `useTranscript` is filled by
+> `controller.handleRouterDecision`. Storage keys ported EXACTLY: pref
+> `agentos-router-fx`, seed prefix `osq.routerFx.seed:`. Timings ported EXACTLY:
+> scan window 600ms, start-grace 280ms, hop dwell `[50,55,65,75,90,110,140,180,240,330]`,
+> ping 220ms, burst 700ms, seed-cache cap 300/trim 250. Pure helpers are
+> unit-tested (`transcript/routerFx.test.ts`, 35 tests); DOM/animation
+> (mount/build/position/ping/scan/settle/lock/normalize/label-fit) is verified by
+> a live-browser sweep run by the plan controller — marked "live-sweep pending
+> (controller)". **No dock element in the frontend yet → `dock()` returns null →
+> all strips are suppressed** (faithful to legacy `if (!_routerFxDock)`); the dock
+> element + the config loader that feeds the registry are later tasks. Gate: FE
+> `npm run check` green (tsc + eslint 0 warnings + prettier + 945 vitest / 38 files).
+
+| behavior | legacy source | status | evidence / reason |
+| --- | --- | --- | --- |
+| Normalize model display name: strip provider prefix at last `/`, strip trailing 8-digit date | chat.js:3444-3449 | ported | routerFx.ts modelDisplayName / routerFxStripProvider. **Unit-tested** — routerFx.test.ts::modelDisplayName (parity chat.js:3444) > strips prefix; strips date; both; bare untouched; nullish returned as-is. 5/5; ::routerFxStripProvider (parity chat.js:3451). 1/1 |
+| Normalize request kind: only `"image"`→image, else text (case-sensitive) | chat.js:3464-3466 | ported | routerFx.ts routerFxNormalizeRequestKind. **Unit-tested** — routerFx.test.ts (parity chat.js:3464) > "image"→image, "text"/"TEXT"/"IMAGE"/undefined→text. 1/1. **Note:** the brief's illustrative `normalize('TEXT')===normalize('text')` holds ONLY because BOTH are non-"image"→text; legacy does NOT lowercase, so `"IMAGE"`→text |
+| Request kind from attachments: image when any attachment `mime\|\|type` starts with `image/` | chat.js:3455-3462 | ported | routerFx.ts routerFxRequestKindFromAttachments. **Unit-tested** — routerFx.test.ts (parity chat.js:3455) > image mime; reads `type` fallback (lowercased); non-image→text; empty/nullish→text. 4/4 |
+| Seed cache key: `osq.routerFx.seed:<sessionKey>:<turnIndex\|0>:<tier>` | chat.js:3582-3584 | ported | routerFx.ts routerFxSeedCacheKey. **Unit-tested** — routerFx.test.ts (parity chat.js:3582) > exact key; nullish session→"", nullish turn→0. 2/2 |
+| Tier sort: `c<n>` numeric first, then non-c lexical (non-mutating) | chat.js:3419-3428 | ported | routerFx.ts routerFxSortTiers. **Unit-tested** — routerFx.test.ts (parity chat.js:3419) > numeric c-order ahead of lexical; input not mutated. 2/2 |
+| Tier normalize: lowercase + `t[0-3]`→`c[0-3]`; else lowercased; ""/nullish→"" | chat.js:3430-3433 | ported | routerFx.ts routerFxNormalizeTier. **Unit-tested** — routerFx.test.ts (parity chat.js:3430) > T2→c2/t0→c0/C1→c1; image_model/T4 lowercased-only; ""/null→"". 3/3 |
+| Router identity: `<model.trim().toLowerCase()>\|<normalizeTier(tier)>`; ""/""→"" | chat.js:3631-3644 | ported | routerFx.ts routerFxIdentity / routerFxDecisionIdentity (routed_* fallback) / routerFxUsageIdentity. **Unit-tested** — routerFx.test.ts (parity chat.js:3631/3637/3641) > joins/keeps separator/empty; decision+usage routed_* fallbacks; nullish→"". 6/6 |
+| Visual roster: dedup by display model, request-kind filter (image-only excluded for text), fold in decision tier/model; `[]` until config tiers known | chat.js:3508-3549 | ported | routerFx.ts routerFxVisualEntries (pure over the `RouterFxRegistry`). **Unit-tested** — routerFx.test.ts (parity chat.js:3508) > []-until-config; one entry per display model; decision fold dedups; image-only excluded from text. 4/4 |
+| Multiple candidates predicate: `visualEntries(...).length > 1` | chat.js:3551-3553 | ported | routerFx.ts routerFxHasMultipleCandidates. **Unit-tested** — routerFx.test.ts (parity chat.js:3551) > true for >1; false for single. 2/2 |
+| Tier registry (module-globals): slot list + tier→model + tier→config + config-tier set; register/remember/tierConfig | chat.js:3376-3492 | ported (delta) | routerFx.ts createRouterFxRegistry (registerTier/rememberTierDecision/tierConfig/setTierConfig/setConfigTiers/setSlotList). **Delta:** legacy IIFE module-globals extracted into an explicit object so the roster builders stay pure over it and the config loader (later task) feeds it. Exercised by the visualEntries/hasMultipleCandidates tests + factory smoke. **Unit-tested** (transitively) |
+| build router-fx element: header + grid (cols/mobile-cols vars) + cells + selector; null when ≤1 candidate; pre-settled path settles+normalizes | chat.js:3708-3783 | ported | routerFx.ts createRouterFxRenderer.buildRouterFxElement. **Partially unit-tested** — routerFx.test.ts factory smoke > null with ≤1 candidate; builds a 3-cell `.router-fx` grid for >1. The pre-settled winner-cell settle + burst + label-fit are **live-sweep pending (controller)** |
+| dock predicate `if (_routerFxDock)`: tests the dock ELEMENT's presence, not a flag | chat.js:3900-3902/6940 | ported | routerFx.ts renderer.hasDock() (`!!dock()`); stream.ts binds `routerFxDock` to it. **Unit-tested** — routerFx.test.ts factory smoke > hasDock reflects the injected dock element. **No dock in the frontend → suppressed** |
+| Live entry (session.event.router_decision): tier guard, warm-cache, compaction/pref/thread gates, pending-scan + live-strip caching, config await, single-candidate + history-hydration + anchor gates, settled-strip insert | chat.js:4480-4631 | ported | routerFx.ts handleRouterDecision, composed on the controller; wired live: useTranscript `session.event.router_decision` → `controller.handleRouterDecision` (after epoch/seq gate). **Partially unit-tested** — routerFx.test.ts factory smoke > safe no-op when pref disabled (tier still warm-cached); skips a payload with no tier. The full scan→lock→settle DOM path is **live-sweep pending (controller)** |
+| Scan → lock lifecycle: schedule (280ms grace) → begin scan → JS roam (190ms hops) → 600ms cap → finish/lock → settle+burst; settle-for-output; pause/resume on park/restore | chat.js:4047-4379 | ported | routerFx.ts scheduleBeginScan/beginScan/scanRoam/finishScan/lock/lockGrid/settleForOutput/pauseScanTimers/resumeLiveStrip, composed into the controller (endStreaming/ensureStreamBubble/park/restore hooks). **Live-sweep pending (controller)** |
+| History-from-usage builder: pref + operator-flag + tier-exists gates → settled strip; seed pass-through (no `:tier` re-hash) | chat.js:4637-4680 | ported | routerFx.ts buildRouterFxFromUsage, exposed on the controller for the history renderer (turn-meta/usage reconstruction — a later task). **Live-sweep pending (controller)** |
+| Pending-decision cache + flush (anchor race): cache when no user-msg anchor / mid-hydration; flush after history renders the user turn | chat.js:3652-3685 | ported | routerFx.ts cachePendingRouterDecision/flushPendingRouterDecisions, exposed on the controller. The flush trigger (history-render completion) is wired by the history renderer once it builds router strips — a later task. **Live-sweep pending (controller)** |
+| Compaction suppression: sticky (sessionKey, turnIndex); suppress-on-compaction removes live strips + cancels pending scan | chat.js:3263-3282 | ported (delta) | routerFx.ts isSuppressedForCompactionTurn/suppressForCompaction. **Delta:** the sticky state is a renderer field; a `isSuppressedForCompactionTurn` dep override lets the Task-7 compaction owner supply the predicate instead. Exposed on the controller as `suppressRouterFxForCompaction`. **Live-sweep pending (controller)** |
+| Label auto-fit: shrink overflowing cell labels on insert/font-load/resize/lock (ResizeObserver + document.fonts.ready) | chat.js:4419-4463 | ported | routerFx.ts measureLabels/scheduleLabelFit/installLabelFit/fitLabels/disconnectLabelFit. **Live-sweep pending (controller)** — needs layout measurement (jsdom has no real layout) |
+| Preference load/save (`agentos-router-fx`): defaults enabled+default variant unless stored | chat.js:3398-3417 | ported | routerFx.ts routerFxLoadPref/routerFxSavePref; the controller hydrates the pref via routerFxLoadPref at composition. **Note:** the in-app "Visual effects" toggle that flips `enabled`+saves is a later task (the config/settings surface) |
+| Seed cache trim + resolve (localStorage): cap 300 / trim 250 oldest-by-stamp; resolve caches (stamp:tier:i<turn>) | chat.js:3589-3630 | ported | routerFx.ts routerFxSeedCacheTrim/routerFxResolveSeed/routerFxResolveLayoutSeed. **Note:** localStorage side-effecting; not unit-asserted here (the deterministic key/prefix IS asserted via routerFxSeedCacheKey). **Live-sweep pending (controller)** |
+
 ## Mechanical inventory (generated by scripts/fe_parity_inventory.py)
 
 ### RPC methods (58)
