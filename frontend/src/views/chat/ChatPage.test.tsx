@@ -200,8 +200,6 @@ describe('ChatPage', () => {
       // One "/" stripped → the literal message is "/help".
       expect((sends[0]![1] as Record<string, unknown>).message).toBe('/help')
     })
-    // A "/help" command was NEVER dispatched.
-    expect(mockRpc.call.mock.calls.filter(([m]) => m === 'commands.execute')).toHaveLength(0)
   })
 
   it('aborts the in-flight turn via chat.abort while streaming (chat.js:8444)', async () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { normalizeSlashCommand, slashCommandKey, type SlashCommand } from './logic'
@@ -34,12 +34,16 @@ export interface UseSlashCommands {
   commands: SlashCommand[]
   /**
    * Execute a typed slash-command line (chat.js:2842 `_executeSlashCommand`).
-   * Looks the command up in the map, splits off args, and dispatches. Returns
-   * true when a command was found + dispatched (so the caller does NOT also send
-   * the text as a chat message), false when unknown (legacy toasts + returns true
-   * on unknown too — see below; we mirror that so `/typo` never sends as text).
+   * If the catalog hasn't loaded yet, awaits the same load the mount effect
+   * kicked off (chat.js:2843 `if (!_slashCatalogLoaded) await
+   * _loadSlashCommands();`) before looking the command up — this covers a
+   * user submitting a command before the catalog RPC has resolved. Then looks
+   * the command up in the map, splits off args, and dispatches. Always
+   * resolves true (so the caller does NOT also send the text as a chat
+   * message) — including for an unknown command, which legacy toasts a
+   * warning for but still swallows rather than sending as text.
    */
-  execute: (text: string) => boolean
+  execute: (text: string) => Promise<boolean>
 }
 
 export function useSlashCommands(opts?: {
@@ -53,6 +57,14 @@ export function useSlashCommands(opts?: {
   const rpc = useRpc()
   const sessionKey = opts?.sessionKey ?? ''
   const [commands, setCommands] = useState<SlashCommand[]>([])
+  // chat.js:2628 `_slashCatalogLoaded` — set once the catalog resolves (success
+  // or failure), so `execute` (chat.js:2843) knows whether it must await a load
+  // first. Held in a ref: read imperatively, never during render.
+  const catalogLoadedRef = useRef(false)
+  // In-flight load promise, shared between the mount effect and `execute` so a
+  // command typed before the catalog resolves awaits the SAME RPC call rather
+  // than firing a second `commands.list_for_surface`.
+  const loadPromiseRef = useRef<Promise<void> | null>(null)
 
   // Late-bound holders so the `execute` closure always reads the latest session
   // key / delegates. Written in an effect (never during render) — `execute` is
@@ -67,41 +79,54 @@ export function useSlashCommands(opts?: {
   }, [sessionKey, opts?.onSessionAction, opts?.addSystemMessage])
 
   // ── Catalog load (chat.js:2615-2635 `_loadSlashCommands`) ─────────────────
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
+  // Extracted so both the mount effect below AND `execute` (chat.js:2843
+  // `if (!_slashCatalogLoaded) await _loadSlashCommands();`) can trigger the
+  // same load and share one in-flight promise — a command typed before the
+  // catalog resolves awaits the load rather than firing a second RPC call.
+  // The command map (chat.js:2621-2627): name + every alias → the command. Held
+  // in a ref so the imperative `execute` always reads the latest synchronously.
+  // `loadCatalog` writes this ref directly (not via a `useEffect` keyed off
+  // `commands` state) because `execute` awaits `loadCatalog()` and then reads
+  // the map in the SAME async continuation — it cannot wait for a subsequent
+  // render + effect flush to pick up the freshly loaded commands.
+  const commandMapRef = useRef<Map<string, SlashCommand>>(new Map())
+
+  const loadCatalog = useCallback((): Promise<void> => {
+    if (loadPromiseRef.current) return loadPromiseRef.current
+    const promise = (async () => {
       try {
         await rpc.waitForConnection()
         const res = (await rpc.call('commands.list_for_surface', { surface: 'web_chat' })) as {
           commands?: unknown[]
         } | null
-        if (cancelled) return
         const list = Array.isArray(res?.commands) ? res.commands : []
-        setCommands(list.map((c) => normalizeSlashCommand(c as Record<string, unknown>)))
+        const normalized = list.map((c) => normalizeSlashCommand(c as Record<string, unknown>))
+        const map = new Map<string, SlashCommand>()
+        normalized.forEach((cmd) => {
+          map.set(slashCommandKey(cmd.name), cmd)
+          ;(cmd.aliases || []).forEach((alias) => map.set(slashCommandKey(alias), cmd))
+        })
+        commandMapRef.current = map
+        setCommands(normalized)
+        catalogLoadedRef.current = true
       } catch {
-        if (!cancelled) setCommands([])
+        commandMapRef.current = new Map()
+        setCommands([])
+        catalogLoadedRef.current = false
+      } finally {
+        loadPromiseRef.current = null
       }
     })()
-    return () => {
-      cancelled = true
-    }
+    loadPromiseRef.current = promise
+    return promise
   }, [rpc])
 
-  // The command map (chat.js:2621-2627): name + every alias → the command. Held
-  // in a ref (written in an effect) so the imperative `execute` reads the latest
-  // without re-creating — never read/written during render.
-  const commandMap = useMemo(() => {
-    const map = new Map<string, SlashCommand>()
-    commands.forEach((cmd) => {
-      map.set(slashCommandKey(cmd.name), cmd)
-      ;(cmd.aliases || []).forEach((alias) => map.set(slashCommandKey(alias), cmd))
-    })
-    return map
-  }, [commands])
-  const commandMapRef = useRef(commandMap)
   useEffect(() => {
-    commandMapRef.current = commandMap
-  }, [commandMap])
+    void loadCatalog()
+    // No cleanup/cancellation flag: `loadCatalog` is shared with `execute`, so
+    // an unmount mid-load must not stop `execute`'s own await on it. The
+    // effect only needs to kick the load off once on mount.
+  }, [loadCatalog])
 
   // ── _selectSlashCmd action switch (chat.js:2684-2839), RPC-backed branches ──
   const dispatch = useCallback(
@@ -285,11 +310,20 @@ export function useSlashCommands(opts?: {
     [rpc],
   )
 
-  // chat.js:2842-2853 `_executeSlashCommand`: split cmd + args, look up the map,
-  // toast on an unknown command, else dispatch. Returns true either way so the
-  // caller never falls through to sending the text as a chat message.
+  // chat.js:2842-2853 `_executeSlashCommand`: lazy-load the catalog if it
+  // hasn't resolved yet (chat.js:2843 `if (!_slashCatalogLoaded) await
+  // _loadSlashCommands();`), THEN split cmd + args, look up the map, toast on
+  // an unknown command, else dispatch. This covers the narrow race where a
+  // user submits e.g. `/reset⏎` before the mount effect's catalog load has
+  // resolved — legacy still executes it; without this await the map would be
+  // empty and every command would toast "Unsupported command".
+  //
+  // Returns a Promise<boolean> (async, unlike legacy's fire-and-await-able
+  // async function) — callers that don't need to block on it can ignore the
+  // promise, mirroring how legacy callers rarely await `_executeSlashCommand`.
   const execute = useCallback(
-    (text: string): boolean => {
+    async (text: string): Promise<boolean> => {
+      if (!catalogLoadedRef.current) await loadCatalog()
       const parts = text.trim().split(/\s+/)
       const cmdText = parts[0] ?? ''
       const rest = parts.slice(1)
@@ -301,7 +335,7 @@ export function useSlashCommands(opts?: {
       dispatch(cmd, rest.join(' '))
       return true
     },
-    [dispatch],
+    [dispatch, loadCatalog],
   )
 
   return { commands, execute }

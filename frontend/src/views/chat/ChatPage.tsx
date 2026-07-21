@@ -69,7 +69,7 @@ export function ChatPage() {
       // send while busy is currently a no-op in useTranscript.send.)
       if (isSlashCommand) {
         setComposerValue('')
-        if (executeSlash(text)) return
+        if (await executeSlash(text)) return
       }
 
       // chat.js:6078-6082 — normalize with the resolved slash flag (a real slash
