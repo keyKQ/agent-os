@@ -55,7 +55,7 @@
 .setup-status {
   border: 1px solid color-mix(in srgb, var(--tone, var(--border)) 45%, var(--border));
   border-left: 2px solid var(--tone, var(--border));
-  border-radius: 2px;
+  border-radius: var(--radius-pill);
   padding: 0.3rem 0.65rem;
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -67,7 +67,7 @@
 .setup-warning {
   padding: 0.75rem 1rem;
   font-size: 0.85rem;
-  border-radius: 2px;
+  border-radius: var(--radius-control);
 }
 
 .setup-muted {
@@ -87,7 +87,8 @@
 .setup-reasons__item {
   border: 1px solid color-mix(in srgb, var(--tone, var(--border)) 45%, var(--border));
   border-left: 2px solid var(--tone, var(--border));
-  border-radius: 2px;
+  border-radius: var(--radius-control);
+  overflow: hidden;
 }
 .setup-reasons__action {
   display: flex;
@@ -98,6 +99,7 @@
   padding: 0.55rem 0.8rem;
   background: none;
   border: none;
+  border-radius: inherit;
   cursor: pointer;
   color: var(--foreground);
   font-size: 0.85rem;
@@ -119,7 +121,7 @@
   gap: 0.5rem;
   padding: 0.5rem 0.8rem;
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-control);
   background: var(--card);
   cursor: pointer;
   font-size: 0.85rem;
@@ -135,7 +137,7 @@
   justify-content: center;
   width: 1.4rem;
   height: 1.4rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--muted);
   font-size: 0.75rem;
 }
@@ -201,7 +203,7 @@
 .setup-tier-table select {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-control);
   padding: 0.4rem 0.55rem;
   font-size: 0.85rem;
   color: var(--foreground);
@@ -233,7 +235,7 @@
 
 .setup-needs {
   border: 1px dashed var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem 0.8rem;
   font-size: 0.8rem;
 }
@@ -244,7 +246,7 @@
 
 .setup-advanced {
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem 0.8rem;
 }
 .setup-advanced summary {
@@ -287,7 +289,7 @@
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-surface);
   overflow-x: auto;
 }
 .setup-tier-table__row {
@@ -332,6 +334,7 @@
   border-left: 2px solid var(--tone, var(--border));
   padding: 0.45rem 0.6rem;
   font-size: 0.82rem;
+  border-radius: var(--radius-control);
   background: var(--card);
 }
 
@@ -396,7 +399,7 @@
   flex-direction: column;
   gap: 0.2rem;
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-surface);
   padding: 0.6rem 0.8rem;
 }
 .setup-readiness {
@@ -417,6 +420,7 @@
   border-left: 2px solid var(--tone, var(--border));
   padding: 0.45rem 0.6rem;
   font-size: 0.82rem;
+  border-radius: var(--radius-control);
   background: var(--card);
 }
 .setup-readiness__detail {
@@ -429,6 +433,6 @@
   flex-direction: column;
   gap: 0.6rem;
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-surface);
   padding: 0.9rem;
 }

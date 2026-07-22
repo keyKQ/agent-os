@@ -139,7 +139,7 @@ function SearchCard({
   return (
     <div className="setup-mini panel">
       <div className="setup-mini__head">
-        <h4 className="t-label">Web search</h4>
+        <h3 className="t-label">Web search</h3>
         <CapabilityBadge status={status} name="search" />
       </div>
       <p className="setup-muted">{searchStatusText(status, config)}</p>
@@ -345,7 +345,7 @@ function MemoryEmbeddingCard({
   return (
     <div className="setup-mini panel">
       <div className="setup-mini__head">
-        <h4 className="t-label">Memory embedding</h4>
+        <h3 className="t-label">Memory embedding</h3>
         <CapabilityBadge status={status} name="memory_embedding" />
       </div>
       <p className="setup-muted">{memoryEmbeddingStatusText(status, config, provider)}</p>
@@ -475,7 +475,7 @@ function MemorySettingsCard({
   return (
     <div className="setup-mini panel">
       <div className="setup-mini__head">
-        <h4 className="t-label">Memory</h4>
+        <h3 className="t-label">Memory</h3>
       </div>
       <p className="setup-muted">
         Bounded long-term memory and profile notes carried into every conversation.
@@ -622,7 +622,7 @@ function ImageCard({
   return (
     <div className="setup-mini panel">
       <div className="setup-mini__head">
-        <h4 className="t-label">Image generation</h4>
+        <h3 className="t-label">Image generation</h3>
         <CapabilityBadge status={status} name="image_generation" />
       </div>
       <p className="setup-muted">{imageGenerationStatusText(status)}</p>
@@ -804,7 +804,7 @@ function AudioCard({
   return (
     <div className="setup-mini panel">
       <div className="setup-mini__head">
-        <h4 className="t-label">Voice audio</h4>
+        <h3 className="t-label">Voice audio</h3>
         <CapabilityBadge status={status} name="audio" />
       </div>
       <p className="setup-muted">{audioStatusText(status)}</p>

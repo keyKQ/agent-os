@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import {
+  ActivityIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
@@ -14,7 +15,6 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { listItemVariants, SUBTLE_EASE } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
@@ -104,9 +104,9 @@ function ConfirmDialog({
       className="sess-modal panel sess-confirm"
     >
       <header className="sess-dialog__head">
-        <h3 id={titleId} className="sess-dialog__title">
+        <h2 id={titleId} className="sess-dialog__title">
           {title}
-        </h3>
+        </h2>
       </header>
       <div id={bodyId} className="sess-confirm__body">
         {body}
@@ -168,9 +168,9 @@ function NewSessionDialog({
       <form className="sess-dialog" onSubmit={submit}>
         <header className="sess-dialog__head">
           <span className="t-label">Control · Sessions</span>
-          <h3 id={titleId} className="sess-dialog__title">
+          <h2 id={titleId} className="sess-dialog__title">
             Start a new chat
-          </h3>
+          </h2>
         </header>
         <div className="sess-dialog__body">
           <label className="sess-field">
@@ -477,36 +477,24 @@ export function SessionsPage() {
   return (
     <div className="sess-stage">
       <header className="sess-stage__header">
-        <AsciiField />
         <div className="sess-stage__title-block">
           <span className="t-label">Control · Sessions</span>
-          <h2 className="t-display">Sessions</h2>
+          <h1 className="t-display">Sessions</h1>
           <p className="sess-stage__subtitle">
             Session history, current task activity, and agent runs — open one to chat, or clean up
             old state.
           </p>
         </div>
         <div className="sess-stage__actions">
-          <div className="sess-search-wrap">
-            <SearchIcon className="sess-search-icon" aria-hidden="true" />
-            <input
-              type="text"
-              className="sess-search-input"
-              placeholder="Search sessions…"
-              autoComplete="off"
-              aria-label="Search sessions"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
           <Button
             variant="outline"
             title="Refresh"
             className="text-xs uppercase tracking-[0.14em]"
+            disabled={sessionsQuery.isFetching}
             onClick={invalidate}
           >
-            <RefreshCwIcon />
-            <span>Refresh</span>
+            <RefreshCwIcon className={sessionsQuery.isFetching ? 'sess-refresh-spin' : undefined} />
+            <span>{sessionsQuery.isFetching ? 'Refreshing…' : 'Refresh'}</span>
           </Button>
           <Button
             className="text-xs uppercase tracking-[0.14em]"
@@ -521,72 +509,107 @@ export function SessionsPage() {
         </div>
       </header>
 
-      <section className="sess-stats" aria-label="Sessions summary">
-        <StatTile
-          label="Total sessions"
-          hero
-          value={stats.total}
-          hint={`${stats.lifecycleOpen} open · ${stats.done} completed · ${stats.failedOrTimedOut} failed/timed out · ${stats.aborted} aborted`}
-        />
-        <StatTile
-          label="Executing"
-          value={stats.activeRuns}
-          active={stats.activeRuns > 0}
-          hint={stats.activeRuns ? 'tasks queued/running' : 'none executing'}
-        />
-        <StatTile
-          label="Messages"
-          value={stats.totalMessages.toLocaleString()}
-          hint={`${stats.agents} agent${stats.agents === 1 ? '' : 's'} · across all sessions`}
-        />
-      </section>
-
-      {selected.size > 0 ? (
-        <div className="sess-bulk-bar" role="region" aria-label="Bulk actions">
-          <span className="sess-bulk-bar__count">
-            <strong>{selected.size}</strong> selected
+      <section
+        className={`sess-command${sessionsQuery.isFetching ? ' is-loading' : ''}`}
+        aria-label="Session activity overview"
+        aria-busy={sessionsQuery.isFetching}
+      >
+        <div className="sess-command__toolbar">
+          <div className="sess-command__heading">
+            <span className="sess-command__icon" aria-hidden="true">
+              <ActivityIcon />
+            </span>
+            <div>
+              <span className="t-label">Activity ledger</span>
+              <strong>Session pulse</strong>
+            </div>
+          </div>
+          <span className="sess-command__meta">
+            <span className={stats.activeRuns ? 'tone-ok' : 'tone-dim'} aria-hidden="true" />
+            {stats.activeRuns ? `${stats.activeRuns} executing now` : 'No active runs'}
           </span>
-          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-            Clear
-          </Button>
-          <span className="sess-bulk-bar__spacer" />
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setDialog({ kind: 'bulk', keys: Array.from(selected) })}
-          >
-            <Trash2Icon />
-            <span>Delete selected</span>
-          </Button>
         </div>
-      ) : null}
+        <div className="sess-stats" aria-label="Sessions summary">
+          <StatTile
+            label="Total sessions"
+            hero
+            value={stats.total}
+            hint={`${stats.lifecycleOpen} open · ${stats.done} completed · ${stats.failedOrTimedOut} failed/timed out · ${stats.aborted} aborted`}
+          />
+          <StatTile
+            label="Executing"
+            value={stats.activeRuns}
+            active={stats.activeRuns > 0}
+            hint={stats.activeRuns ? 'tasks queued/running' : 'none executing'}
+          />
+          <StatTile
+            label="Messages"
+            value={stats.totalMessages.toLocaleString()}
+            hint={`${stats.agents} agent${stats.agents === 1 ? '' : 's'} · across all sessions`}
+          />
+        </div>
+      </section>
 
       <section className="sess-list">
         <div className="sess-list__head">
-          <h3 className="sess-list__title t-label">
-            {debounced ? 'Matching sessions' : 'All sessions'}{' '}
+          <div className="sess-list__heading">
+            <h2 className="sess-list__title">{debounced ? 'Matching sessions' : 'All sessions'}</h2>
             <span className="sess-list__count t-data">
-              {debounced ? `${filtered.length} of ${stats.total}` : stats.total}
+              {debounced ? `${filtered.length} of ${stats.total}` : `${stats.total} total`}
             </span>
-          </h3>
-          <label className="sess-page-size t-label">
-            <span>Show</span>
-            <select
-              value={pageSize}
-              aria-label="Rows per page"
-              onChange={(e) => {
-                setPageSize(Number(e.target.value))
-                setPage(0)
-              }}
-            >
-              {PAGE_SIZES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
+          </div>
+          <div className="sess-list__tools">
+            <div className="sess-search-wrap">
+              <SearchIcon className="sess-search-icon" aria-hidden="true" />
+              <input
+                type="text"
+                className="sess-search-input"
+                placeholder="Search sessions…"
+                autoComplete="off"
+                aria-label="Search sessions"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <label className="sess-page-size t-label">
+              <span>Rows</span>
+              <select
+                value={pageSize}
+                aria-label="Rows per page"
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setPage(0)
+                }}
+              >
+                {PAGE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
         </div>
+
+        {selected.size > 0 ? (
+          <div className="sess-bulk-bar" role="region" aria-label="Bulk actions">
+            <span className="sess-bulk-bar__count">
+              <strong>{selected.size}</strong> selected
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+            <span className="sess-bulk-bar__spacer" />
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setDialog({ kind: 'bulk', keys: Array.from(selected) })}
+            >
+              <Trash2Icon />
+              <span>Delete selected</span>
+            </Button>
+          </div>
+        ) : null}
 
         {!hasSessions ? (
           <div className="sess-empty">
@@ -618,12 +641,14 @@ export function SessionsPage() {
               <thead>
                 <tr>
                   <th className="sess-table__cell--check">
-                    <input
-                      type="checkbox"
-                      aria-label="Select all sessions on this page"
-                      checked={allOnPageSelected}
-                      onChange={(e) => toggleAllOnPage(e.target.checked)}
-                    />
+                    <label className="sess-check-target">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all sessions on this page"
+                        checked={allOnPageSelected}
+                        onChange={(e) => toggleAllOnPage(e.target.checked)}
+                      />
+                    </label>
                   </th>
                   <th aria-sort={ariaSort('key')}>
                     <button type="button" className="sess-th-sort" onClick={() => onSort('key')}>
@@ -668,12 +693,14 @@ export function SessionsPage() {
                     const rowContent = (
                       <>
                         <td className="sess-table__cell--check">
-                          <input
-                            type="checkbox"
-                            aria-label={`Select session ${key}`}
-                            checked={isSel}
-                            onChange={(e) => toggleRow(key, e.target.checked)}
-                          />
+                          <label className="sess-check-target">
+                            <input
+                              type="checkbox"
+                              aria-label={`Select session ${key}`}
+                              checked={isSel}
+                              onChange={(e) => toggleRow(key, e.target.checked)}
+                            />
+                          </label>
                         </td>
                         <td className="sess-table__cell--key">
                           <div className="sess-key-content">

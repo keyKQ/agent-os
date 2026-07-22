@@ -29,8 +29,8 @@ export interface ElevatedPillProps {
  * The SESSION override wins over the GLOBAL default for the label; the pill is
  * `is-active` whenever an effective elevated mode is in force. Status color
  * flows through the design-system `--tone` gutter (`tone-danger`) — lime stays
- * signal-only — matching the legacy `chat-pill--danger` accent. Radius stays 0
- * (the terminal look inherits `border-radius: 0` from the shared pill styles).
+ * signal-only — matching the legacy `chat-pill--danger` accent. The shared
+ * control radius keeps it aligned with the rest of the composer toolbar.
  */
 export function ElevatedPill({
   sessionMode,

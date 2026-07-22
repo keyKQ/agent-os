@@ -6,15 +6,16 @@ import { AnimatePresence } from 'motion/react'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  CalendarClockIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
+  SearchIcon,
   SendIcon,
   SquareIcon,
   Trash2Icon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { MotionListItem } from '@/lib/motion'
 import { useRpc } from '@/app/providers'
@@ -182,50 +183,52 @@ function RunsDrawer({
       ) : runs.length === 0 ? (
         <p className="cron-muted">No run history yet.</p>
       ) : (
-        <table className="cron-runs">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Status</th>
-              <th>Duration</th>
-              <th>Delivery</th>
-              <th>Reply</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {runs.map((r, i) => {
-              const row = runRow(r, relTime)
-              return (
-                <tr key={i}>
-                  <td className="cron-mono">{row.timeLabel}</td>
-                  <td>
-                    <span className={`cron-status ${row.statusOk ? 'tone-ok' : 'tone-danger'}`}>
-                      {row.status}
-                    </span>
-                  </td>
-                  <td className="cron-mono">{row.duration}</td>
-                  <td>{row.delivery}</td>
-                  <td className="cron-runs__reply">{row.reply}</td>
-                  <td>
-                    {row.sessionKey ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() =>
-                          navigate('/chat?session=' + encodeURIComponent(row.sessionKey))
-                        }
-                      >
-                        → Chat
-                      </Button>
-                    ) : null}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+        <div className="cron-runs-scroll" role="region" aria-label="Run history table" tabIndex={0}>
+          <table className="cron-runs">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Delivery</th>
+                <th>Reply</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {runs.map((r, i) => {
+                const row = runRow(r, relTime)
+                return (
+                  <tr key={i}>
+                    <td className="cron-mono">{row.timeLabel}</td>
+                    <td>
+                      <span className={`cron-status ${row.statusOk ? 'tone-ok' : 'tone-danger'}`}>
+                        {row.status}
+                      </span>
+                    </td>
+                    <td className="cron-mono">{row.duration}</td>
+                    <td>{row.delivery}</td>
+                    <td className="cron-runs__reply">{row.reply}</td>
+                    <td>
+                      {row.sessionKey ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            navigate('/chat?session=' + encodeURIComponent(row.sessionKey))
+                          }
+                        >
+                          → Chat
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -415,7 +418,7 @@ function DeleteConfirm({
           }
         }}
       >
-        <h3 className="cron-modal__title">Delete schedule</h3>
+        <h2 className="cron-modal__title">Delete schedule</h2>
         <p className="cron-modal__body">
           Delete <strong>{jobName}</strong>? This cannot be undone.
         </p>
@@ -590,57 +593,23 @@ export function CronPage() {
   return (
     <div className="cron-stage">
       <header className="cron-stage__header">
-        <AsciiField />
         <div className="cron-stage__title-block">
           <span className="t-label">Control · Schedule</span>
-          <h2 className="t-display">Cron</h2>
+          <h1 className="t-display">Cron</h1>
           <p className="cron-stage__subtitle">
             Time-driven tasks — orchestrate reminders, agent turns, and recurring work.
           </p>
         </div>
         <div className="cron-stage__actions">
-          <input
-            className="cron-search t-data"
-            type="search"
-            placeholder="Search jobs…"
-            autoComplete="off"
-            aria-label="Search jobs"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <label className="cron-sort">
-            <span className="t-label">Sort</span>
-            <select
-              className="cron-sort__select t-data"
-              aria-label="Sort jobs"
-              value={sortCol}
-              onChange={(e) => setSortCol(e.target.value as SortCol)}
-            >
-              <option value="next_run">Next run</option>
-              <option value="name">Name</option>
-              <option value="last_run">Last run</option>
-              <option value="payloadKind">Kind</option>
-              <option value="sessionTarget">Target</option>
-              <option value="expression">Schedule</option>
-            </select>
-          </label>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            title={sortAsc ? 'Ascending' : 'Descending'}
-            aria-label={`Sort direction: ${sortAsc ? 'ascending' : 'descending'}`}
-            onClick={() => setSortAsc((v) => !v)}
-          >
-            {sortAsc ? <ArrowUpIcon /> : <ArrowDownIcon />}
-          </Button>
           <Button
             variant="outline"
             title="Refresh"
             className="text-xs uppercase tracking-[0.14em]"
+            disabled={jobsQuery.isFetching}
             onClick={() => void invalidate()}
           >
-            <RefreshCwIcon />
-            <span>Refresh</span>
+            <RefreshCwIcon className={jobsQuery.isFetching ? 'cron-refresh-spin' : undefined} />
+            <span>{jobsQuery.isFetching ? 'Refreshing…' : 'Refresh'}</span>
           </Button>
           <Button
             className="text-xs uppercase tracking-[0.14em]"
@@ -652,31 +621,91 @@ export function CronPage() {
         </div>
       </header>
 
-      <section className="cron-stats" aria-label="Cron summary">
-        <StatTile
-          label="Active schedules"
-          hero
-          value={enabledCount}
-          hint={paused ? `${paused} paused` : total ? 'all enabled' : 'none configured'}
-        />
-        <StatTile
-          label="Upcoming runs"
-          value={upcoming}
-          hint={upcoming ? 'scheduled ahead' : 'no upcoming runs'}
-        />
-        <StatTile label="Reminders" value={reminders} hint="static reminders" />
-        <StatTile label="Agent tasks" value={agentTasks} hint="scheduled turns" />
+      <section
+        className={`cron-command${jobsQuery.isFetching ? ' is-loading' : ''}`}
+        aria-label="Schedule operations"
+        aria-busy={jobsQuery.isFetching}
+      >
+        <div className="cron-command__toolbar">
+          <div className="cron-command__heading">
+            <span className="cron-command__icon" aria-hidden="true">
+              <CalendarClockIcon />
+            </span>
+            <div>
+              <span className="t-label">Automation clock</span>
+              <strong>Schedule posture</strong>
+            </div>
+          </div>
+          <span className="cron-command__meta t-data">
+            <span className={enabledCount ? 'tone-ok' : 'tone-dim'} aria-hidden="true" />
+            {enabledCount ? `${enabledCount} active` : 'Scheduler idle'}
+          </span>
+        </div>
+        <div className="cron-stats" aria-label="Cron summary">
+          <StatTile
+            label="Active schedules"
+            hero
+            value={enabledCount}
+            hint={paused ? `${paused} paused` : total ? 'all enabled' : 'none configured'}
+          />
+          <StatTile
+            label="Upcoming runs"
+            value={upcoming}
+            hint={upcoming ? 'scheduled ahead' : 'no upcoming runs'}
+          />
+          <StatTile label="Reminders" value={reminders} hint="static reminders" />
+          <StatTile label="Agent tasks" value={agentTasks} hint="scheduled turns" />
+        </div>
       </section>
 
       <section className="cron-list">
         <div className="cron-list__head">
-          <h3 className="cron-list__title t-label">
-            {search ? 'Matching schedules' : 'All schedules'}{' '}
+          <div className="cron-list__heading">
+            <h2 className="cron-list__title">{search ? 'Matching schedules' : 'All schedules'}</h2>
             <span className="cron-list__count t-data">
               {visible.length}
               {search ? ` of ${total}` : ''}
             </span>
-          </h3>
+          </div>
+          <div className="cron-list__tools">
+            <div className="cron-search-wrap">
+              <SearchIcon aria-hidden="true" />
+              <input
+                className="cron-search t-data"
+                type="search"
+                placeholder="Search jobs…"
+                autoComplete="off"
+                aria-label="Search jobs"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <label className="cron-sort">
+              <span className="t-label">Sort</span>
+              <select
+                className="cron-sort__select t-data"
+                aria-label="Sort jobs"
+                value={sortCol}
+                onChange={(e) => setSortCol(e.target.value as SortCol)}
+              >
+                <option value="next_run">Next run</option>
+                <option value="name">Name</option>
+                <option value="last_run">Last run</option>
+                <option value="payloadKind">Kind</option>
+                <option value="sessionTarget">Target</option>
+                <option value="expression">Schedule</option>
+              </select>
+            </label>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              title={sortAsc ? 'Ascending' : 'Descending'}
+              aria-label={`Sort direction: ${sortAsc ? 'ascending' : 'descending'}`}
+              onClick={() => setSortAsc((v) => !v)}
+            >
+              {sortAsc ? <ArrowUpIcon /> : <ArrowDownIcon />}
+            </Button>
+          </div>
         </div>
 
         {jobs.length === 0 ? (

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
@@ -100,6 +100,10 @@ describe('ApprovalsPage', () => {
     // Pending stat reflects the store count.
     expect(screen.getByText('shell')).toBeInTheDocument()
     expect(screen.getByText('rm -rf /tmp/x')).toBeInTheDocument()
+    const pendingRegion = screen.getByRole('region', { name: 'Pending approvals' })
+    expect(pendingRegion.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
   })
 
   it('re-polls the monitor on mount so the durable pending list is fresh', async () => {
@@ -111,6 +115,15 @@ describe('ApprovalsPage', () => {
     setStore([], 'prompt')
     renderPage()
     expect(screen.getByText(/no pending approvals/i)).toBeInTheDocument()
+  })
+
+  it('presents the risk posture and policy as one decision workspace', () => {
+    setStore([], 'prompt')
+    renderPage()
+    const operations = screen.getByLabelText('Approval operations')
+    expect(within(operations).getByText('Execution gate')).toBeInTheDocument()
+    expect(document.querySelector('.ap-workspace .ap-empty')).not.toBeNull()
+    expect(document.querySelector('.ap-workspace .ap-strategy')).not.toBeNull()
   })
 
   it('reflects the active strategy from the store (auto-approve preselected)', () => {

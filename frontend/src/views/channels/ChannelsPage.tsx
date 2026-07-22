@@ -3,9 +3,8 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'motion/react'
-import { RefreshCwIcon, SettingsIcon } from 'lucide-react'
+import { CableIcon, RefreshCwIcon, SettingsIcon, ShieldCheckIcon } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { CommandLine } from '@/components/CommandLine'
 import { MotionListItem } from '@/lib/motion'
 import { Button } from '@/components/ui/button'
@@ -133,7 +132,7 @@ function AccessPanel({
       <div className="ch-access__head">
         <div>
           <span className="ch-access__eyebrow t-label">Telegram accounts</span>
-          <h4 className="ch-access__title">Chat access</h4>
+          <h3 className="ch-access__title">Chat access</h3>
         </div>
         <label className="ch-access__mode">
           <span className="t-label">Mode</span>
@@ -242,44 +241,46 @@ function ChannelCard({
     name: d.name,
   })
   return (
-    <article className={`panel ch-card ${toneClass(d.tone)}`} aria-label={`Channel ${d.name}`}>
+    <article className={`ch-card ${toneClass(d.tone)}`} aria-label={`Channel ${d.name}`}>
       <header className="ch-card__head">
-        <span
-          className={`ch-card__dot tone-${d.tone === 'danger' ? 'danger' : d.tone === 'ok' ? 'ok' : 'dim'}`}
-          aria-hidden="true"
-        />
-        <span className="ch-card__name" title={d.name}>
-          {d.name}
-        </span>
-        <span className="ch-card__type t-data">{channel.type || 'unknown'}</span>
-      </header>
-      <div className="ch-card__status">
+        <div className="ch-card__identity">
+          <span
+            className={`ch-card__dot tone-${d.tone === 'danger' ? 'danger' : d.tone === 'ok' ? 'ok' : 'dim'}`}
+            aria-hidden="true"
+          />
+          <div>
+            <span className="ch-card__name" title={d.name}>
+              {d.name}
+            </span>
+            <span className="ch-card__type t-data">{channel.type || 'unknown'}</span>
+          </div>
+        </div>
         <span className={`ch-card__chip t-data ${toneClass(d.tone)}`}>{d.status}</span>
+      </header>
+      <div className="ch-card__body">
+        <dl className="ch-card__meta">
+          <div>
+            <dt className="t-label">Connected</dt>
+            <dd className="t-data">{since}</dd>
+          </div>
+          <div>
+            <dt className="t-label">Restart attempts</dt>
+            <dd className="t-data">{d.attempts}</dd>
+          </div>
+        </dl>
+        <p className="ch-card__hint">{hint}</p>
+        <AccessPanel
+          channel={channel}
+          busy={busy}
+          onSetMode={onSetMode}
+          onResolve={onResolve}
+          onRevoke={onRevoke}
+        />
+        <details className="ch-card__config">
+          <summary>Adapter config</summary>
+          <pre className="ch-card__config-pre t-data">{d.configJson}</pre>
+        </details>
       </div>
-      <dl className="ch-card__meta">
-        <div>
-          <dt className="t-label">Connected</dt>
-          <dd className="t-data">{since}</dd>
-        </div>
-        <div>
-          <dt className="t-label">Restart attempts</dt>
-          <dd className="t-data">{d.attempts}</dd>
-        </div>
-      </dl>
-      <AccessPanel
-        channel={channel}
-        busy={busy}
-        onSetMode={onSetMode}
-        onResolve={onResolve}
-        onRevoke={onRevoke}
-      />
-      <details className="ch-card__config">
-        <summary>Adapter config</summary>
-        <pre className="ch-card__config-pre t-data">{d.configJson}</pre>
-      </details>
-      <footer className="ch-card__footnote">
-        <span>{hint}</span>
-      </footer>
     </article>
   )
 }
@@ -420,10 +421,9 @@ export function ChannelsPage() {
   return (
     <div className="ch-stage">
       <header className="ch-stage__header">
-        <AsciiField />
         <div className="ch-stage__title-block">
           <span className="t-label">Control · Channels</span>
-          <h2 className="t-display">Channels</h2>
+          <h1 className="t-display">Channels</h1>
           <p className="ch-stage__subtitle">
             Runtime status for configured channels, with account approvals for Telegram bots.
           </p>
@@ -432,56 +432,92 @@ export function ChannelsPage() {
           variant="outline"
           title="Refresh"
           className="ch-stage__refresh text-xs uppercase tracking-[0.14em]"
+          disabled={channelsQuery.isFetching}
           onClick={() => void invalidate()}
         >
-          <RefreshCwIcon />
-          <span>Refresh</span>
+          <RefreshCwIcon className={channelsQuery.isFetching ? 'ch-refresh-spin' : undefined} />
+          <span>{channelsQuery.isFetching ? 'Refreshing…' : 'Refresh'}</span>
         </Button>
       </header>
 
-      <section className="ch-stats" aria-label="Channels summary">
-        <StatTile
-          label="Total channels"
-          hero
-          value={stats.total}
-          hint={`${stats.typeCount} type${stats.typeCount === 1 ? '' : 's'}`}
-        />
-        <StatTile
-          label="Connected"
-          value={stats.connected}
-          hint={
-            stats.connected ? 'live' : stats.attention ? `${stats.attention} unhealthy` : 'all idle'
-          }
-        />
-        <StatTile
-          label="Inactive"
-          value={stats.inactive}
-          hint={
-            stats.attention ? (
-              // channels.js:139 — legacy wraps this hint in .ch-neg (--danger).
-              <span className="ch-neg">{stats.attention} need attention</span>
-            ) : (
-              inactiveHint(stats.inactive, stats.disabled)
-            )
-          }
-        />
-        <StatTile label="Restart attempts" value={stats.restarts} hint="since gateway start" />
-        <StatTile
-          label="Chat approvals"
-          value={stats.pendingAccess}
-          attention={stats.pendingAccess > 0}
-          hint={stats.pendingAccess ? 'Telegram account requests' : 'no accounts waiting'}
-        />
+      <section
+        className={`ch-command${channelsQuery.isFetching ? ' is-loading' : ''}`}
+        aria-label="Channel operations"
+        aria-busy={channelsQuery.isFetching}
+      >
+        <div className="ch-command__toolbar">
+          <div className="ch-command__heading">
+            <span className="ch-command__icon" aria-hidden="true">
+              <CableIcon />
+            </span>
+            <div>
+              <span className="t-label">Integration mesh</span>
+              <strong>Channel posture</strong>
+            </div>
+          </div>
+          <span className="ch-command__cadence t-data">
+            <span aria-hidden="true" /> Live · refreshes every 5s
+          </span>
+        </div>
+        <div className="ch-stats" aria-label="Channels summary">
+          <StatTile
+            label="Total channels"
+            hero
+            value={stats.total}
+            hint={`${stats.typeCount} type${stats.typeCount === 1 ? '' : 's'} configured`}
+          />
+          <StatTile
+            label="Connected"
+            value={stats.connected}
+            hint={
+              stats.connected
+                ? 'live now'
+                : stats.attention
+                  ? `${stats.attention} unhealthy`
+                  : 'all idle'
+            }
+          />
+          <StatTile
+            label="Inactive"
+            value={stats.inactive}
+            hint={
+              stats.attention ? (
+                // channels.js:139 — legacy wraps this hint in .ch-neg (--danger).
+                <span className="ch-neg">{stats.attention} need attention</span>
+              ) : (
+                inactiveHint(stats.inactive, stats.disabled)
+              )
+            }
+          />
+          <StatTile label="Restart attempts" value={stats.restarts} hint="since gateway start" />
+          <StatTile
+            label="Chat approvals"
+            value={stats.pendingAccess}
+            attention={stats.pendingAccess > 0}
+            hint={stats.pendingAccess ? 'Telegram account requests' : 'nothing waiting'}
+          />
+        </div>
       </section>
 
       <section className="ch-list">
         <div className="ch-list__head">
-          <h3 className="ch-list__title t-label">
-            Configured channels{' '}
+          <div>
+            <h2 className="ch-list__title">Configured channels</h2>
+            <p className="ch-list__description">
+              Runtime adapters, connection health, and messaging access in one place.
+            </p>
+          </div>
+          <div className="ch-list__actions">
             {channels.length ? (
-              <span className="ch-list__count t-data">{channels.length}</span>
+              <span className="ch-list__count t-data">
+                {channels.length} channel{channels.length === 1 ? '' : 's'}
+              </span>
             ) : null}
-          </h3>
+            <Button type="button" variant="outline" size="sm" onClick={() => navigate('/setup')}>
+              <ShieldCheckIcon />
+              <span>Manage setup</span>
+            </Button>
+          </div>
         </div>
 
         {channels.length === 0 ? (

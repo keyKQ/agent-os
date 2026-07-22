@@ -2,13 +2,25 @@ import './skills.css'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'motion/react'
-import { DownloadIcon, RefreshCwIcon, SearchIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  GlobeIcon,
+  PackageIcon,
+  RefreshCwIcon,
+  SearchIcon,
+  TriangleAlertIcon,
+  XIcon,
+} from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { MotionListItem } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
+import bankrSymbolUrl from '../../../../src/agentos/gateway/static/img/bankr-symbol.svg'
+import robinhoodSymbolUrl from '../../../../src/agentos/gateway/static/img/robinhood-symbol.png'
 import {
   CAT_LABEL,
   REGISTRY_SEARCH_DEBOUNCE_MS,
@@ -48,6 +60,15 @@ const SHOW_BANKR = true
 
 type Tab = 'installed' | 'bankr' | 'robinhood' | 'community'
 type RegistryGroup = 'bankr' | 'community'
+type PartnerBrand = 'bankr' | 'robinhood'
+const TAB_ORDER: Tab[] = SHOW_BANKR
+  ? ['installed', 'bankr', 'robinhood', 'community']
+  : ['installed', 'robinhood', 'community']
+
+const PARTNER_BRANDS: Record<PartnerBrand, { label: string; asset: string }> = {
+  bankr: { label: 'Bankr', asset: bankrSymbolUrl },
+  robinhood: { label: 'Robinhood', asset: robinhoodSymbolUrl },
+}
 
 interface SkillsListResponse {
   skills?: RawSkill[]
@@ -67,12 +88,43 @@ interface MutationResponse {
   message?: string
 }
 
+function PartnerLogo({
+  brand,
+  className,
+  decorative = false,
+}: {
+  brand: PartnerBrand
+  className: string
+  decorative?: boolean
+}) {
+  const [broken, setBroken] = useState(false)
+  const config = PARTNER_BRANDS[brand]
+
+  if (broken) {
+    return (
+      <span className={`${className} ${className}--fallback`} aria-hidden="true">
+        {config.label.slice(0, 1)}
+      </span>
+    )
+  }
+
+  return (
+    <img
+      className={className}
+      src={config.asset}
+      alt={decorative ? '' : `${config.label} logo`}
+      width="40"
+      height="40"
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
 // ── Logo badge (skills.js:643-655) ────────────────────────────────────────────
 function LogoBadge({ item, cls }: { item: RegistryItem; cls: string }) {
   const logoUrl = safeUrl(item.logo)
   const [broken, setBroken] = useState(false)
   if (!logoUrl || broken) {
-    if (item.emoji && !logoUrl) return <span className={`${cls} ${cls}--emoji`}>{item.emoji}</span>
     return <span className={`${cls} ${cls}--initials`}>{initials(item.provider || item.name)}</span>
   }
   return <img className={cls} src={logoUrl} alt="" loading="lazy" onError={() => setBroken(true)} />
@@ -81,6 +133,9 @@ function LogoBadge({ item, cls }: { item: RegistryItem; cls: string }) {
 // ── Installed skill card (skills.js:447-465) ──────────────────────────────────
 function SkillCard({ skill, onOpen }: { skill: RawSkill; onOpen: () => void }) {
   const desc = skill.description || ''
+  const status = skillStatus(skill)
+  const statusLabel =
+    status === 'ready' ? 'Ready' : status === 'needs_setup' ? 'Setup required' : 'No manifest'
   return (
     <button
       type="button"
@@ -90,11 +145,20 @@ function SkillCard({ skill, onOpen }: { skill: RawSkill; onOpen: () => void }) {
       title={skill.name + (desc ? ': ' + desc : '')}
     >
       <div className="sk-card__head">
-        <span className={`sk-card__dot ${skillDotClass(skill)}`} title={skillDotTitle(skill)} />
-        {skill.emoji ? <span className="sk-card__emoji">{skill.emoji}</span> : null}
+        <span className="sk-card__icon" aria-hidden="true">
+          <PackageIcon />
+        </span>
         <span className="sk-card__name">{skill.name}</span>
+        <span className={`sk-card__status ${skillDotClass(skill)}`} title={skillDotTitle(skill)}>
+          <span className="sk-card__dot" aria-hidden="true" />
+          {statusLabel}
+        </span>
       </div>
       <p className="sk-card__desc">{desc}</p>
+      <span className="sk-card__foot" aria-hidden="true">
+        View details
+        <ChevronRightIcon />
+      </span>
     </button>
   )
 }
@@ -118,28 +182,23 @@ function RegistryCard({
   // category (label from CAT_LABEL, falling back to the raw category key).
   const cat = item.category && item.category !== 'other' ? item.category : ''
   return (
-    <div
-      className="sk-rcard"
-      role="button"
-      tabIndex={0}
-      aria-label={`Catalog skill ${item.name}`}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onOpen()
-        }
-      }}
-    >
-      <div className="sk-rcard__head">
-        <LogoBadge item={item} cls="sk-rcard__logo" />
-        <div className="sk-rcard__titles">
-          <span className="sk-rcard__name">{item.name}</span>
-          <span className="sk-rcard__provider">{item.provider || item.source || ''}</span>
+    <article className="sk-rcard" aria-label={`Catalog skill ${item.name}`}>
+      <button
+        type="button"
+        className="sk-rcard__details"
+        aria-label={`View details for ${item.name}`}
+        onClick={onOpen}
+      >
+        <div className="sk-rcard__head">
+          <LogoBadge item={item} cls="sk-rcard__logo" />
+          <div className="sk-rcard__titles">
+            <span className="sk-rcard__name">{item.name}</span>
+            <span className="sk-rcard__provider">{item.provider || item.source || ''}</span>
+          </div>
+          {cat ? <span className="sk-rcard__cat">{CAT_LABEL[cat] || cat}</span> : null}
         </div>
-        {cat ? <span className="sk-rcard__cat">{CAT_LABEL[cat] || cat}</span> : null}
-      </div>
-      <p className="sk-rcard__desc">{item.description || 'View details →'}</p>
+        <span className="sk-rcard__desc">{item.description || 'Open details'}</span>
+      </button>
       <div className="sk-rcard__foot">
         <span className="sk-rcard__src sk-mono">{item.source || ''}</span>
         <InstallButton
@@ -151,7 +210,7 @@ function RegistryCard({
           }}
         />
       </div>
-    </div>
+    </article>
   )
 }
 
@@ -167,7 +226,13 @@ function InstallButton({
   large?: boolean
   onInstall: (force: boolean, e: React.MouseEvent) => void
 }) {
-  if (action === 'installed') return <span className="sk-chip sk-chip--ok">✓ Installed</span>
+  if (action === 'installed')
+    return (
+      <span className="sk-chip sk-chip--ok">
+        <CheckIcon aria-hidden="true" />
+        Installed
+      </span>
+    )
   if (action === 'force') {
     return (
       <Button
@@ -177,7 +242,8 @@ function InstallButton({
         disabled={busy}
         onClick={(e) => onInstall(true, e)}
       >
-        {busy ? 'Force installing…' : '⚠ Force install'}
+        {!busy ? <TriangleAlertIcon aria-hidden="true" /> : null}
+        {busy ? 'Force installing…' : 'Force install'}
       </Button>
     )
   }
@@ -439,90 +505,106 @@ export function SkillsPage() {
   return (
     <div className="sk-stage">
       <header className="sk-stage__header">
-        <AsciiField />
         <div className="sk-stage__title-block">
-          <span className="t-label">Control · Skills</span>
-          <h2 className="t-display">Skills</h2>
+          <h1 className="t-display">Skills</h1>
           <p className="sk-stage__subtitle">
-            Composable agent capabilities — bundled packs, partner catalogs, and the wider
-            community.
+            Manage installed capabilities and discover trusted skills for your agents.
           </p>
         </div>
         <div className="sk-stage__actions">
-          {tab === 'installed' ? (
-            <div className="sk-search-wrap">
-              <SearchIcon className="sk-search-icon" aria-hidden="true" />
-              <input
-                type="search"
-                className="sk-search-input"
-                placeholder="Filter installed…"
-                aria-label="Filter installed skills"
-                autoComplete="off"
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-              />
-            </div>
-          ) : null}
-          <Button
-            variant="outline"
-            title="Refresh"
-            className="text-xs uppercase tracking-[0.14em]"
-            onClick={refresh}
-          >
+          <Button variant="outline" title="Refresh" className="sk-refresh" onClick={refresh}>
             <RefreshCwIcon />
             <span>Refresh</span>
           </Button>
         </div>
       </header>
 
-      {/* Metric pills → status filter (skills.js:342-367) */}
-      <section className="sk-metrics" aria-label="Skills summary">
-        <MetricPill
-          label="All"
-          value={stats.total}
-          tone="accent"
-          active={statusFilter === 'all'}
-          onClick={() => setStatusFilter('all')}
-        />
-        <MetricPill
-          label="Ready"
-          value={stats.ready}
-          tone="ok"
-          active={statusFilter === 'ready'}
-          onClick={() => setStatusFilter('ready')}
-        />
-        <MetricPill
-          label="Needs setup"
-          value={stats.needs}
-          tone="warn"
-          active={statusFilter === 'needs-setup'}
-          onClick={() => setStatusFilter('needs-setup')}
-        />
-        <MetricPill
-          label="No manifest"
-          value={stats.notDeclared}
-          active={statusFilter === 'not-declared'}
-          onClick={() => setStatusFilter('not-declared')}
-        />
-      </section>
-
       {/* Tabs (skills.js:107-112) */}
-      <div className="sk-tabs" role="group" aria-label="Skill source">
-        <TabButton current={tab} tab="installed" onSelect={setTab}>
-          Installed
-        </TabButton>
-        {SHOW_BANKR ? (
-          <TabButton current={tab} tab="bankr" onSelect={setTab}>
-            Bankr
-          </TabButton>
-        ) : null}
-        <TabButton current={tab} tab="robinhood" onSelect={setTab}>
-          Robinhood
-        </TabButton>
-        <TabButton current={tab} tab="community" onSelect={setTab}>
-          Community
-        </TabButton>
-      </div>
+      <nav className="sk-source-nav" aria-label="Skill source">
+        <div className="sk-tabs" role="tablist" aria-label="Skill source">
+          <TabButton
+            current={tab}
+            tab="installed"
+            label="Installed"
+            description={`${stats.total} local skills`}
+            icon={<PackageIcon aria-hidden="true" />}
+            onSelect={setTab}
+          />
+          {SHOW_BANKR ? (
+            <TabButton
+              current={tab}
+              tab="bankr"
+              label="Bankr"
+              description="Partner catalog"
+              icon={<PartnerLogo brand="bankr" className="sk-tab__brand" decorative />}
+              onSelect={setTab}
+            />
+          ) : null}
+          <TabButton
+            current={tab}
+            tab="robinhood"
+            label="Robinhood"
+            description="Bundled partner"
+            icon={<PartnerLogo brand="robinhood" className="sk-tab__brand" decorative />}
+            onSelect={setTab}
+          />
+          <TabButton
+            current={tab}
+            tab="community"
+            label="Community"
+            description="Open catalog"
+            icon={<GlobeIcon aria-hidden="true" />}
+            onSelect={setTab}
+          />
+        </div>
+      </nav>
+
+      {tab === 'installed' ? (
+        <div className="sk-library-tools">
+          <div className="sk-search-wrap sk-search-wrap--library">
+            <SearchIcon className="sk-search-icon" aria-hidden="true" />
+            <input
+              type="search"
+              className="sk-search-input sk-search-input--library"
+              placeholder="Search installed skills"
+              aria-label="Filter installed skills"
+              autoComplete="off"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+          </div>
+          {/* Metric pills → status filter (skills.js:342-367) */}
+          <section className="sk-metrics" aria-label="Skills summary">
+            <MetricPill
+              label="All"
+              value={stats.total}
+              tone="accent"
+              active={statusFilter === 'all'}
+              onClick={() => setStatusFilter('all')}
+            />
+            <MetricPill
+              label="Ready"
+              value={stats.ready}
+              tone="ok"
+              active={statusFilter === 'ready'}
+              onClick={() => setStatusFilter('ready')}
+            />
+            <MetricPill
+              label="Needs setup"
+              value={stats.needs}
+              tone="warn"
+              active={statusFilter === 'needs-setup'}
+              onClick={() => setStatusFilter('needs-setup')}
+            />
+            <MetricPill
+              label="No manifest"
+              value={stats.notDeclared}
+              active={statusFilter === 'not-declared'}
+              onClick={() => setStatusFilter('not-declared')}
+            />
+          </section>
+        </div>
+      ) : null}
 
       {tab === 'installed' ? (
         <InstalledPanel
@@ -558,41 +640,52 @@ export function SkillsPage() {
 
       {tab === 'community' ? (
         <>
-          <div className="sk-github-install">
-            <div className="sk-search-wrap sk-search-wrap--lg">
-              <DownloadIcon className="sk-search-icon" aria-hidden="true" />
-              <input
-                type="url"
-                className="sk-search-input sk-search-input--lg"
-                placeholder="https://github.com/owner/repo/tree/main/path/to/skill"
-                aria-label="Install from GitHub URL"
-                autoComplete="off"
-                value={githubUrl}
-                onChange={(e) => setGithubUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && githubUrl.trim()) {
+          <section className="sk-github-install" aria-labelledby="sk-github-title">
+            <div className="sk-github-install__intro">
+              <span className="sk-github-install__icon" aria-hidden="true">
+                <DownloadIcon />
+              </span>
+              <div>
+                <h2 id="sk-github-title">Install from GitHub</h2>
+                <p>Add a skill directly from a public repository or folder.</p>
+              </div>
+            </div>
+            <div className="sk-github-install__controls">
+              <div className="sk-search-wrap sk-search-wrap--lg">
+                <input
+                  type="url"
+                  className="sk-search-input sk-search-input--lg"
+                  placeholder="https://github.com/owner/repo/tree/main/skill"
+                  aria-label="Install from GitHub URL"
+                  autoComplete="off"
+                  value={githubUrl}
+                  onChange={(e) => setGithubUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && githubUrl.trim()) {
+                      installMutation.mutate({
+                        identifier: githubUrl.trim(),
+                        source: 'github',
+                        force: false,
+                      })
+                    }
+                  }}
+                />
+              </div>
+              <Button
+                disabled={!githubUrl.trim()}
+                onClick={() => {
+                  if (githubUrl.trim())
                     installMutation.mutate({
                       identifier: githubUrl.trim(),
                       source: 'github',
                       force: false,
                     })
-                  }
                 }}
-              />
+              >
+                Install
+              </Button>
             </div>
-            <Button
-              onClick={() => {
-                if (githubUrl.trim())
-                  installMutation.mutate({
-                    identifier: githubUrl.trim(),
-                    source: 'github',
-                    force: false,
-                  })
-              }}
-            >
-              Install GitHub URL
-            </Button>
-          </div>
+          </section>
           <RegistryPanel
             group="community"
             // A live query supersedes the snapshot as the base list.
@@ -695,23 +788,54 @@ function MetricPill({
 function TabButton({
   current,
   tab,
+  label,
+  description,
+  icon,
   onSelect,
-  children,
 }: {
   current: Tab
   tab: Tab
+  label: string
+  description: string
+  icon: React.ReactNode
   onSelect: (t: Tab) => void
-  children: React.ReactNode
 }) {
   const active = current === tab
+  const moveFocus = (next: Tab) => {
+    onSelect(next)
+    document.getElementById(`sk-tab-${next}`)?.focus()
+  }
   return (
     <button
       type="button"
       className={`sk-tab${active ? ' is-active' : ''}`}
-      aria-pressed={active}
+      id={`sk-tab-${tab}`}
+      role="tab"
+      aria-label={label}
+      aria-selected={active}
+      aria-controls={`sk-panel-${tab}`}
+      tabIndex={active ? 0 : -1}
       onClick={() => onSelect(tab)}
+      onKeyDown={(event) => {
+        const index = TAB_ORDER.indexOf(tab)
+        if (event.key === 'Home') {
+          event.preventDefault()
+          moveFocus(TAB_ORDER[0]!)
+        } else if (event.key === 'End') {
+          event.preventDefault()
+          moveFocus(TAB_ORDER[TAB_ORDER.length - 1]!)
+        } else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+          event.preventDefault()
+          const offset = event.key === 'ArrowRight' ? 1 : -1
+          moveFocus(TAB_ORDER[(index + offset + TAB_ORDER.length) % TAB_ORDER.length]!)
+        }
+      }}
     >
-      {children}
+      <span className="sk-tab__icon">{icon}</span>
+      <span className="sk-tab__copy">
+        <span className="sk-tab__label">{label}</span>
+        <span className="sk-tab__description">{description}</span>
+      </span>
     </button>
   )
 }
@@ -731,17 +855,30 @@ function InstalledPanel({
   emptyMessage: string
   onOpen: (name: string) => void
 }) {
-  if (error) return <div className="sk-error">Failed to load skills: {error}</div>
-  if (loading) return <div className="sk-registry__loading">Loading skills…</div>
-  if (empty) return <div className="sk-empty__state">{emptyMessage}</div>
+  if (error)
+    return (
+      <div id="sk-panel-installed" role="tabpanel" className="sk-error">
+        Failed to load skills: {error}
+      </div>
+    )
+  if (loading) return <SkillsSkeleton label="Loading installed skills" />
+  if (empty)
+    return (
+      <div id="sk-panel-installed" role="tabpanel" className="sk-empty__state">
+        {emptyMessage}
+      </div>
+    )
   return (
-    <div className="sk-panel">
+    <div
+      id="sk-panel-installed"
+      role="tabpanel"
+      aria-labelledby="sk-tab-installed"
+      className="sk-panel"
+    >
       {groups.map((g) => (
         <details key={g.layer} className="sk-group" open>
           <summary className="sk-group__head">
-            <span className="sk-group__caret" aria-hidden="true">
-              ▾
-            </span>
+            <ChevronDownIcon className="sk-group__caret" aria-hidden="true" />
             <span className="sk-group__label">{g.label}</span>
             <span className="sk-group__count">{g.skills.length}</span>
             <span className="sk-group__meta">{layerHelp(g.layer)}</span>
@@ -761,6 +898,48 @@ function InstalledPanel({
   )
 }
 
+function SkillsSkeleton({ label }: { label: string }) {
+  return (
+    <div className="sk-skeleton" role="status" aria-label={label}>
+      {Array.from({ length: 6 }, (_, index) => (
+        <span key={index} className="sk-skeleton__card" aria-hidden="true">
+          <span className="sk-skeleton__line sk-skeleton__line--title" />
+          <span className="sk-skeleton__line" />
+          <span className="sk-skeleton__line sk-skeleton__line--short" />
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function PartnerIntro({
+  brand,
+  title,
+  description,
+  count,
+}: {
+  brand: PartnerBrand
+  title: string
+  description: string
+  count?: number
+}) {
+  return (
+    <div className={`sk-partner sk-partner--${brand}`}>
+      <PartnerLogo brand={brand} className="sk-partner__logo" />
+      <div className="sk-partner__copy">
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </div>
+      {typeof count === 'number' ? (
+        <span className="sk-partner__count">
+          <strong>{count}</strong>
+          {count === 1 ? ' skill' : ' skills'}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
 function RobinhoodPanel({
   skills,
   onOpen,
@@ -768,28 +947,38 @@ function RobinhoodPanel({
   skills: RawSkill[]
   onOpen: (name: string) => void
 }) {
-  if (skills.length === 0) {
-    return (
-      <div className="sk-empty">
-        <p className="sk-empty__title">Robinhood skills are on the way</p>
-        <p className="sk-empty__hint">
-          No Robinhood skills installed yet. Check back soon, or browse the Bankr &amp; Community
-          catalogs in the meantime.
-        </p>
-      </div>
-    )
-  }
   return (
-    <div className="sk-panel">
-      <div className="sk-grid">
-        <AnimatePresence initial={false}>
-          {skills.map((s) => (
-            <MotionListItem key={s.name}>
-              <SkillCard skill={s} onOpen={() => onOpen(s.name!)} />
-            </MotionListItem>
-          ))}
-        </AnimatePresence>
-      </div>
+    <div
+      id="sk-panel-robinhood"
+      role="tabpanel"
+      aria-labelledby="sk-tab-robinhood"
+      className="sk-panel sk-panel--source"
+    >
+      <PartnerIntro
+        brand="robinhood"
+        title="Robinhood skills"
+        description="Official bundled capabilities for Robinhood products and on-chain assets."
+        count={skills.length}
+      />
+      {skills.length === 0 ? (
+        <div className="sk-empty sk-empty--contained">
+          <p className="sk-empty__title">Robinhood skills are on the way</p>
+          <p className="sk-empty__hint">
+            No Robinhood skills are installed yet. Browse Bankr or Community while this catalog
+            grows.
+          </p>
+        </div>
+      ) : (
+        <div className="sk-grid sk-grid--source">
+          <AnimatePresence initial={false}>
+            {skills.map((s) => (
+              <MotionListItem key={s.name}>
+                <SkillCard skill={s} onOpen={() => onOpen(s.name!)} />
+              </MotionListItem>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
     </div>
   )
 }
@@ -835,7 +1024,30 @@ function RegistryPanel({
   )
 
   return (
-    <div className="sk-panel">
+    <div
+      id={`sk-panel-${group}`}
+      role="tabpanel"
+      aria-labelledby={`sk-tab-${group}`}
+      className={`sk-panel sk-panel--source sk-panel--${group}`}
+    >
+      {group === 'bankr' ? (
+        <PartnerIntro
+          brand="bankr"
+          title="Bankr skill catalog"
+          description="Curated financial and on-chain capabilities maintained by the Bankr ecosystem."
+          count={snapshot.length}
+        />
+      ) : (
+        <div className="sk-community-intro">
+          <span className="sk-community-intro__icon" aria-hidden="true">
+            <GlobeIcon />
+          </span>
+          <div>
+            <h2>Community catalog</h2>
+            <p>Discover skills published by the wider AgentOS community.</p>
+          </div>
+        </div>
+      )}
       <div className="sk-browse__bar">
         <div className="sk-search-wrap sk-search-wrap--lg">
           <SearchIcon className="sk-search-icon" aria-hidden="true" />
@@ -872,9 +1084,9 @@ function RegistryPanel({
             <span className="sk-dim">Re-open the tab or press Refresh to retry.</span>
           </div>
         ) : loading ? (
-          <div className="sk-registry__loading">
-            {group === 'bankr' ? 'Loading Bankr catalog…' : 'Loading community catalog…'}
-          </div>
+          <SkillsSkeleton
+            label={group === 'bankr' ? 'Loading Bankr catalog' : 'Loading community catalog'}
+          />
         ) : items.length === 0 ? (
           <div className="sk-registry__hint">{registryEmptyMessage(group, query)}</div>
         ) : (
@@ -1011,10 +1223,12 @@ function SkillDialog({
     >
       <header className="sk-dialog__head">
         <div className="sk-dialog__head-left">
-          {skill.emoji ? <span className="sk-dialog__emoji">{skill.emoji}</span> : null}
-          <strong id={titleId} className="sk-dialog__name">
+          <span className="sk-dialog__skill-icon" aria-hidden="true">
+            <PackageIcon />
+          </span>
+          <h2 id={titleId} className="sk-dialog__name">
             {skill.name}
-          </strong>
+          </h2>
           <div className="sk-dialog__chips">
             <span className="sk-chip" title={layerHelp(skill.layer)}>
               {layerLabel(skill.layer)}
@@ -1028,8 +1242,8 @@ function SkillDialog({
             )}
           </div>
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-          ✕
+        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <XIcon />
         </Button>
       </header>
       <section className="sk-dialog__body">
@@ -1151,14 +1365,14 @@ function RegistryDialog({
         <div className="sk-dialog__head-left">
           <LogoBadge item={item} cls="sk-dialog__logo" />
           <div>
-            <strong id={titleId} className="sk-dialog__name">
+            <h2 id={titleId} className="sk-dialog__name">
               {item.name}
-            </strong>
+            </h2>
             <div className="sk-dialog__provider">{item.provider || ''}</div>
           </div>
         </div>
-        <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-          ✕
+        <Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+          <XIcon />
         </Button>
       </header>
       <section className="sk-dialog__body">

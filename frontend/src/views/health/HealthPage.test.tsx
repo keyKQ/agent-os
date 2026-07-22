@@ -73,6 +73,11 @@ describe('HealthPage', () => {
     expect(screen.getByText('Degraded capabilities')).toBeInTheDocument()
     expect(screen.getByText('Memory is slow')).toBeInTheDocument()
     expect(screen.getByText('agentos gateway restart')).toBeInTheDocument()
+    expect(
+      screen.getByRole('img', {
+        name: 'Impact distribution: Needs action 0, Degraded 1, Optional 0, Ready 3',
+      }),
+    ).toBeInTheDocument()
   })
 
   it('renders the synthetic gateway.unavailable finding on RPC failure', async () => {

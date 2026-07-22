@@ -90,6 +90,18 @@ describe('LogsPage', () => {
     expect(screen.getByText(/Raw turn-call off/i)).toBeInTheDocument()
   })
 
+  it('keeps status, metrics, filters, and stream inside one observability console', async () => {
+    wireRpc({ tails: [tail([{ level: 'info', message: 'ready' }])] })
+    renderPage()
+    const consoleRegion = await screen.findByLabelText('Live log console')
+    expect(within(consoleRegion).getByText('Observability stream')).toBeInTheDocument()
+    expect(within(consoleRegion).getByLabelText('Log summary')).toBeInTheDocument()
+    expect(within(consoleRegion).getByRole('log')).toBeInTheDocument()
+    expect(
+      within(consoleRegion).getByRole('searchbox', { name: 'Filter log messages' }),
+    ).toBeInTheDocument()
+  })
+
   it('renders "Log status unavailable" when logs.status rejects', async () => {
     wireRpc({ statusReject: true })
     renderPage()

@@ -5,6 +5,7 @@ import { AppProviders } from './app/providers'
 import { AppShell } from './app/AppShell'
 import { routeChildren } from './app/routes'
 import './styles/globals.css'
+import './styles/control-surface.css'
 
 const basename = import.meta.env.BASE_URL.replace(/static\/dist\/?$/, '').replace(/\/$/, '')
 const router = createBrowserRouter([{ element: <AppShell />, children: routeChildren }], {

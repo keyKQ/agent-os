@@ -13,7 +13,7 @@ import { MAX_PENDING, type PendingItem } from './logic'
  *
  * Terminal styling: one severity rail (never stacked gutters); lime stays
  * signal-only, so the label/chips render in the neutral mono treatment and only
- * the count carries emphasis. Radius 0 (inherited).
+ * the count carries emphasis. Queue chips use the shared control radius.
  */
 export interface PendingQueueProps {
   /** The queued sends, oldest→newest (legacy `_pendingQueue`). */

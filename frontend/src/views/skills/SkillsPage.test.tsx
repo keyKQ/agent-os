@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
 import { SkillsPage } from './SkillsPage'
+import bankrSymbolUrl from '../../../../src/agentos/gateway/static/img/bankr-symbol.svg'
+import robinhoodSymbolUrl from '../../../../src/agentos/gateway/static/img/robinhood-symbol.png'
 
 vi.mock('sonner', () => ({
   toast: {
@@ -180,6 +182,44 @@ describe('SkillsPage', () => {
     expect(screen.getByRole('button', { name: 'Filter: Needs setup' })).toHaveTextContent('1')
   })
 
+  it('renders an accessible source navigator with the official partner logos', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
+
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs.map((tab) => tab.getAttribute('aria-label'))).toEqual([
+      'Installed',
+      'Bankr',
+      'Robinhood',
+      'Community',
+    ])
+    expect(
+      within(screen.getByRole('tab', { name: 'Bankr' }))
+        .getByRole('presentation')
+        .getAttribute('src'),
+    ).toBe(bankrSymbolUrl)
+    expect(
+      within(screen.getByRole('tab', { name: 'Robinhood' }))
+        .getByRole('presentation')
+        .getAttribute('src'),
+    ).toBe(robinhoodSymbolUrl)
+  })
+
+  it('supports arrow-key navigation across skill sources', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
+
+    const installed = screen.getByRole('tab', { name: 'Installed' })
+    installed.focus()
+    fireEvent.keyDown(installed, { key: 'ArrowRight' })
+
+    const bankr = screen.getByRole('tab', { name: 'Bankr' })
+    expect(bankr).toHaveAttribute('aria-selected', 'true')
+    expect(bankr).toHaveFocus()
+  })
+
   it('the status pill filters the installed list', async () => {
     wireRpc()
     renderPage()
@@ -213,7 +253,7 @@ describe('SkillsPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /^Community$/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
     // snapshot fetch (query:'') fires on tab entry
     const input = await screen.findByLabelText('Search community skills')
     const searchesFor = (q: string) =>
@@ -234,7 +274,7 @@ describe('SkillsPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /^Community$/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
     const card = await screen.findByLabelText('Catalog skill Uniswap')
     fireEvent.click(within(card).getByRole('button', { name: /^Install$/i }))
     await waitFor(() =>
@@ -260,7 +300,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /^Community$/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
     const card = await screen.findByLabelText('Catalog skill Uniswap')
     fireEvent.click(within(card).getByRole('button', { name: /^Install$/i }))
     // Button re-arms to "Force install"; the second click sends force:true.
@@ -350,7 +390,7 @@ describe('SkillsPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /Robinhood/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /Robinhood/i }))
     expect(await screen.findByText(/Robinhood skills are on the way/i)).toBeInTheDocument()
   })
 
@@ -403,12 +443,12 @@ describe('SkillsPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /^Community$/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
     const card = await screen.findByLabelText('Catalog skill Uniswap')
     // 'defi' → 'DeFi' label on the card.
     expect(within(card).getByText('DeFi')).toBeInTheDocument()
     // Open the detail dialog: the category chip renders there too.
-    fireEvent.click(card)
+    fireEvent.click(within(card).getByRole('button', { name: 'View details for Uniswap' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('DeFi')).toBeInTheDocument()
   })
@@ -419,9 +459,9 @@ describe('SkillsPage', () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /^Community$/i }))
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
     const card = await screen.findByLabelText('Catalog skill Uniswap')
-    fireEvent.click(card)
+    fireEvent.click(within(card).getByRole('button', { name: 'View details for Uniswap' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/Demo/)).toBeInTheDocument()
     // Title + language render as their own labelled spans in the heading.

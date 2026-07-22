@@ -10,7 +10,6 @@ import {
   SlidersHorizontalIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
 import {
@@ -224,7 +223,7 @@ function FormTab({
       {groups.map((group) => (
         <section className="cfg-group" key={group.id} aria-label={group.title}>
           <header className="cfg-group__head">
-            <h3 className="cfg-group__title t-label">{group.title}</h3>
+            <h2 className="cfg-group__title t-label">{group.title}</h2>
             <span className="cfg-group__meta t-data">
               {group.entries.length} {group.entries.length === 1 ? 'field' : 'fields'}
             </span>
@@ -540,10 +539,9 @@ export function ConfigPage() {
   return (
     <div className="cfg-stage">
       <header className="cfg-stage__header">
-        <AsciiField />
         <div className="cfg-stage__title-block">
           <span className="t-label">Control · Config</span>
-          <h2 className="t-display">Config</h2>
+          <h1 className="t-display">Config</h1>
           <p className="cfg-stage__subtitle">
             Advanced gateway configuration. Use guided setup for provider, router, channels, and
             extras.
@@ -621,6 +619,7 @@ export function ConfigPage() {
               <input
                 className="cfg-search__input"
                 type="search"
+                aria-label="Search config"
                 placeholder="Search keys & values…"
                 autoComplete="off"
                 value={search}

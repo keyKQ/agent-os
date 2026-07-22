@@ -218,7 +218,7 @@
   position: relative;
   width: 38px;
   height: 20px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--border);
   transition: background 0.15s ease;
 }
@@ -228,7 +228,7 @@
   left: 2px;
   width: 16px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--background);
   transition: transform 0.15s ease;
 }
@@ -362,7 +362,7 @@
 .cfg-stickybar__pulse {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--tone, var(--info));
 }
 .cfg-stickybar__count {

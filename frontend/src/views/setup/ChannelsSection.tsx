@@ -173,7 +173,7 @@ export function ChannelsSection({
           </div>
         </div>
         <div className="setup-runtime">
-          <h4 className="t-label">Runtime status</h4>
+          <h3 className="t-label">Runtime status</h3>
           {runtimeRows.length ? (
             runtimeRows.map((row, i) => {
               const s = statusRow(row)

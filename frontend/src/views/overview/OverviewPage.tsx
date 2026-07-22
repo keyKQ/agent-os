@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ActivityIcon,
   BotIcon,
+  ChevronRightIcon,
   ClockIcon,
   CoinsIcon,
   MessageSquareIcon,
@@ -12,11 +13,8 @@ import {
   StethoscopeIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { useBootstrap, useRpc } from '@/app/providers'
-import { useConnection } from '@/stores/connection'
-import type { RpcState } from '@/lib/ws-rpc'
 import {
   formatCost,
   formatEventPayload,
@@ -64,13 +62,6 @@ interface EventEntry {
   payloadStr: string
 }
 
-// overview.js:207-210 — rpc state -> connection-pill variant.
-const PILL_VARIANT: Record<RpcState, 'ok' | 'warn' | 'err'> = {
-  connected: 'ok',
-  connecting: 'warn',
-  disconnected: 'err',
-}
-
 // One stat tile. `to` makes it a nav button; omit it for the static Uptime tile.
 // `tone` maps a status to the --tone gutter primitive (Health count-tile
 // posture) — status color never hardcoded.
@@ -80,6 +71,8 @@ function StatTile({
   to,
   tone,
   ariaLabel,
+  variant,
+  loading = false,
   children,
 }: {
   label: string
@@ -87,11 +80,13 @@ function StatTile({
   to?: string
   tone?: 'ok' | 'warn' | 'err' | 'off'
   ariaLabel?: string
+  variant?: 'hero'
+  loading?: boolean
   children: React.ReactNode
 }) {
   const navigate = useNavigate()
   const toneClass = tone ? ` tone-${tone === 'err' ? 'danger' : tone === 'off' ? 'dim' : tone}` : ''
-  const className = `ov-stat${to ? '' : ' ov-stat--static'}${toneClass}`
+  const className = `ov-stat${to ? '' : ' ov-stat--static'}${toneClass}${variant ? ` ov-stat--${variant}` : ''}${loading ? ' is-loading' : ''}`
   const content = (
     <>
       <span className="ov-stat__icon" aria-hidden="true">
@@ -99,11 +94,16 @@ function StatTile({
       </span>
       <span className="ov-stat__label t-label">{label}</span>
       {children}
+      {to ? (
+        <span className="ov-stat__arrow" aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
+      ) : null}
     </>
   )
   if (!to) {
     return (
-      <div className={className} aria-label={ariaLabel ?? label}>
+      <div className={className} aria-label={ariaLabel ?? label} aria-busy={loading}>
         {content}
       </div>
     )
@@ -113,6 +113,7 @@ function StatTile({
       type="button"
       className={className}
       aria-label={ariaLabel ?? label}
+      aria-busy={loading}
       onClick={() => navigate(to)}
     >
       {content}
@@ -125,7 +126,6 @@ export function OverviewPage() {
   const bootstrap = useBootstrap()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const connState = useConnection((s) => s.state)
 
   useEffect(() => {
     document.title = 'Overview - AgentOS Control'
@@ -242,8 +242,6 @@ export function OverviewPage() {
     rpc.connect(url, token || undefined)
   }
 
-  const pillVariant = PILL_VARIANT[connState]
-
   // Derived tile values.
   const status = statusQuery.data
   const usage = usageQuery.data
@@ -255,35 +253,32 @@ export function OverviewPage() {
   const sessionsFailed = sessionsQuery.isError
   const doctor = doctorQuery.data
   const doctorFailed = doctorQuery.isError
+  const overviewRefreshing =
+    statusQuery.isFetching ||
+    doctorQuery.isFetching ||
+    usageQuery.isFetching ||
+    sessionsQuery.isFetching
 
   return (
     <div className="ov-stage">
       <header className="ov-stage__header">
-        <AsciiField />
         <div className="ov-stage__title-block">
           <span className="t-label">Control · Overview</span>
-          <h2 className="t-display">Overview</h2>
+          <h1 className="t-display">Overview</h1>
           <p className="ov-stage__subtitle">
             Live status, recent sessions, and the gateway event stream.
           </p>
         </div>
         <div className="ov-stage__actions">
-          <span
-            className={`ov-conn-pill tone-${pillVariant === 'err' ? 'danger' : pillVariant}`}
-            role="status"
-            aria-live="polite"
-            aria-label="Gateway connection"
-          >
-            <span className="ov-conn-pill__dot" aria-hidden="true" />
-            {connState}
-          </span>
           <Button
             variant="outline"
             title="Refresh"
             className="text-xs uppercase tracking-[0.14em]"
+            aria-busy={overviewRefreshing}
+            disabled={overviewRefreshing}
             onClick={refreshAll}
           >
-            <RefreshCwIcon />
+            <RefreshCwIcon className={overviewRefreshing ? 'ov-refresh-spin' : undefined} />
             <span>Refresh</span>
           </Button>
           <Button
@@ -297,50 +292,87 @@ export function OverviewPage() {
         </div>
       </header>
 
-      <section className="ov-stats" aria-label="Gateway summary">
-        <StatTile label="Total tokens" icon={<CoinsIcon />} to="/usage">
-          <strong className="ov-stat__value t-data">{formatTokens(usage?.totalTokens)}</strong>
-          <span className="ov-stat__hint">
-            {usage ? formatCost(usage.totalCostUsd) + ' spent' : 'view usage →'}
+      <section className="ov-command" aria-label="Gateway summary">
+        <div className="ov-command__toolbar">
+          <div>
+            <span className="ov-command__eyebrow">System pulse</span>
+            <strong>Gateway summary</strong>
+          </div>
+          <span className="ov-command__cadence">
+            <span aria-hidden="true" />
+            Refreshes every 30s
           </span>
-        </StatTile>
-        <StatTile label="Total sessions" icon={<ActivityIcon />} to="/sessions">
-          {/* overview.js:262 — legacy printed the raw integer (data.totalSessions
-              ?? '—'); no toLocaleString grouping, unlike the token tile. */}
-          <strong className="ov-stat__value t-data">{usage?.totalSessions ?? '—'}</strong>
-          <span className="ov-stat__hint">view all →</span>
-        </StatTile>
-        <StatTile label="Provider" icon={<BotIcon />} to="/agents">
-          <strong className="ov-stat__value ov-stat__value--mono t-data">
-            {status?.provider ?? '—'}
-          </strong>
-          <span className="ov-stat__hint">manage agents →</span>
-        </StatTile>
-        <StatTile
-          label="Health"
-          icon={<StethoscopeIcon />}
-          to="/health"
-          tone={doctorFailed ? 'err' : readinessTone(doctor?.status)}
-        >
-          <strong className="ov-stat__value ov-stat__value--status t-data">
-            {doctorFailed ? 'Unavailable' : readinessStatusLabel(doctor?.status)}
-          </strong>
-          <span className="ov-stat__hint">
-            {doctorFailed ? 'open health' : (doctor?.summary ?? 'view details')}
-          </span>
-        </StatTile>
-        <StatTile label="Uptime" icon={<ClockIcon />}>
-          <strong className="ov-stat__value ov-stat__value--mono t-data">
-            {formatUptime(status?.uptime_ms)}
-          </strong>
-          <span className="ov-stat__hint">{status?.version ? `v${status.version}` : '—'}</span>
-        </StatTile>
+        </div>
+        <div className="ov-command__body">
+          <StatTile
+            label="Health"
+            icon={<StethoscopeIcon />}
+            to="/health"
+            tone={doctorFailed ? 'err' : readinessTone(doctor?.status)}
+            variant="hero"
+            loading={doctorQuery.isFetching}
+          >
+            <strong className="ov-stat__value ov-stat__value--status t-data">
+              {doctorFailed ? 'Unavailable' : readinessStatusLabel(doctor?.status)}
+            </strong>
+            <span className="ov-stat__hint">
+              {doctorFailed ? 'open health' : (doctor?.summary ?? 'view details')}
+            </span>
+          </StatTile>
+          <div className="ov-command__metrics">
+            <StatTile
+              label="Total tokens"
+              icon={<CoinsIcon />}
+              to="/usage"
+              loading={usageQuery.isFetching}
+            >
+              <strong className="ov-stat__value t-data">{formatTokens(usage?.totalTokens)}</strong>
+              <span className="ov-stat__hint">
+                {usage ? formatCost(usage.totalCostUsd) + ' spent' : 'view usage'}
+              </span>
+            </StatTile>
+            <StatTile
+              label="Total sessions"
+              icon={<ActivityIcon />}
+              to="/sessions"
+              loading={usageQuery.isFetching}
+            >
+              {/* overview.js:262 — legacy printed the raw integer (data.totalSessions
+                  ?? '—'); no toLocaleString grouping, unlike the token tile. */}
+              <strong className="ov-stat__value t-data">{usage?.totalSessions ?? '—'}</strong>
+              <span className="ov-stat__hint">view all</span>
+            </StatTile>
+            <StatTile
+              label="Provider"
+              icon={<BotIcon />}
+              to="/agents"
+              loading={statusQuery.isFetching}
+            >
+              <strong className="ov-stat__value ov-stat__value--mono t-data">
+                {status?.provider ?? '—'}
+              </strong>
+              <span className="ov-stat__hint">manage agents</span>
+            </StatTile>
+            <StatTile label="Uptime" icon={<ClockIcon />} loading={statusQuery.isFetching}>
+              <strong className="ov-stat__value ov-stat__value--mono t-data">
+                {formatUptime(status?.uptime_ms)}
+              </strong>
+              <span className="ov-stat__hint">{status?.version ? `v${status.version}` : '—'}</span>
+            </StatTile>
+          </div>
+        </div>
       </section>
 
       <div className="ov-grid">
         <section className="panel ov-panel ov-panel--recent">
           <div className="panel__head">
-            <span>Recent sessions</span>
+            <div className="ov-panel__heading">
+              <MessageSquareIcon aria-hidden="true" />
+              <div>
+                <span>Recent sessions</span>
+                <small>Resume the latest agent work</small>
+              </div>
+            </div>
             <button
               type="button"
               className="ov-link"
@@ -398,9 +430,47 @@ export function OverviewPage() {
           </div>
         </section>
 
+        <section className="panel ov-panel ov-panel--events">
+          <div className="panel__head">
+            <div className="ov-panel__heading">
+              <ActivityIcon aria-hidden="true" />
+              <div>
+                <span>Event stream</span>
+                <small>Live gateway activity</small>
+              </div>
+            </div>
+            <span className="ov-panel__meta" data-slot="panel-meta">
+              <span className="ov-panel__live" aria-hidden="true" />
+              {events.length} event{events.length === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="panel__body ov-event-log" role="log" aria-live="polite">
+            {events.length === 0 ? (
+              <div className="ov-event-log__empty">
+                <span className="ov-event-log__pulse" aria-hidden="true" />
+                Listening for events…
+              </div>
+            ) : (
+              events.map((e, i) => (
+                <div className={`ov-event-log__row${i === 0 ? ' is-fresh' : ''}`} key={e.id}>
+                  <span className="ov-event-log__ts t-data">{e.ts}</span>
+                  <span className="ov-event-log__name t-data">{e.eventName}</span>
+                  <span className="ov-event-log__payload t-data">{e.payloadStr}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
         <section className="panel ov-panel ov-panel--conn">
           <div className="panel__head">
-            <span>Gateway connection</span>
+            <div className="ov-panel__heading">
+              <BotIcon aria-hidden="true" />
+              <div>
+                <span>Gateway connection</span>
+                <small>Override the active endpoint for this browser</small>
+              </div>
+            </div>
           </div>
           <div className="panel__body ov-form">
             <label className="ov-field">
@@ -435,31 +505,6 @@ export function OverviewPage() {
                 Disconnect
               </Button>
             </div>
-          </div>
-        </section>
-
-        <section className="panel ov-panel ov-panel--events">
-          <div className="panel__head">
-            <span>Event stream</span>
-            <span className="ov-panel__meta" data-slot="panel-meta">
-              {events.length} event{events.length === 1 ? '' : 's'}
-            </span>
-          </div>
-          <div className="panel__body ov-event-log" role="log" aria-live="polite">
-            {events.length === 0 ? (
-              <div className="ov-event-log__empty">
-                <span className="ov-event-log__pulse" aria-hidden="true" />
-                Listening for events…
-              </div>
-            ) : (
-              events.map((e, i) => (
-                <div className={`ov-event-log__row${i === 0 ? ' is-fresh' : ''}`} key={e.id}>
-                  <span className="ov-event-log__ts t-data">{e.ts}</span>
-                  <span className="ov-event-log__name t-data">{e.eventName}</span>
-                  <span className="ov-event-log__payload t-data">{e.payloadStr}</span>
-                </div>
-              ))
-            )}
           </div>
         </section>
       </div>

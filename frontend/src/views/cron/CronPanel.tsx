@@ -201,9 +201,9 @@ export function CronPanel({
         <form className="cron-panel__form" noValidate onSubmit={submit}>
           <header className="cron-panel__head">
             <span className="t-label">{isEdit ? 'Edit schedule' : 'New schedule'}</span>
-            <h3 id={titleId} className="cron-panel__title">
+            <h2 id={titleId} className="cron-panel__title">
               {isEdit ? 'Edit Schedule' : 'Create a job'}
-            </h3>
+            </h2>
           </header>
 
           <div className="cron-panel__body">

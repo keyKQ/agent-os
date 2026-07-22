@@ -46,7 +46,7 @@ export function EnvRecoveryCommand({ command }: { command: string }) {
 export function PanelHead({ title, subtitle }: { title: string; subtitle: React.ReactNode }) {
   return (
     <header className="setup-panel__head">
-      <h3 className="t-label">{title}</h3>
+      <h2 className="t-label">{title}</h2>
       <p className="setup-panel__subtitle">{subtitle}</p>
     </header>
   )

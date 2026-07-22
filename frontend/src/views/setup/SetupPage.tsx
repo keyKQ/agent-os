@@ -3,7 +3,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { useRpc } from '@/app/providers'
 import { ProviderSection } from './ProviderSection'
 import { RouterSection } from './RouterSection'
@@ -302,10 +301,9 @@ export function SetupPage() {
   return (
     <div className="setup-stage">
       <header className="setup-stage__header">
-        <AsciiField />
         <div className="setup-stage__title-block">
           <span className="t-label">Control · Setup</span>
-          <h2 className="t-display">Setup</h2>
+          <h1 className="t-display">Setup</h1>
           <p className="setup-stage__subtitle">{headline.title}</p>
         </div>
         <div className="setup-stage__aside">

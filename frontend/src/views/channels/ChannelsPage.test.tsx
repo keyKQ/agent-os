@@ -156,6 +156,16 @@ describe('ChannelsPage', () => {
     expect(screen.getByLabelText('Restart attempts')).toHaveTextContent('2')
   })
 
+  it('groups live posture and adapter inventory into the redesigned workspace', async () => {
+    wireRpc()
+    renderPage()
+    const operations = await screen.findByLabelText('Channel operations')
+    expect(within(operations).getByText('Integration mesh')).toBeInTheDocument()
+    expect(within(operations).getByLabelText('Channels summary')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Configured channels' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /manage setup/i })).toBeInTheDocument()
+  })
+
   it('tones the Chat approvals attention tile as warn, not danger (channels.js:146,384-389)', async () => {
     // Default fixture has one pending Telegram request → the tile is in
     // attention. Legacy colors the attention stat with --warn, never --danger:

@@ -1,11 +1,12 @@
 import './chat.css'
+import './chat-unified.css'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { FileDown, SquarePen, Terminal, X } from 'lucide-react'
+import { SquarePen, Terminal, X } from 'lucide-react'
 import { AnimatePresence } from 'motion/react'
 import { useRpc } from '@/app/providers'
-import { ShellHeaderPortal, ShellSidebarActionPortal } from '@/app/ShellHeaderSlot'
+import { ShellHeaderPortal, ShellPrimaryActionPortal } from '@/app/ShellHeaderSlot'
 import { ModalShell } from '@/components/ModalShell'
 import { Attachments, useAttachments } from './Attachments'
 import { Composer, type ComposerHandle } from './Composer'
@@ -299,7 +300,7 @@ export function ChatPage() {
   // exactly the unsubscribe → park → new key → reset → subscribe sequence legacy
   // did inline (chat.js:2694-2712). Pending work is cleared and the next-send
   // intent is stamped here; the slash-command caller has already cleared its
-  // command text, while the sidebar action preserves any draft for the new chat.
+  // command text, while the header action preserves any draft for the new chat.
   const onSessionAction = useCallback(
     (action: string) => {
       if (action === 'new_chat') {
@@ -537,7 +538,10 @@ export function ChatPage() {
       if (e.key !== 'Escape') return
       if (e.defaultPrevented) return
       // A visible overlay's own dismiss handler takes priority (chat.js:8583-8588).
-      if (document.querySelector('.modal-backdrop, .chat-session-popover')) return
+      if (
+        document.querySelector('.modal-backdrop, .chat-session-popover, .chat-session-actions-menu')
+      )
+        return
       const target = e.target as HTMLElement | null
       const isEditable =
         !!target &&
@@ -562,9 +566,10 @@ export function ChatPage() {
 
   return (
     <div className="chat-stage" onDrop={onDrop} onDragOver={onDragOver} onPaste={onPaste}>
-      {/* New chat is a conversation-level action, so it lives in the standard
-          AI-product position below the sidebar brand instead of beside Send. */}
-      <ShellSidebarActionPortal>
+      <h1 className="sr-only">Chat</h1>
+      {/* New chat is a conversation-level action, so it lives in the floating
+          Chat workspace header instead of competing with Send. */}
+      <ShellPrimaryActionPortal>
         <button
           type="button"
           className="chat-new-button"
@@ -572,13 +577,14 @@ export function ChatPage() {
           aria-label="New chat"
           onClick={startNewChat}
         >
-          <SquarePen aria-hidden="true" />
+          <span className="chat-new-button__icon" aria-hidden="true">
+            <SquarePen />
+          </span>
           <span className="chat-new-button__label">New chat</span>
         </button>
-      </ShellSidebarActionPortal>
-      {/* Session context belongs to the shared shell chrome (legacy
-          topbar-center). The portal keeps one header while the chat view
-          continues to own the reactive session actions. */}
+      </ShellPrimaryActionPortal>
+      {/* Session context is portalled into the detached Chat header so the
+          switch/reset/export workflow stays close to conversation identity. */}
       <ShellHeaderPortal>
         <div className="chat-session-bar" role="group" aria-label="Chat session controls">
           <SessionChip
@@ -586,17 +592,8 @@ export function ChatPage() {
             runState={runState}
             onSwitch={switchToSession}
             onReset={resetSession}
+            onExport={onExportMarkdown}
           />
-          <button
-            type="button"
-            className="chat-export-btn"
-            title="Export this chat as Markdown"
-            aria-label="Export chat as Markdown"
-            onClick={onExportMarkdown}
-          >
-            <FileDown className="chat-session-action-icon" aria-hidden="true" />
-            <span className="chat-session-action-label">Export .md</span>
-          </button>
         </div>
       </ShellHeaderPortal>
       <div className="chat-thread" ref={containerRef} />
@@ -627,12 +624,7 @@ export function ChatPage() {
         onAttachFiles={attachments.addFiles}
         tray={<Attachments api={attachments} />}
         routerFxDock={
-          <div
-            id="chat-routerfx-dock"
-            className="chat-routerfx-dock"
-            ref={routerFxDockRef}
-            aria-live="polite"
-          />
+          <div id="chat-routerfx-dock" className="chat-routerfx-dock" ref={routerFxDockRef} />
         }
         toolbar={
           <Toolbar

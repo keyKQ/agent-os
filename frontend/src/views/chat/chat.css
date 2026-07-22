@@ -2,8 +2,9 @@
    inset (globals.css:479-481): chat owns its own flex layout — a growing,
    scrollable thread region above a pinned composer row — and cancels the
    container's padding with a negative-margin wrapper so the surface reaches the
-   viewport edges. Built on the shared TTY token system (globals.css): lime
-   (--primary) stays signal-only, radius 0, mono type. */
+   viewport edges. Built on the shared console token system (globals.css): lime
+   (--primary) stays signal-only, machine data stays mono, and visible controls
+   follow the shared soft-radius scale. */
 
 /* Opt out of `.view-container`'s inset (padding-left/right 32px, top 24px,
    bottom 48px — globals.css:494-497) by pulling the stage back out to the
@@ -789,48 +790,53 @@
 }
 
 /* ── Tool activity rows (legacy chat.css:939-1179) ─────────────────────────
-   The imperative renderer already emits the legacy details/summary DOM. Keep
-   that dense transcript language here: a one-pixel state rail and one compact
-   machine row, never a stack of decorative cards. */
+   Compact activity surfaces for tool-heavy turns. The soft fill groups each
+   operation without adding another outlined card to the transcript. */
 .chat-tool-provider {
   flex: 0 0 auto;
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--background);
-  color: var(--dim);
+  max-width: 9rem;
+  padding: 2px 7px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  color: color-mix(in srgb, var(--primary) 62%, var(--muted-foreground));
   font-family: var(--font-mono);
   font-size: 0.62rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   line-height: 1.45;
+  text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
-}
-.chat-tools-summary:has(.chat-tool-provider) > .chat-tool-provider {
-  margin-left: auto;
-}
-.chat-tools-summary:has(.chat-tool-provider)::after {
-  margin-left: 0;
 }
 
 .chat-tools-collapse {
   box-sizing: border-box;
   max-width: 100%;
-  margin-top: 4px;
+  margin-top: 6px;
   overflow: hidden;
   border: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 0;
-  background: none;
-  transition: border-color 150ms ease;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  transition:
+    background-color 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.chat-tools-collapse:not(.chat-tools-collapse--running):hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  transform: translateY(-1px);
+}
+.chat-tools-collapse[open] {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 .chat-tools-summary {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
-  padding: 2px 12px;
+  gap: 9px;
+  min-height: 40px;
+  padding: 5px 8px;
   overflow: hidden;
   outline: none;
   color: var(--muted-foreground);
@@ -851,20 +857,19 @@
   display: none;
 }
 .chat-tools-summary:hover {
-  background: color-mix(in srgb, var(--foreground) 3%, transparent);
   color: var(--foreground);
 }
 .chat-tools-summary:focus-visible {
   color: var(--foreground);
-  outline: 1px solid var(--primary);
-  outline-offset: -1px;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .chat-tools-summary::after {
   content: '';
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
-  margin-left: 0;
+  margin: 0 4px 0 2px;
   border-right: 1.5px solid currentColor;
   border-bottom: 1.5px solid currentColor;
   opacity: 0.5;
@@ -878,9 +883,52 @@
   transform: rotate(45deg);
 }
 .chat-tools-icon {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z%22%2F%3E%3C%2Fsvg%3E');
+  display: inline-grid;
   flex: 0 0 auto;
-  font-size: 12px;
-  line-height: 1;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: var(--radius-compact);
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  place-items: center;
+  color: var(--primary);
+}
+.chat-tools-icon::before {
+  width: 0.95rem;
+  height: 0.95rem;
+  background: currentColor;
+  content: '';
+  -webkit-mask: var(--tool-icon-mask) center / contain no-repeat;
+  mask: var(--tool-icon-mask) center / contain no-repeat;
+}
+.chat-tools-icon[data-icon='terminal'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M12 19h8%22%2F%3E%3Cpath d%3D%22m4 17 6-6-6-6%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='file-text'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z%22%2F%3E%3Cpath d%3D%22M14 2v5a1 1 0 0 0 1 1h5%22%2F%3E%3Cpath d%3D%22M10 9H8%22%2F%3E%3Cpath d%3D%22M16 13H8%22%2F%3E%3Cpath d%3D%22M16 17H8%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='pen-line'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M13 21h8%22%2F%3E%3Cpath d%3D%22M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='search'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22m21 21-4.34-4.34%22%2F%3E%3Ccircle cx%3D%2211%22 cy%3D%2211%22 r%3D%228%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='globe'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M21.54 15H17a2 2 0 0 0-2 2v4.54%22%2F%3E%3Cpath d%3D%22M7 3.34V5a3 3 0 0 0 3 3a2 2 0 0 1 2 2c0 1.1.9 2 2 2a2 2 0 0 0 2-2c0-1.1.9-2 2-2h3.17%22%2F%3E%3Cpath d%3D%22M11 21.95V18a2 2 0 0 0-2-2a2 2 0 0 1-2-2v-1a2 2 0 0 0-2-2H2.05%22%2F%3E%3Ccircle cx%3D%2212%22 cy%3D%2212%22 r%3D%2210%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='folder-open'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-icon[data-icon='brain-circuit'] {
+  --tool-icon-mask: url('data:image/svg+xml,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 24 24%22 fill%3D%22none%22 stroke%3D%22black%22 stroke-width%3D%222%22 stroke-linecap%3D%22round%22 stroke-linejoin%3D%22round%22%3E%3Cpath d%3D%22M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z%22%2F%3E%3Cpath d%3D%22M9 13a4.5 4.5 0 0 0 3-4%22%2F%3E%3Cpath d%3D%22M6.003 5.125A3 3 0 0 0 6.401 6.5%22%2F%3E%3Cpath d%3D%22M3.477 10.896a4 4 0 0 1 .585-.396%22%2F%3E%3Cpath d%3D%22M6 18a4 4 0 0 1-1.967-.516%22%2F%3E%3Cpath d%3D%22M12 13h4%22%2F%3E%3Cpath d%3D%22M12 18h6a2 2 0 0 1 2 2v1%22%2F%3E%3Cpath d%3D%22M12 8h8%22%2F%3E%3Cpath d%3D%22M16 8V5a2 2 0 0 1 2-2%22%2F%3E%3Ccircle cx%3D%2216%22 cy%3D%2213%22 r%3D%22.5%22%2F%3E%3Ccircle cx%3D%2218%22 cy%3D%223%22 r%3D%22.5%22%2F%3E%3Ccircle cx%3D%2220%22 cy%3D%2221%22 r%3D%22.5%22%2F%3E%3Ccircle cx%3D%2220%22 cy%3D%228%22 r%3D%22.5%22%2F%3E%3C%2Fsvg%3E');
+}
+.chat-tools-name {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground));
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .chat-tools-status {
   display: inline-flex;
@@ -897,8 +945,11 @@
   box-sizing: border-box;
   max-width: 100%;
   max-height: 40vh;
-  padding: 0 12px 8px;
+  margin: 0 8px 8px;
+  padding: 10px 12px;
   overflow: auto;
+  border-radius: var(--radius-compact);
+  background: color-mix(in srgb, var(--background) 76%, transparent);
   overscroll-behavior: contain;
   animation: chat-tool-expand 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -915,7 +966,6 @@
 
 .chat-tool-input {
   max-width: 100%;
-  padding-top: 8px;
   overflow-wrap: anywhere;
   color: var(--dim);
   font-family: var(--font-mono);
@@ -923,23 +973,37 @@
   line-height: 1.55;
   white-space: pre-wrap;
 }
+.chat-tool-input::before,
+.chat-tool-result::before {
+  display: block;
+  margin-bottom: 5px;
+  color: color-mix(in srgb, var(--primary) 48%, var(--dim));
+  content: 'INPUT';
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.4;
+}
 .chat-tool-result {
   box-sizing: border-box;
   max-width: 100%;
-  margin-top: 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
   font-size: 0.7rem;
 }
+.chat-tool-result::before {
+  content: 'OUTPUT';
+}
 .chat-tool-result--error {
-  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
-  background: color-mix(in srgb, var(--danger) 5%, var(--background));
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--danger) 72%, transparent);
 }
 .chat-tool-result--warn {
-  border-color: color-mix(in srgb, var(--warn) 58%, var(--border));
-  background: color-mix(in srgb, var(--warn) 5%, var(--background));
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--warn) 72%, transparent);
 }
 .chat-tool-result-preview {
   max-width: 100%;
@@ -950,10 +1014,10 @@
   white-space: pre-wrap;
 }
 
-/* Running is the only lime state. Settled rows return to a neutral rail; only
-   semantic success/error glyphs carry color. */
+/* Running is the only lime surface state. Settled rows stay neutral; only the
+   compact status glyph communicates success, warning, or failure. */
 .chat-tools-collapse--running {
-  border-left-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
 }
 .chat-tools-collapse--running > .chat-tools-summary,
 .chat-tools-summary[aria-disabled='true'] {
@@ -969,13 +1033,13 @@
   opacity: 0.2;
 }
 .chat-tools-collapse--success {
-  border-left-color: var(--border);
+  background-color: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 .chat-tools-collapse--error {
-  border-left-color: var(--danger);
+  background-color: color-mix(in srgb, var(--danger) 4%, transparent);
 }
 .chat-tools-collapse--unknown {
-  border-left-color: var(--warn);
+  background-color: color-mix(in srgb, var(--warn) 4%, transparent);
 }
 .chat-tools-collapse--success > .chat-tools-summary .chat-tools-status::before {
   content: '\2713';
@@ -988,6 +1052,19 @@
 .chat-tools-collapse--unknown > .chat-tools-summary .chat-tools-status::before {
   content: '?';
   color: var(--warn);
+}
+.chat-tools-collapse--success > .chat-tools-summary .chat-tools-status::before,
+.chat-tools-collapse--error > .chat-tools-summary .chat-tools-status::before,
+.chat-tools-collapse--unknown > .chat-tools-summary .chat-tools-status::before {
+  display: inline-grid;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  font-size: 0.62rem;
+  font-weight: 800;
+  line-height: 1;
+  place-items: center;
 }
 .chat-tools-collapse--running > .chat-tools-summary .chat-tools-status::before {
   content: '';
@@ -1042,9 +1119,9 @@
   min-height: 28px;
   margin-top: 6px;
   padding: 3px 8px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--radius);
-  background: transparent;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
   color: var(--dim);
   font-family: var(--font-mono);
   font-size: 0.66rem;
@@ -1088,6 +1165,7 @@
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .chat-tools-collapse,
   .chat-tools-body,
   .chat-tools-summary::after,
   .chat-tool-view-btn {
@@ -1102,6 +1180,17 @@
 }
 
 @media (max-width: 768px) {
+  .chat-tools-summary {
+    gap: 8px;
+    padding-inline: 7px;
+  }
+  .chat-tools-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+  .chat-tool-provider {
+    max-width: 6.5rem;
+  }
   .msg {
     max-width: 92%;
   }
@@ -1124,11 +1213,9 @@
   }
 }
 .chat-composer {
-  /* The composer is the one deliberate soft surface in the TTY layout (like the
-     user bubble was): a small, documented radius so it reads a touch rounder
-     than the sharp panels around it. Shared by the ::before ring + ::after
-     sheen so all three corners stay consistent. */
-  --chat-composer-radius: 8px;
+  /* The composer uses the shared elevated-surface radius. The same token drives
+     its border and decorative layers so every corner stays aligned. */
+  --chat-composer-radius: var(--radius-surface);
   position: relative;
   flex: 0 0 auto;
   display: flex;
@@ -1281,50 +1368,57 @@
   }
 }
 
-/* Conversation-level primary action. The neutral resting state respects the
-   console's signal-only lime rule; hover/focus supplies the active cue. */
+/* Conversation-level primary action, portalled into the floating Chat header. */
 .chat-new-button {
   appearance: none;
   width: 100%;
-  height: 40px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
-  border: 1px solid var(--sidebar-border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--sidebar-foreground) 3%, transparent);
+  gap: 10px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-surface);
+  background: var(--sidebar-accent);
   color: var(--sidebar-foreground);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  font-weight: 600;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 650;
   line-height: 1;
-  text-transform: lowercase;
+  text-transform: none;
   cursor: pointer;
   transition:
-    color 120ms ease,
-    border-color 120ms ease,
-    background 120ms ease,
-    transform 80ms ease;
+    color 160ms ease,
+    background 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms ease;
 }
 .chat-new-button:hover,
 .chat-new-button:focus-visible {
-  border-color: color-mix(in srgb, var(--primary) 48%, var(--sidebar-border));
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-  color: var(--primary);
+  background: color-mix(in srgb, var(--foreground) 10%, var(--sidebar));
+  color: var(--foreground);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--background) 42%, transparent);
 }
 .chat-new-button:focus-visible {
-  outline: 1px solid var(--primary);
+  outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
 .chat-new-button:active {
-  transform: translateY(1px);
+  transform: scale(0.985);
 }
-.chat-new-button svg {
-  display: block;
+.chat-new-button__icon {
+  display: inline-grid;
   flex: 0 0 auto;
-  width: 17px;
-  height: 17px;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  color: var(--primary);
+  place-items: center;
+}
+.chat-new-button__icon svg {
+  width: 1.125rem;
+  height: 1.125rem;
   stroke-width: 1.8;
 }
 .chat-new-button__label {
@@ -1336,22 +1430,6 @@
     max-width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 100ms ease-out;
 }
-@media (min-width: 769px) {
-  .shell-sidebar[data-collapsed='true'] .shell-sidebar__primary-action-content {
-    display: flex;
-    justify-content: center;
-  }
-  .shell-sidebar[data-collapsed='true'] .chat-new-button {
-    width: 40px;
-    justify-content: center;
-    gap: 0;
-    padding: 0;
-  }
-  .shell-sidebar[data-collapsed='true'] .chat-new-button__label {
-    max-width: 0;
-    opacity: 0;
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .chat-new-button,
   .chat-new-button__label {
@@ -1359,9 +1437,8 @@
   }
 }
 
-/* Icon buttons inside the composer (toolbar and attach) — square TTY
-   controls centered on the row, quiet until they light lime on
-   hover. `btn-term` brackets stripped. */
+/* Icon buttons inside the composer stay centered on the row and use the shared
+   control radius. `btn-term` brackets are stripped. */
 .chat-composer .chat-composer__attach,
 .chat-composer .chat-toolbar-trigger {
   flex: 0 0 auto;
@@ -1403,8 +1480,8 @@
   stroke-width: 1.8;
 }
 
-/* Send — a square lime button (the composer's one filled signal). A viewBox-
-   centred Lucide arrow avoids the baseline drift of the old text glyph. */
+/* Send is the composer's one filled signal. A viewBox-centred Lucide arrow
+   avoids the baseline drift of the old text glyph. */
 .chat-composer .chat-composer__send {
   flex: 0 0 auto;
   align-self: center;
@@ -1447,7 +1524,7 @@
   color: var(--dim);
 }
 
-/* Abort — a square danger button in the Send slot while streaming. */
+/* Abort uses the same shape as Send while surfacing the danger state. */
 .chat-composer .chat-composer__abort {
   flex: 0 0 auto;
   align-self: center;
@@ -1793,10 +1870,11 @@
   background: transparent;
 }
 
-/* Cap/mime rejection — a single severity gutter (one tone rail), no boxed pill.
+/* Cap/mime rejection uses one severity gutter, not a stacked status pill.
    `.tone-warn` + `.tone-rail` from the shared status-tone system (globals.css). */
 .chat-attachments__rejection {
   padding: 6px 10px;
+  border-radius: var(--radius-control);
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   color: var(--foreground);
@@ -1810,7 +1888,7 @@
   align-items: flex-start;
 }
 
-/* Image preview thumbnail (chat.js:8359). Square, sharp corners, remove overlay. */
+/* Image preview thumbnail (chat.js:8359) with a compact remove overlay. */
 .attachment-thumb {
   position: relative;
   display: inline-flex;
@@ -1903,6 +1981,7 @@
   position: absolute;
   top: 0;
   right: 0;
+  border-radius: var(--radius-compact);
   background: color-mix(in srgb, var(--background) 70%, transparent);
 }
 .attachment-remove:hover {
@@ -1910,8 +1989,8 @@
 }
 
 /* ── Slash-command menu (chat.js:2654 `_renderSlashMenu`) ───────────────────
-   A terminal command palette above the composer: sharp corners (radius 0), a
-   phosphor border, mono type. Lime is signal-only — the ACTIVE/selected item
+   A terminal command palette above the composer with a soft shared surface, a
+   phosphor border, and mono type. Lime is signal-only — the ACTIVE/selected item
    gets the lime accent (a left rail + accented command token); everything else
    stays dim. Mounted inside the composer shell, above the input row. */
 .chat-slash {
@@ -2419,8 +2498,8 @@
 }
 
 /* ── Composer toolbar (execution mode + Pilot Router + usage readout) ─────────
-   Ported from chat.js:1256-1280. Terminal styling: sharp corners (radius 0),
-   status color flows ONLY through the --tone gutter (.tone-* classes); lime
+   Ported from chat.js:1256-1280. Status color flows ONLY through the --tone
+   gutter (.tone-* classes); lime
    (--primary) stays signal-only for the active/bypass affordance. */
 .chat-toolbar {
   display: flex;
@@ -2489,7 +2568,7 @@
   opacity: 0.7;
 }
 
-/* Pilot Router switch — sharp track, lime thumb glow when on. */
+/* Pilot Router switch uses the status-pill geometry and a lime active thumb. */
 .chat-toggle {
   position: relative;
   display: inline-flex;

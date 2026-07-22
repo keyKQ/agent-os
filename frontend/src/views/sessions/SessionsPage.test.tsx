@@ -174,6 +174,16 @@ describe('SessionsPage', () => {
     expect(screen.getByLabelText('Messages')).toHaveTextContent('17')
   })
 
+  it('keeps the session pulse and search controls attached to the activity ledger', async () => {
+    wireRpc()
+    renderPage()
+    const pulse = await screen.findByLabelText('Session activity overview')
+    expect(within(pulse).getByText('Activity ledger')).toBeInTheDocument()
+    const search = screen.getByRole('textbox', { name: 'Search sessions' })
+    expect(search.closest('.sess-list')).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'All sessions' })).toBeInTheDocument()
+  })
+
   it('renders a row per session with key link and status', async () => {
     wireRpc()
     renderPage()

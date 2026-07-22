@@ -182,6 +182,17 @@ describe('CronPage', () => {
     await waitFor(() => expect(screen.getByLabelText('Active schedules')).toHaveTextContent('1'))
   })
 
+  it('groups schedule posture and list controls into the redesigned workspace', async () => {
+    wireRpc()
+    renderPage()
+    const operations = await screen.findByLabelText('Schedule operations')
+    expect(within(operations).getByText('Automation clock')).toBeInTheDocument()
+    expect(within(operations).getByLabelText('Cron summary')).toBeInTheDocument()
+    expect(
+      screen.getByRole('searchbox', { name: 'Search jobs' }).closest('.cron-list'),
+    ).not.toBeNull()
+  })
+
   it('mounts → cron.subscribe', async () => {
     wireRpc()
     renderPage()
@@ -262,6 +273,10 @@ describe('CronPage', () => {
       expect(mockRpc.call).toHaveBeenCalledWith('cron.runs', { id: 'job-rem', limit: 10 }),
     )
     expect(await screen.findByText('ran fine')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Run history table' })).toHaveAttribute(
+      'tabindex',
+      '0',
+    )
   })
 
   it('deleting requires confirmation then calls cron.remove and invalidates', async () => {

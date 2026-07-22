@@ -24,12 +24,14 @@ import {
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
 import { ApprovalPrompt } from '@/components/ApprovalPrompt'
+import { AsciiField } from '@/components/AsciiField'
 import { useTheme } from '@/stores/theme'
 import { useConnection } from '@/stores/connection'
 import { useApprovals } from '@/services/approval-monitor'
 import { useBootstrap } from './providers'
 import { defaultViewPath } from './routes'
 import { ShellHeaderSlotProvider } from './ShellHeaderSlot'
+import agentosMark from '@/assets/agentos-mark.png'
 
 // app.js:72-88 — legacy sidebar information architecture: nav items grouped
 // under labels, Chat first, Approvals last under Settings. Order within each
@@ -98,6 +100,19 @@ function storedSidebarCollapsed(): boolean {
   }
 }
 
+function normalizedRoutePath(pathname: string): string {
+  const trimmed = pathname.replace(/^\/+|\/+$/g, '')
+  try {
+    return decodeURIComponent(trimmed)
+      .replace(/^\/+|\/+$/g, '')
+      .toLowerCase()
+  } catch {
+    // A malformed escape belongs to the 404 route, but must never crash the
+    // shell while it decides which visual surface to mount.
+    return trimmed.toLowerCase()
+  }
+}
+
 export function AppShell() {
   const mode = useTheme((s) => s.mode)
   const toggle = useTheme((s) => s.toggle)
@@ -114,7 +129,7 @@ export function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(storedSidebarCollapsed)
   const [isMobile, setIsMobile] = useState(() => mobileQuery()?.matches ?? false)
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null)
-  const [sidebarActionSlot, setSidebarActionSlot] = useState<HTMLDivElement | null>(null)
+  const [primaryActionSlot, setPrimaryActionSlot] = useState<HTMLDivElement | null>(null)
   const sidebarRef = useRef<HTMLElement | null>(null)
   const toggleRef = useRef<HTMLButtonElement | null>(null)
 
@@ -188,10 +203,10 @@ export function AppShell() {
   // view's nav item. A NavLink can't self-activate at the base URL, so we
   // compute the active view path ourselves (router.js:41/59-66): the current
   // pathname's leading segment, or the default view when we're at the index.
-  const atIndex = location.pathname === '/' || location.pathname === ''
-  const activePath = atIndex ? defaultViewPath() : location.pathname.replace(/^\//, '')
+  const normalizedPath = normalizedRoutePath(location.pathname)
+  const atIndex = normalizedPath === ''
+  const activePath = atIndex ? defaultViewPath() : normalizedPath
   const isChat = activePath === 'chat'
-
   // The sidebar footer is the shell's single connection indicator. Keeping the
   // reactive state here avoids duplicating the same readout in the header.
   const pillState = connState
@@ -202,7 +217,15 @@ export function AppShell() {
   const version = sidebarVersion(bootstrap.version)
 
   return (
-    <div className="flex h-dvh font-sans" style={{ ['--shell-header-h' as string]: '3rem' }}>
+    <div
+      className="shell flex h-dvh font-sans"
+      data-surface={isChat ? 'chat' : 'control'}
+      data-design="unified"
+      style={{ ['--shell-header-h' as string]: '0px' }}
+    >
+      <a className="shell-skip-link" href="#main-content">
+        Skip to main content
+      </a>
       <aside
         ref={sidebarRef}
         id="sidebar-nav"
@@ -210,14 +233,15 @@ export function AppShell() {
         inert={drawerHidden || undefined}
         data-collapsed={compactSidebar}
         data-drawer-open={isMobile ? sidebarOpen : undefined}
-        className="shell-sidebar flex shrink-0 flex-col border-r border-sidebar-border bg-sidebar"
+        className="shell-sidebar flex shrink-0 flex-col border border-sidebar-border bg-sidebar"
       >
-        {/* Exactly matches the global 48px header so both border baselines form
-            one continuous shell. The desktop control stays at this seam. */}
-        <div className="shell-sidebar__head flex h-12 shrink-0 items-center gap-2 border-b border-hairline px-3">
-          <div className="shell-sidebar__brand min-w-0 font-mono text-[14px] font-bold lowercase tracking-tight">
-            <span>AgentOS</span>
-            <span className="text-primary">Control</span>
+        <div className="shell-sidebar__head flex h-16 shrink-0 items-center gap-2 px-3">
+          <div className="shell-sidebar__brand min-w-0">
+            <img className="shell-sidebar__brand-mark" src={agentosMark} alt="" />
+            <span className="shell-sidebar__brand-copy">
+              <span>AgentOS</span>
+              <span className="text-primary">Control</span>
+            </span>
           </div>
           <Button
             variant="ghost"
@@ -236,13 +260,6 @@ export function AppShell() {
             )}
           </Button>
         </div>
-        {isChat ? (
-          <div
-            ref={setSidebarActionSlot}
-            className="shell-sidebar__primary-action"
-            data-testid="shell-sidebar-primary-action"
-          />
-        ) : null}
         <nav aria-label="Main" className="shell-sidebar__nav flex-1 overflow-y-auto px-2.5 py-5">
           {NAV_GROUPS.map((group) => (
             <div key={group.label} className="shell-nav-group mb-6">
@@ -270,11 +287,12 @@ export function AppShell() {
                         : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
                     }`}
                   >
-                    <Icon
-                      className={`size-[18px] shrink-0 ${active ? 'text-primary' : 'text-dim'}`}
-                      strokeWidth={1.5}
-                      aria-hidden="true"
-                    />
+                    <span className="shell-nav-link__icon" aria-hidden="true">
+                      <Icon
+                        className={`size-[18px] shrink-0 ${active ? 'text-primary' : 'text-dim'}`}
+                        strokeWidth={1.6}
+                      />
+                    </span>
                     <span className="shell-nav-link__label">{v.title}</span>
                     {showBadge ? (
                       <span
@@ -296,29 +314,42 @@ export function AppShell() {
         </nav>
         {/* One authoritative TTY status bar. The connection state is always
             present; only the optional bootstrap version label is suppressed. */}
-        <div
-          id="conn-pill"
-          role="status"
-          aria-live="polite"
-          className="shell-sidebar__footer t-data mt-auto flex items-center gap-2 border-t border-hairline px-4 py-2.5 text-[11px] text-dim"
-          data-testid="nav-foot"
-          data-variant={pillVariant}
-          title={version ? `${pillLabel}, version ${version}` : pillLabel}
-        >
-          <span
-            aria-hidden="true"
-            className={`shell-sidebar__status-dot size-1.5 shrink-0 rounded-full ${
-              pillOk ? 'bg-ok' : pillVariant === 'warn' ? 'bg-warn' : 'bg-danger'
-            }`}
-          />
-          <span
-            className={`shell-sidebar__status-label ${
-              pillOk ? 'text-ok' : pillVariant === 'warn' ? 'text-warn' : 'text-danger'
-            }`}
+        <div className="shell-sidebar__footer mt-auto">
+          <div
+            id="conn-pill"
+            role="status"
+            aria-live="polite"
+            className="shell-sidebar__connection t-data"
+            data-testid="nav-foot"
+            data-variant={pillVariant}
+            title={version ? `${pillLabel}, version ${version}` : pillLabel}
           >
-            {pillLabel.toUpperCase()}
-          </span>
-          {version ? <span className="shell-sidebar__version ml-auto">v{version}</span> : null}
+            <span
+              aria-hidden="true"
+              className={`shell-sidebar__status-dot size-1.5 shrink-0 rounded-full ${
+                pillOk ? 'bg-ok' : pillVariant === 'warn' ? 'bg-warn' : 'bg-danger'
+              }`}
+            />
+            <span
+              className={`shell-sidebar__status-label ${
+                pillOk ? 'text-ok' : pillVariant === 'warn' ? 'text-warn' : 'text-danger'
+              }`}
+            >
+              {pillLabel.toUpperCase()}
+            </span>
+            {version ? <span className="shell-sidebar__version ml-auto">v{version}</span> : null}
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shell-sidebar__theme"
+            onClick={toggle}
+            title={`Theme: ${mode}`}
+            aria-label={`Theme: ${mode}. Toggle theme`}
+            aria-pressed={mode === 'dark'}
+          >
+            {mode === 'dark' ? <Moon className="size-4" /> : <Sun className="size-4" />}
+          </Button>
         </div>
       </aside>
       {isMobile && sidebarOpen ? (
@@ -329,77 +360,65 @@ export function AppShell() {
           onClick={() => setSidebarOpen(false)}
         />
       ) : null}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header
-          className={`shell-header grid h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center border-b border-hairline bg-surface/60 ${
-            isChat ? 'shell-header--chat gap-2 px-3' : 'gap-3 px-4'
-          }`}
-          data-testid="shell-header"
+      <div className="shell-workspace flex min-w-0 flex-1 flex-col">
+        <Button
+          ref={toggleRef}
+          variant="ghost"
+          size="icon"
+          className="shell-mobile-menu"
+          title="Toggle menu"
+          aria-label="Toggle menu"
+          aria-controls="sidebar-nav"
+          aria-expanded={sidebarOpen}
+          onClick={() => setSidebarOpen((open) => !open)}
         >
-          <div
-            className={`shell-header__identity flex shrink-0 items-center ${
-              isChat ? 'gap-2' : 'gap-3'
-            }`}
+          <Menu className="size-4" />
+        </Button>
+        {isChat ? (
+          <section
+            className="shell-chat-header"
+            aria-label="Chat toolbar"
+            data-testid="shell-chat-header"
           >
-            <Button
-              ref={toggleRef}
-              variant="ghost"
-              size="icon"
-              className="shell-mobile-menu"
-              title="Toggle menu"
-              aria-label="Toggle menu"
-              aria-controls="sidebar-nav"
-              aria-expanded={sidebarOpen}
-              onClick={() => setSidebarOpen((open) => !open)}
-            >
-              <Menu className="size-4" />
-            </Button>
-            {/* Terminal-window chrome: traffic-light dots + the current shell
-                path, framing the console as an emulator window. */}
-            <span
-              className={`term-dots ${isChat ? 'max-xl:hidden' : 'max-md:hidden'}`}
-              aria-hidden="true"
-            >
-              <span />
-              <span />
-              <span />
-            </span>
-            <span
-              className={`t-data text-[12px] text-dim ${
-                isChat ? 'max-xl:hidden' : 'max-md:hidden'
-              }`}
-              aria-hidden="true"
-            >
-              agentos@control:~{location.pathname.replace(/^\/control/, '') || '/'}
-            </span>
-          </div>
-          <div
-            ref={setHeaderSlot}
-            className="shell-header__context min-w-0 flex-1 self-stretch"
-            data-testid="shell-header-context"
-          />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="shrink-0"
-            onClick={toggle}
-            title={`Theme: ${mode}`}
-            aria-label={`Theme: ${mode}. Toggle theme`}
-            aria-pressed={mode === 'dark'}
-          >
-            {mode === 'dark' ? <Moon className="size-4" /> : <Sun className="size-4" />}
-          </Button>
-        </header>
-        <main className="min-h-0 flex-1 overflow-auto">
+            <div className="shell-chat-header__identity">
+              <span className="shell-chat-header__icon" aria-hidden="true">
+                <MessageSquare />
+              </span>
+              <span className="shell-chat-header__copy">
+                <strong>Chat</strong>
+              </span>
+            </div>
+            <div
+              ref={setPrimaryActionSlot}
+              className="shell-chat-header__primary-action"
+              data-testid="shell-chat-header-primary-action"
+            />
+            <div
+              ref={setHeaderSlot}
+              className="shell-chat-header__context"
+              data-chat-session-context="true"
+              data-testid="shell-chat-header-context"
+            />
+          </section>
+        ) : null}
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className={`min-h-0 flex-1 ${isChat ? 'shell-main--chat overflow-hidden' : 'shell-main--control overflow-auto'}`}
+        >
           {/* Common container: every view fills and centers identically.
               `key` on the route path makes React remount the wrapper on
               navigation, so the .view-enter animation replays per view. */}
           <ShellHeaderSlotProvider
             target={headerSlot}
-            sidebarActionTarget={sidebarActionSlot}
-            onSidebarAction={() => setSidebarOpen(false)}
+            primaryActionTarget={primaryActionSlot}
+            onPrimaryAction={() => setSidebarOpen(false)}
           >
-            <div key={location.pathname} className="view-container view-enter">
+            <div
+              key={location.pathname}
+              className={`view-container view-enter ${isChat ? 'chat-surface' : 'control-surface'}`}
+            >
+              {!isChat ? <AsciiField /> : null}
               <Outlet />
             </div>
           </ShellHeaderSlotProvider>

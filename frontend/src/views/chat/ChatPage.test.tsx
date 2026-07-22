@@ -101,6 +101,12 @@ function renderPage(initialEntry = '/chat') {
   )
 }
 
+async function clickChatAction(name: string) {
+  const trigger = screen.getByRole('button', { name: 'Chat actions' })
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
+  fireEvent.click(await screen.findByRole('menuitem', { name }))
+}
+
 beforeEach(() => {
   // The SessionChip fetches /api/sessions on open (chat.js:2026). Stub a default
   // OK response; individual tests override as needed.
@@ -130,6 +136,7 @@ describe('ChatPage', () => {
     mockRpc = makeRpc()
     renderPage()
     expect(document.querySelector('.chat-thread')).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Chat', level: 1 })).toBeInTheDocument()
     expect(document.title).toBe('Chat - AgentOS Control')
   })
 
@@ -138,7 +145,9 @@ describe('ChatPage', () => {
     renderPage()
     expect(document.querySelector('.chat-stage')).not.toBeNull()
     expect(document.querySelector('.chat-composer')).not.toBeNull()
-    expect(document.querySelector('#chat-routerfx-dock')).toHaveAttribute('aria-live', 'polite')
+    // The rendered .router-fx receipt owns aria-live. The mount point must stay
+    // neutral so assistive technology does not announce the same update twice.
+    expect(document.querySelector('#chat-routerfx-dock')).not.toHaveAttribute('aria-live')
   })
 
   it('preloads the web search provider badge seed on view entry', async () => {
@@ -906,7 +915,7 @@ describe('ChatPage', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /copy session key/i }))
+    await clickChatAction('Copy session key')
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('agent:main:webchat:default')
       expect(toast.info).toHaveBeenCalledWith('Session key copied')
@@ -916,12 +925,47 @@ describe('ChatPage', () => {
   it('resets the current session from the chip via sessions.reset (chat.js:2723)', async () => {
     mockRpc = makeRpc()
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /reset session/i }))
+    await clickChatAction('Reset session')
     await waitFor(() =>
       expect(mockRpc.call).toHaveBeenCalledWith('sessions.reset', {
         key: 'agent:main:webchat:default',
       }),
     )
+  })
+
+  it('closes Chat actions on Escape without aborting an active turn', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    typeAndSend('keep streaming')
+    await waitFor(() =>
+      expect(mockRpc.call.mock.calls.filter(([method]) => method === 'chat.send')).toHaveLength(1),
+    )
+
+    const trigger = screen.getByRole('button', { name: 'Chat actions' })
+    fireEvent.click(trigger)
+    expect(await screen.findByRole('menu', { name: 'Chat actions' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('menuitem', { name: 'Copy session key' })).toHaveFocus(),
+    )
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+
+    expect(screen.queryByRole('menu', { name: 'Chat actions' })).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
+    expect(mockRpc.call.mock.calls.filter(([method]) => method === 'chat.abort')).toHaveLength(0)
+  })
+
+  it('closes Chat actions on Tab and preserves deterministic focus', async () => {
+    mockRpc = makeRpc()
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Chat actions' }))
+    const copy = await screen.findByRole('menuitem', { name: 'Copy session key' })
+    await waitFor(() => expect(copy).toHaveFocus())
+
+    fireEvent.keyDown(copy, { key: 'Tab' })
+
+    expect(screen.queryByRole('menu', { name: 'Chat actions' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Chat actions' })).toHaveFocus())
   })
 
   it('starts a fresh session from the New chat action and returns focus to the composer', async () => {
@@ -1162,7 +1206,7 @@ describe('ChatPage', () => {
       return el
     })
 
-    fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
+    await clickChatAction('Export chat as Markdown')
     expect(clickSpy).toHaveBeenCalledTimes(1)
     expect(createObjectURL).toHaveBeenCalledTimes(1)
     expect(toast.info).toHaveBeenCalledWith('Exported as Markdown')
@@ -1190,9 +1234,7 @@ describe('ChatPage', () => {
       if (tag === 'a') (el as HTMLAnchorElement).click = vi.fn()
       return el
     })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
-    })
+    await clickChatAction('Export chat as Markdown')
     createSpy.mockRestore()
     vi.stubGlobal('Blob', RealBlob)
     return captured
@@ -1269,10 +1311,10 @@ describe('ChatPage', () => {
     expect(md).toContain('/download/clip.wav')
   })
 
-  it('toasts and skips export when the transcript is empty (chat.js:8390)', () => {
+  it('toasts and skips export when the transcript is empty (chat.js:8390)', async () => {
     mockRpc = makeRpc()
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /export chat as markdown/i }))
+    await clickChatAction('Export chat as Markdown')
     expect(toast.warning).toHaveBeenCalledWith('No messages to export')
   })
 

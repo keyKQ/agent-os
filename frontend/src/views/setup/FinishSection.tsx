@@ -33,7 +33,7 @@ function CommandGroup({ title, commands }: { title: string; commands: CliCommand
   if (!commands.length) return null
   return (
     <section className="setup-cli__group" aria-label={title}>
-      <h4 className="t-label">{title}</h4>
+      <h3 className="t-label">{title}</h3>
       {commands.map((c) => (
         <div className="setup-cli__row" key={c.label}>
           <span className="setup-cli__label t-label">{c.label}</span>
@@ -56,7 +56,7 @@ function ReadinessGroup({
   if (!entries.length) return null
   return (
     <div className="setup-readiness__group">
-      <h4 className="t-label">{title}</h4>
+      <h3 className="t-label">{title}</h3>
       {entries.map(([name, detail]) => {
         const step = setupStepForSection(name, detail)
         return (
@@ -112,7 +112,7 @@ export function FinishSection({
   return (
     <section className="setup-panel panel">
       <header className="setup-panel__head">
-        <h3 className="t-label">Finish</h3>
+        <h2 className="t-label">Finish</h2>
         <p className="setup-panel__subtitle">{status.configPath || ''}</p>
       </header>
 
@@ -155,7 +155,7 @@ export function FinishSection({
       ) : null}
 
       <section className="setup-subpanel" aria-label="Update preferences">
-        <h4 className="t-label">Updates</h4>
+        <h3 className="t-label">Updates</h3>
         <label className="setup-check">
           <input
             type="checkbox"

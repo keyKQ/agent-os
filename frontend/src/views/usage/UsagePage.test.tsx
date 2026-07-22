@@ -115,6 +115,15 @@ describe('UsagePage', () => {
     expect(mockRpc.waitForConnection).toHaveBeenCalled()
   })
 
+  it('shows a structural loading state instead of presenting zeroes as loaded data', () => {
+    mockRpc.call.mockImplementation((method: string) =>
+      method === 'usage.status' ? new Promise(() => undefined) : Promise.resolve({}),
+    )
+    renderPage()
+    expect(screen.getByRole('status', { name: 'Loading usage data' })).toBeInTheDocument()
+    expect(screen.queryByText(/No usage data yet/i)).not.toBeInTheDocument()
+  })
+
   it('renders the metric tiles from the payload', async () => {
     wire()
     renderPage()
@@ -254,6 +263,8 @@ describe('UsagePage', () => {
     wire(SESSIONS, true)
     renderPage()
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
+    expect(screen.getByRole('alert')).toHaveTextContent('Usage data is unavailable')
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
   it('sets the document title', async () => {

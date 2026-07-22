@@ -25,10 +25,11 @@
 }
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 2px);
+  --radius-xs: var(--radius-compact);
+  --radius-sm: var(--radius-control);
   --radius-md: var(--radius);
-  --radius-lg: calc(var(--radius) + 2px);
-  --radius-xl: calc(var(--radius) + 6px);
+  --radius-lg: var(--radius-surface);
+  --radius-xl: var(--radius-dialog);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -74,9 +75,17 @@
 :root[data-theme='dark'],
 :root {
   color-scheme: dark;
-  --radius: 6px; /* Soft-terminal posture: a small, consistent radius across the
-                    whole console (was 0px hard-TTY). --radius-sm/md/lg/xl derive
-                    from this, so every shadcn/Tailwind rounded-* surface follows. */
+  /* Shape scale: compact details 6px, controls 8px, groups 10px, elevated
+     surfaces 14px, dialogs 18px. Pills are reserved for status/toggle shapes.
+     Keep these values absolute: derived custom properties are computed at the
+     element where they are declared, so overriding only --radius in a nested
+     shell would otherwise leave descendants using the old root calculation. */
+  --radius-compact: 6px;
+  --radius-control: 8px;
+  --radius: 10px;
+  --radius-surface: 14px;
+  --radius-dialog: 18px;
+  --radius-pill: 999px;
 
   --background: #060608; /* legacy --bg */
   --foreground: #ececef; /* legacy --text */
@@ -338,7 +347,7 @@
   .term-dots span {
     width: 10px;
     height: 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     display: block;
   }
   .term-dots span:nth-child(1) {
@@ -628,7 +637,7 @@
     content: '';
     width: 6px;
     height: 6px;
-    border-radius: 1px;
+    border-radius: var(--radius-pill);
     background: var(--primary);
     flex: none;
   }

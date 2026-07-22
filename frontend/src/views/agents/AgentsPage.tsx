@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'motion/react'
 import { MessageSquareIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { MotionListItem } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
@@ -106,9 +105,9 @@ function AgentDialog({
       <form className="ag-dialog" onSubmit={submit}>
         <header className="ag-dialog__head">
           <span className="t-label">Control · Agents</span>
-          <h3 id={titleId} className="ag-dialog__title">
+          <h2 id={titleId} className="ag-dialog__title">
             {isCreate ? 'New agent' : `Edit agent: ${seed.id}`}
-          </h3>
+          </h2>
         </header>
 
         <div className="ag-dialog__body">
@@ -266,13 +265,13 @@ function ConfirmDialog({
       describedBy={bodyId}
       onClose={busy ? () => {} : onCancel}
       overlayClassName="ag-modal__overlay"
-      className="ag-modal panel"
+      className="ag-modal panel ag-confirm-modal"
     >
       <div className="ag-dialog ag-confirm">
         <header className="ag-dialog__head">
-          <h3 id={titleId} className="ag-dialog__title">
+          <h2 id={titleId} className="ag-dialog__title">
             {title}
-          </h3>
+          </h2>
         </header>
         <p id={bodyId} className="ag-confirm__body">
           {body}
@@ -532,10 +531,9 @@ export function AgentsPage() {
   return (
     <div className="ag-stage">
       <header className="ag-stage__header">
-        <AsciiField />
         <div className="ag-stage__title-block">
           <span className="t-label">Control · Agents</span>
-          <h2 className="t-display">Agents</h2>
+          <h1 className="t-display">Agents</h1>
           <p className="ag-stage__subtitle">
             Custom personalities and skill sets you can chat with.
           </p>
@@ -584,10 +582,10 @@ export function AgentsPage() {
 
       <section className="ag-list">
         <div className="ag-list__head">
-          <h3 className="ag-list__title t-label">
+          <h2 className="ag-list__title t-label">
             Configured agents{' '}
             {agents.length ? <span className="ag-list__count t-data">{agents.length}</span> : null}
-          </h3>
+          </h2>
         </div>
 
         {agents.length === 0 ? (

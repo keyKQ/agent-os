@@ -1,7 +1,6 @@
 import './health.css'
 import { useQuery } from '@tanstack/react-query'
-import { RefreshCwIcon } from 'lucide-react'
-import { AsciiField } from '@/components/AsciiField'
+import { ActivityIcon, RefreshCwIcon, ShieldAlertIcon, ShieldCheckIcon } from 'lucide-react'
 import { CommandLine } from '@/components/CommandLine'
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
@@ -193,7 +192,7 @@ function FindingsSection({ findings }: { findings: Finding[] }) {
         <section className={`health-finding-group is-${group.kind}`} key={group.kind}>
           <header className="health-finding-group__header">
             <div>
-              <h3>{group.title}</h3>
+              <h2>{group.title}</h2>
               <p>{group.note}</p>
             </div>
             <span>{group.findings.length}</span>
@@ -207,14 +206,38 @@ function FindingsSection({ findings }: { findings: Finding[] }) {
   )
 }
 
-function CountTile({ label, value, kind }: { label: string; value: number; kind: string }) {
+function CountTile({
+  label,
+  value,
+  kind,
+  total,
+  loading = false,
+}: {
+  label: string
+  value: number
+  kind: string
+  total: number
+  loading?: boolean
+}) {
   // health.js:270-275
+  const percentage = total > 0 ? Math.round((value / total) * 100) : 0
   return (
-    <div className={`health-count is-${classToken(kind)}`}>
-      <span>{label}</span>
-      <strong>{Number(value || 0)}</strong>
+    <div
+      className={`health-count is-${classToken(kind)}${loading ? ' is-loading' : ''}`}
+      aria-label={`${label}: ${Number(value || 0)}`}
+    >
+      <span className="health-count__dot" aria-hidden="true" />
+      <span className="health-count__label">{label}</span>
+      <strong>{loading ? '—' : Number(value || 0)}</strong>
+      <span className="health-count__share">{loading ? 'checking' : `${percentage}%`}</span>
     </div>
   )
+}
+
+function StatusIcon({ status }: { status: string }) {
+  if (status === 'ready') return <ShieldCheckIcon />
+  if (status === 'degraded') return <ActivityIcon />
+  return <ShieldAlertIcon />
 }
 
 function ReportContext({
@@ -256,24 +279,52 @@ function StatusRail({
   // health.js:133-150 — readiness label + 4 count tiles.
   const impactCounts = report.impactCounts || impactCountsFromSeverity(report.counts || {})
   const status = report.status || 'unknown'
+  const counts = [
+    { label: 'Needs action', value: impactCounts.blocks_ready || 0, kind: 'blocks_ready' },
+    { label: 'Degraded', value: impactCounts.degrades || 0, kind: 'degrades' },
+    { label: 'Optional', value: impactCounts.optional || 0, kind: 'optional' },
+    { label: 'Ready', value: impactCounts.none || 0, kind: 'none' },
+  ]
+  const total = counts.reduce((sum, item) => sum + item.value, 0)
   return (
     <section className={`health-status__rail is-${classToken(status)}`} aria-label="Health summary">
       <div className="health-score">
-        <span className="health-score__label">Readiness</span>
-        <strong>{statusLabel(status, report.ready)}</strong>
-        <span className="health-score__summary">{report.summary || status}</span>
-        <ReportContext report={report} fallbackGatewayUrl={fallbackGatewayUrl} />
+        <span className="health-score__icon" aria-hidden="true">
+          <StatusIcon status={status} />
+        </span>
+        <div className="health-score__copy">
+          <span className="health-score__label">System readiness</span>
+          <strong>{statusLabel(status, report.ready)}</strong>
+          <span className="health-score__summary">{report.summary || status}</span>
+        </div>
       </div>
-      <div className="health-count-grid">
-        <CountTile
-          label="Needs action"
-          value={impactCounts.blocks_ready || 0}
-          kind="blocks_ready"
-        />
-        <CountTile label="Degraded" value={impactCounts.degrades || 0} kind="degrades" />
-        <CountTile label="Optional" value={impactCounts.optional || 0} kind="optional" />
-        <CountTile label="Ready" value={impactCounts.none || 0} kind="none" />
+      <div className="health-impact-profile">
+        <div className="health-impact-profile__head">
+          <span>Impact distribution</span>
+          <strong>{total} checks</strong>
+        </div>
+        <div
+          className={`health-impact-meter${total === 0 ? ' is-empty' : ''}`}
+          role="img"
+          aria-label={`Impact distribution: ${counts.map((item) => `${item.label} ${item.value}`).join(', ')}`}
+        >
+          {counts
+            .filter((item) => item.value > 0)
+            .map((item) => (
+              <span
+                className={`health-impact-meter__segment is-${classToken(item.kind)}`}
+                key={item.kind}
+                style={{ flexGrow: item.value }}
+              />
+            ))}
+        </div>
+        <div className="health-count-grid">
+          {counts.map((item) => (
+            <CountTile {...item} total={total} key={item.kind} />
+          ))}
+        </div>
       </div>
+      <ReportContext report={report} fallbackGatewayUrl={fallbackGatewayUrl} />
     </section>
   )
 }
@@ -283,15 +334,29 @@ function LoadingRail() {
   return (
     <section className="health-status__rail is-loading" aria-label="Health summary">
       <div className="health-score">
-        <span className="health-score__label">Readiness</span>
-        <strong>Checking</strong>
-        <span className="health-score__summary">Waiting for doctor.status</span>
+        <span className="health-score__icon" aria-hidden="true">
+          <ActivityIcon />
+        </span>
+        <div className="health-score__copy">
+          <span className="health-score__label">System readiness</span>
+          <strong>Checking</strong>
+          <span className="health-score__summary">Waiting for doctor.status</span>
+        </div>
       </div>
-      <div className="health-count-grid">
-        <CountTile label="Needs action" value={0} kind="blocks_ready" />
-        <CountTile label="Degraded" value={0} kind="degrades" />
-        <CountTile label="Optional" value={0} kind="optional" />
-        <CountTile label="Ready" value={0} kind="none" />
+      <div className="health-impact-profile">
+        <div className="health-impact-profile__head">
+          <span>Impact distribution</span>
+          <strong>Running checks</strong>
+        </div>
+        <div className="health-impact-meter is-loading" aria-hidden="true">
+          <span />
+        </div>
+        <div className="health-count-grid">
+          <CountTile label="Needs action" value={0} kind="blocks_ready" total={0} loading />
+          <CountTile label="Degraded" value={0} kind="degrades" total={0} loading />
+          <CountTile label="Optional" value={0} kind="optional" total={0} loading />
+          <CountTile label="Ready" value={0} kind="none" total={0} loading />
+        </div>
       </div>
     </section>
   )
@@ -406,10 +471,9 @@ export function HealthPage() {
   return (
     <div className="health-layout health-stage">
       <header className="health-stage__header">
-        <AsciiField />
         <div className="health-stage__title-block">
           <span className="health-eyebrow">Control · Health</span>
-          <h2>Health</h2>
+          <h1>Health</h1>
           <p id="health-summary">{summaryText}</p>
         </div>
         <Button
@@ -417,16 +481,23 @@ export function HealthPage() {
           id="health-refresh"
           title="Refresh health report"
           className="btn-refresh btn-term"
+          disabled={showLoading}
           onClick={() => void query.refetch()}
         >
-          <RefreshCwIcon />
-          <span>Refresh</span>
+          <RefreshCwIcon className={showLoading ? 'health-spin' : undefined} />
+          <span>{showLoading ? 'Checking' : 'Refresh'}</span>
         </Button>
       </header>
       {railNode}
-      {/* boot-seq: finding groups reveal in sequence like a TTY drawing rows. */}
-      <section className="health-findings boot-seq boot-auto" aria-label="Health findings">
-        {findingsNode}
+      <section className="health-findings" aria-labelledby="health-findings-title">
+        <div className="health-findings__intro">
+          <div>
+            <span className="health-findings__eyebrow">Diagnostics</span>
+            <h2 id="health-findings-title">What needs attention</h2>
+          </div>
+          <p>Ordered by readiness impact so the next useful action stays obvious.</p>
+        </div>
+        <div className="health-findings__stack">{findingsNode}</div>
       </section>
     </div>
   )

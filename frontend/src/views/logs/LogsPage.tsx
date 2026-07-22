@@ -1,9 +1,8 @@
 import './logs.css'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { DownloadIcon, ScrollTextIcon, SearchIcon } from 'lucide-react'
+import { ActivityIcon, DownloadIcon, ScrollTextIcon, SearchIcon } from 'lucide-react'
 import { toast } from 'sonner'
-import { AsciiField } from '@/components/AsciiField'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
 import {
@@ -282,16 +281,14 @@ export function LogsPage() {
   return (
     <div className="lg-stage">
       <header className="lg-stage__header">
-        <AsciiField />
         <div className="lg-stage__title-block">
           <span className="t-label">Control · Logs</span>
-          <h2 className="t-display">Logs</h2>
+          <h1 className="t-display">Logs</h1>
           <p className="lg-stage__subtitle">
             Live gateway log stream — filter, follow, and export.
           </p>
         </div>
         <div className="lg-stage__actions">
-          <StatusPills status={statusQuery.data ?? null} />
           <Button
             variant="outline"
             title="Download filtered log lines"
@@ -304,91 +301,112 @@ export function LogsPage() {
         </div>
       </header>
 
-      <section className="lg-stats" aria-label="Log summary">
-        <div className="lg-stat lg-stat--hero" aria-label="In view">
-          <span className="lg-stat__label t-label">In view</span>
-          <strong className="lg-stat__value t-data">{filtered.length.toLocaleString()}</strong>
-          <span className="lg-stat__hint">of {counts.total.toLocaleString()} loaded</span>
-        </div>
-        <div className={`lg-stat${counts.errors ? ' tone-danger' : ''}`} aria-label="Errors">
-          <span className="lg-stat__label t-label">Errors</span>
-          <strong className="lg-stat__value t-data">{counts.errors}</strong>
-          <span className="lg-stat__hint">{counts.errors ? 'review needed' : 'all clear'}</span>
-        </div>
-        <div className={`lg-stat${counts.warns ? ' tone-warn' : ''}`} aria-label="Warnings">
-          <span className="lg-stat__label t-label">Warnings</span>
-          <strong className="lg-stat__value t-data">{counts.warns}</strong>
-          <span className="lg-stat__hint">{counts.warns ? 'recent advisories' : 'none'}</span>
-        </div>
-        <div className="lg-stat" aria-label="Info and Debug">
-          <span className="lg-stat__label t-label">Info / Debug</span>
-          <strong className="lg-stat__value t-data">
-            {counts.infos}
-            <span className="lg-stat__sep">/</span>
-            {counts.debug}
-          </strong>
-          <span className="lg-stat__hint">routine output</span>
-        </div>
-      </section>
-
-      <section className="lg-toolbar panel">
-        <div className="lg-levels">
-          <span className="lg-toolbar__label t-label">Levels</span>
-          <div className="lg-levels__row">
-            {LEVELS.map((level) => {
-              const isActive = activeLevels.has(level)
-              return (
-                <button
-                  type="button"
-                  key={level}
-                  className={`lg-level-btn lg-level-btn--${level.toLowerCase()}${isActive ? ' is-active' : ''}`}
-                  aria-label={`Toggle ${level} level`}
-                  aria-pressed={isActive}
-                  onClick={() => toggleLevel(level)}
-                >
-                  <span className="lg-level-btn__dot" aria-hidden="true" />
-                  <span className="lg-level-btn__label">{level}</span>
-                </button>
-              )
-            })}
+      <section className="lg-console" aria-label="Live log console">
+        <div className="lg-console__head">
+          <div className="lg-console__heading">
+            <span className="lg-console__icon" aria-hidden="true">
+              <ActivityIcon />
+            </span>
+            <div>
+              <span className="t-label">Observability stream</span>
+              <strong>Gateway output</strong>
+            </div>
+          </div>
+          <div className="lg-console__status">
+            <StatusPills status={statusQuery.data ?? null} />
+            <span className="lg-console__cadence t-data">
+              <span aria-hidden="true" /> Polling every 3s
+            </span>
           </div>
         </div>
-        <div className="lg-search-wrap">
-          <span className="lg-search-icon" aria-hidden="true">
-            <SearchIcon />
-          </span>
-          <input
-            className="lg-search-input"
-            type="search"
-            aria-label="Filter log messages"
-            placeholder="Filter messages…"
-            autoComplete="off"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <label className="lg-toggle">
-          <input
-            type="checkbox"
-            checked={autoFollow}
-            onChange={(e) => setAutoFollow(e.target.checked)}
-          />
-          <span className="lg-toggle__track" aria-hidden="true">
-            <span className="lg-toggle__thumb" />
-          </span>
-          <span className="lg-toggle__label">Auto-follow</span>
-        </label>
-      </section>
 
-      <section className="lg-stream">
-        <div
-          ref={displayRef}
-          className="lg-display"
-          role="log"
-          aria-live="polite"
-          aria-relevant="additions text"
-        >
-          {streamBody}
+        <div className="lg-stats" aria-label="Log summary">
+          <div className="lg-stat lg-stat--hero" aria-label="In view">
+            <span className="lg-stat__label t-label">In view</span>
+            <strong className="lg-stat__value t-data">{filtered.length.toLocaleString()}</strong>
+            <span className="lg-stat__hint">of {counts.total.toLocaleString()} loaded</span>
+          </div>
+          <div className={`lg-stat${counts.errors ? ' tone-danger' : ''}`} aria-label="Errors">
+            <span className="lg-stat__label t-label">Errors</span>
+            <strong className="lg-stat__value t-data">{counts.errors}</strong>
+            <span className="lg-stat__hint">{counts.errors ? 'review needed' : 'all clear'}</span>
+          </div>
+          <div className={`lg-stat${counts.warns ? ' tone-warn' : ''}`} aria-label="Warnings">
+            <span className="lg-stat__label t-label">Warnings</span>
+            <strong className="lg-stat__value t-data">{counts.warns}</strong>
+            <span className="lg-stat__hint">{counts.warns ? 'recent advisories' : 'none'}</span>
+          </div>
+          <div className="lg-stat" aria-label="Info and Debug">
+            <span className="lg-stat__label t-label">Info / Debug</span>
+            <strong className="lg-stat__value t-data">
+              {counts.infos}
+              <span className="lg-stat__sep">/</span>
+              {counts.debug}
+            </strong>
+            <span className="lg-stat__hint">routine output</span>
+          </div>
+        </div>
+
+        <div className="lg-toolbar">
+          <div className="lg-levels">
+            <span className="lg-toolbar__label t-label">Levels</span>
+            <div className="lg-levels__row">
+              {LEVELS.map((level) => {
+                const isActive = activeLevels.has(level)
+                return (
+                  <button
+                    type="button"
+                    key={level}
+                    className={`lg-level-btn lg-level-btn--${level.toLowerCase()}${isActive ? ' is-active' : ''}`}
+                    aria-label={`Toggle ${level} level`}
+                    aria-pressed={isActive}
+                    onClick={() => toggleLevel(level)}
+                  >
+                    <span className="lg-level-btn__dot" aria-hidden="true" />
+                    <span className="lg-level-btn__label">{level}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="lg-search-wrap">
+            <span className="lg-search-icon" aria-hidden="true">
+              <SearchIcon />
+            </span>
+            <input
+              className="lg-search-input"
+              type="search"
+              aria-label="Filter log messages"
+              placeholder="Filter messages…"
+              autoComplete="off"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <label className="lg-toggle">
+            <input
+              type="checkbox"
+              checked={autoFollow}
+              onChange={(e) => setAutoFollow(e.target.checked)}
+            />
+            <span className="lg-toggle__track" aria-hidden="true">
+              <span className="lg-toggle__thumb" />
+            </span>
+            <span className="lg-toggle__label">Auto-follow</span>
+          </label>
+        </div>
+
+        <div className="lg-stream">
+          <div
+            ref={displayRef}
+            className="lg-display"
+            role="log"
+            aria-live="polite"
+            aria-relevant="additions text"
+            aria-busy={!tailLoaded}
+          >
+            {streamBody}
+          </div>
         </div>
       </section>
     </div>

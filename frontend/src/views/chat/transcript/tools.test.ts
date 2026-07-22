@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   createToolRenderer,
   toolDisplayName,
+  toolIconName,
   fmtToolDuration,
   toolResultIsError,
   toolResultIsTruncated,
@@ -11,8 +12,9 @@ import {
 } from './tools'
 
 const chatCss = readFileSync('src/views/chat/chat.css', 'utf8')
+const toolSource = readFileSync('src/views/chat/transcript/tools.ts', 'utf8')
 
-function createToolHarness() {
+function createToolHarness(searchProvider = '') {
   const bubble = document.createElement('div')
   const body = document.createElement('div')
   body.className = 'msg-body'
@@ -26,7 +28,7 @@ function createToolHarness() {
     scrollToBottom: () => {},
     getAutoScroll: () => false,
     pushSegment: () => {},
-    getSearchProvider: () => '',
+    getSearchProvider: () => searchProvider,
     setSearchProvider: () => {},
     getSessionKey: () => 'agent:main:webchat:test',
     addMessage: () => null,
@@ -63,6 +65,21 @@ describe('toolDisplayName (parity chat.js:7049)', () => {
 
   it('returns the bare name for publish_artifact when no target resolves', () => {
     expect(toolDisplayName('publish_artifact', '')).toBe('publish_artifact')
+  })
+})
+
+describe('toolIconName', () => {
+  it('maps tool families to a consistent vector icon and uses zap as the fallback', () => {
+    expect(toolIconName('exec_command')).toBe('terminal')
+    expect(toolIconName('write_file')).toBe('pen-line')
+    expect(toolIconName('web_search')).toBe('search')
+    expect(toolIconName('http_request')).toBe('globe')
+    expect(toolIconName('memory_store')).toBe('brain-circuit')
+    expect(toolIconName('unknown_tool')).toBe('zap')
+  })
+
+  it('does not keep platform-dependent emoji glyphs in the tool renderer', () => {
+    expect(toolSource).not.toMatch(/\p{Extended_Pictographic}/u)
   })
 })
 
@@ -161,12 +178,18 @@ describe('tool activity DOM states', () => {
     const details = body.querySelector<HTMLDetailsElement>('.chat-tools-collapse')!
     const summary = details.querySelector<HTMLElement>('.chat-tools-summary')!
     const status = summary.querySelector<HTMLElement>('.chat-tools-status')!
+    const icon = summary.querySelector<HTMLElement>('.chat-tools-icon')!
+    const name = summary.querySelector<HTMLElement>('.chat-tools-name')!
 
     expect(details).toHaveClass('chat-tools-collapse--running')
     expect(details).toHaveAttribute('data-tool-name', 'skill_view')
     expect(summary).toHaveAttribute('aria-disabled', 'true')
     expect(status).toHaveAttribute('data-status', 'running')
     expect(status).toHaveAttribute('aria-label', 'Running')
+    expect(icon).toHaveAttribute('data-icon', 'file-text')
+    expect(icon).toHaveAttribute('aria-hidden', 'true')
+    expect(icon).toBeEmptyDOMElement()
+    expect(name).toHaveTextContent('skill_view')
     expect(details.querySelector('.chat-tool-input')).toHaveTextContent('"skill": "bankr"')
 
     const click = new MouseEvent('click', { bubbles: true, cancelable: true })
@@ -209,6 +232,25 @@ describe('tool activity DOM states', () => {
     }
   })
 
+  it('keeps a search provider between the tool name and status controls', () => {
+    const { body, renderer } = createToolHarness('brave')
+    renderer.appendToolCall({
+      name: 'web_search',
+      tool_use_id: 'tool-search',
+      input: { query: 'AgentOS' },
+    })
+
+    const summary = body.querySelector<HTMLElement>('.chat-tools-summary')!
+    const children = Array.from(summary.children)
+    const provider = summary.querySelector<HTMLElement>('.chat-tool-provider')!
+    const name = summary.querySelector<HTMLElement>('.chat-tools-name')!
+    const status = summary.querySelector<HTMLElement>('.chat-tools-status')!
+
+    expect(provider).toHaveTextContent('brave')
+    expect(children.indexOf(name)).toBeLessThan(children.indexOf(provider))
+    expect(children.indexOf(provider)).toBeLessThan(children.indexOf(status))
+  })
+
   it('settles a failed row with an accessible failure state', () => {
     vi.useFakeTimers()
     try {
@@ -245,12 +287,18 @@ describe('tool activity DOM states', () => {
 })
 
 describe('tool activity stylesheet contract', () => {
-  it('replaces native disclosure chrome with the compact legacy row treatment', () => {
+  it('replaces native disclosure chrome with the modern activity-surface treatment', () => {
     expect(chatCss).toContain('.chat-tools-collapse {')
-    expect(chatCss).toContain('border-left: 1px solid var(--border)')
+    expect(chatCss).toContain('background: color-mix(in srgb, var(--foreground) 3%, transparent)')
     expect(chatCss).toContain('.chat-tools-summary::-webkit-details-marker')
     expect(chatCss).toContain('.chat-tools-collapse[open] > .chat-tools-summary::after')
+    expect(chatCss).toContain('.chat-tools-name {')
     expect(chatCss).toContain('.chat-tools-status {')
+    expect(chatCss).toContain("content: 'INPUT'")
+    expect(chatCss).toContain("content: 'OUTPUT'")
+    expect(chatCss).toMatch(
+      /\.chat-tools-icon \{[\s\S]*?color: var\(--primary\);[\s\S]*?\.chat-tools-icon::before \{[\s\S]*?mask: var\(--tool-icon-mask\)/,
+    )
   })
 
   it('styles every tool state and provides a reduced-motion fallback', () => {

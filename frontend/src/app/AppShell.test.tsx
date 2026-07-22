@@ -228,16 +228,18 @@ describe('app shell chrome', () => {
     expect(sidebar).not.toHaveAttribute('inert')
   })
 
-  it('places the single New chat action below the sidebar brand and keeps it in the rail', async () => {
+  it('places the single New chat action in the floating Chat header', async () => {
     stubMatchMedia(false)
     renderShellAt('/chat')
 
     const sidebar = document.getElementById('sidebar-nav')!
-    const slot = await screen.findByTestId('shell-sidebar-primary-action')
+    const header = await screen.findByTestId('shell-chat-header')
+    const slot = await screen.findByTestId('shell-chat-header-primary-action')
     const action = await screen.findByRole('button', { name: 'New chat' })
     const nav = screen.getByRole('navigation', { name: 'Main' })
     expect(slot).toContainElement(action)
-    expect(sidebar).toContainElement(action)
+    expect(header).toContainElement(action)
+    expect(sidebar).not.toContainElement(action)
     expect(nav).not.toContainElement(action)
     expect(document.querySelector('.chat-composer')).not.toContainElement(action)
     expect(screen.getAllByRole('button', { name: 'New chat' })).toHaveLength(1)
@@ -249,13 +251,13 @@ describe('app shell chrome', () => {
     expect(action).toBeInTheDocument()
   })
 
-  it('closes the mobile drawer and focuses Message after New chat', async () => {
+  it('keeps New chat in the mobile Chat header and focuses Message after use', async () => {
     stubMatchMedia(true)
     renderShellAt('/chat')
     const toggle = screen.getByRole('button', { name: 'Toggle menu' })
-    fireEvent.click(toggle)
 
     const action = await screen.findByRole('button', { name: 'New chat' })
+    expect(screen.getByTestId('shell-chat-header')).toContainElement(action)
     fireEvent.click(action)
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -263,15 +265,15 @@ describe('app shell chrome', () => {
     expect(screen.getByRole('textbox', { name: 'Message' })).toHaveFocus()
   })
 
-  it('aligns both shell headers and folds desktop navigation into an accessible icon rail', () => {
+  it('renders a floating sidebar and folds desktop navigation into an accessible icon rail', () => {
     stubMatchMedia(false)
     renderShellAt('/cron')
 
     const sidebar = document.getElementById('sidebar-nav')!
     const sidebarHead = sidebar.querySelector('.shell-sidebar__head')!
-    const shellHeader = screen.getByTestId('shell-header')
-    expect(sidebarHead).toHaveClass('h-12')
-    expect(shellHeader).toHaveClass('h-12')
+    expect(sidebarHead).toHaveClass('h-16')
+    expect(screen.queryByTestId('shell-header')).not.toBeInTheDocument()
+    expect(sidebar.querySelector('.shell-sidebar__brand-mark')).not.toBeNull()
     expect(sidebar).toHaveAttribute('data-collapsed', 'false')
 
     const collapse = screen.getByRole('button', { name: 'Collapse navigation' })
@@ -288,6 +290,49 @@ describe('app shell chrome', () => {
     fireEvent.click(expand)
     expect(sidebar).toHaveAttribute('data-collapsed', 'false')
     expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)).toBe('false')
+  })
+
+  it('uses one modern shell while keeping route-specific page surfaces isolated', () => {
+    stubMatchMedia(false)
+    const control = renderShellAt('/cron')
+
+    const controlShell = document.querySelector('.shell')!
+    const controlView = document.querySelector('.view-container')!
+    expect(controlShell).toHaveAttribute('data-surface', 'control')
+    expect(controlShell).toHaveAttribute('data-design', 'unified')
+    expect(controlView).toHaveClass('control-surface')
+    expect(within(controlView as HTMLElement).getByTestId('control-header-signal')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    )
+    expect(screen.getByRole('link', { name: 'Cron' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.queryByTestId('shell-header')).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#main-content',
+    )
+
+    control.unmount()
+    const chat = renderShellAt('/CH%61T/')
+
+    const chatShell = document.querySelector('.shell')!
+    const chatView = document.querySelector('.view-container')!
+    expect(chatShell).toHaveAttribute('data-surface', 'chat')
+    expect(chatShell).toHaveAttribute('data-design', 'unified')
+    expect(chatView).toHaveClass('chat-surface')
+    expect(chatView).not.toHaveClass('control-surface')
+    expect(within(chatView as HTMLElement).queryByTestId('control-header-signal')).toBeNull()
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#main-content',
+    )
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+
+    chat.unmount()
+    renderShellAt('/missing-page')
+    expect(screen.queryByTestId('shell-header')).not.toBeInTheDocument()
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
   })
 
   it('restores the desktop rail preference without applying it to the mobile drawer', () => {
@@ -350,15 +395,16 @@ describe('app shell chrome', () => {
   })
 
   // M14 — the sidebar footer is the shell's single persistent connection
-  // indicator. The duplicate header pill was removed by owner request.
+  // indicator. The top header has been retired.
   it('shows connection state only in the sidebar footer across all states', () => {
     stubMatchMedia(false)
     renderShellAt('/cron')
     const pill = document.getElementById('conn-pill')!
-    const header = screen.getByTestId('shell-header')
+    const sidebar = document.getElementById('sidebar-nav')!
 
     expect(screen.getAllByRole('status')).toHaveLength(1)
-    expect(header).not.toContainElement(pill)
+    expect(sidebar).toContainElement(pill)
+    expect(screen.queryByTestId('shell-header')).not.toBeInTheDocument()
 
     // Disconnected (initial store state).
     expect(pill).toHaveTextContent('DISCONNECTED')
@@ -371,27 +417,31 @@ describe('app shell chrome', () => {
     expect(pill).toHaveAttribute('title', expect.stringContaining('Connecting'))
     expect(pill).toHaveAttribute('data-variant', 'warn')
 
-    // Connected stays mounted in the footer without a second header readout.
+    // Connected stays mounted in the footer without a second readout.
     act(() => useConnection.getState().setState('connected'))
     expect(document.getElementById('conn-pill')).not.toBeNull()
     expect(pill).toHaveTextContent('CONNECTED')
     expect(pill).toHaveAttribute('title', expect.stringContaining('Connected'))
     expect(pill).toHaveAttribute('data-variant', 'ok')
-    expect(header).not.toHaveTextContent('CONNECTED')
   })
 
-  it('merges chat session controls into the single shell header', () => {
+  it('places Chat controls in a floating route header while theme stays in the sidebar', () => {
     stubMatchMedia(false)
     renderShellAt('/chat')
 
-    const header = screen.getByTestId('shell-header')
-    const slot = screen.getByTestId('shell-header-context')
+    const sidebar = document.getElementById('sidebar-nav')!
+    const header = screen.getByTestId('shell-chat-header')
+    const slot = screen.getByTestId('shell-chat-header-context')
     const controls = screen.getByRole('group', { name: 'Chat session controls' })
+    const theme = screen.getByRole('button', { name: /Theme: (dark|light)\. Toggle theme/ })
 
     expect(header).toContainElement(controls)
+    expect(header).not.toHaveTextContent('Agent workspace')
+    expect(sidebar).not.toContainElement(controls)
+    expect(sidebar).toContainElement(theme)
     expect(slot).toContainElement(controls)
     expect(document.querySelector('.chat-stage > .chat-session-bar')).toBeNull()
-    expect(document.querySelectorAll('header')).toHaveLength(1)
+    expect(document.querySelector('.shell-header')).toBeNull()
   })
 })
 

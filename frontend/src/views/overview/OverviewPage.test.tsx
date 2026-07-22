@@ -42,11 +42,6 @@ function makeRpc() {
 }
 let mockRpc = makeRpc()
 
-let connState = 'connected'
-vi.mock('@/stores/connection', () => ({
-  useConnection: (sel: (s: { state: string }) => unknown) => sel({ state: connState }),
-}))
-
 vi.mock('@/app/providers', () => ({
   useRpc: () => mockRpc,
   useBootstrap: () => ({
@@ -130,7 +125,6 @@ describe('OverviewPage', () => {
   beforeEach(() => {
     mockRpc = makeRpc()
     navigateSpy.mockReset()
-    connState = 'connected'
     vi.mocked(toast.error).mockClear()
   })
   afterEach(() => {
@@ -159,6 +153,15 @@ describe('OverviewPage', () => {
     // doctor.status → readiness label + summary
     expect(screen.getByText('Degraded')).toBeInTheDocument()
     expect(screen.getByText('Two capabilities need attention')).toBeInTheDocument()
+  })
+
+  it('presents health as the primary signal inside one gateway summary', async () => {
+    wireRpc()
+    renderPage()
+    const summary = await screen.findByRole('region', { name: 'Gateway summary' })
+    expect(within(summary).getByText('System pulse')).toBeInTheDocument()
+    expect(within(summary).getByText('Refreshes every 30s')).toBeInTheDocument()
+    expect(within(summary).getByRole('button', { name: /^health$/i })).toHaveClass('ov-stat--hero')
   })
 
   // overview.js:262 — the Total sessions tile printed the raw integer, unlike
@@ -299,12 +302,11 @@ describe('OverviewPage', () => {
     localStorage.clear()
   })
 
-  it('reflects the connection state in the overview pill', async () => {
-    connState = 'connecting'
+  it('does not duplicate the global connection state in the overview header', async () => {
     wireRpc()
     renderPage()
-    const pill = screen.getByLabelText(/gateway connection/i)
-    expect(pill).toHaveTextContent(/connecting/i)
+    expect(screen.queryByRole('status', { name: /gateway connection/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Gateway connection')).toBeInTheDocument()
   })
 
   it('sets the document title', async () => {

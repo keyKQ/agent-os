@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { toast } from 'sonner'
-import { Copy, RotateCcw } from 'lucide-react'
+import { ChevronDown, Copy, FileDown, MoreHorizontal, RotateCcw } from 'lucide-react'
 import {
   classifySessionKey,
   runStatusChipClass,
@@ -15,9 +16,9 @@ import {
  * Session chip + switcher (React) — ported from the legacy topbar-center chip
  * (chat.js:1219-1229 render, 1836-2089 `_bindSessionChip`).
  *
- * One chip acts as the switcher trigger; a sibling copy button copies the key
- * and a reset button runs `sessions.reset`. Opening the chip fetches the session
- * list from `/api/sessions` (chat.js:2026), grouping items via
+ * One chip acts as the switcher trigger; a compact actions menu keeps copy,
+ * reset, and export available inside the Chat-only floating workspace header.
+ * Opening the chip fetches the session list from `/api/sessions` (chat.js:2026), grouping items via
  * `classifySessionKey` (chat.js:1862) and tagging each with its run status
  * (chat.js:1611). Selecting a session calls `onSwitch(key)` — the transcript
  * owner (ChatPage) re-points `useTranscript` at the new key, which parks the old
@@ -28,6 +29,17 @@ import {
 // chat.js:1903 — the switcher group order (empty groups are skipped).
 const GROUP_ORDER: SessionGroup[] = ['Web chat', 'CLI', 'Sub-agents', 'Agents', 'Sessions', 'Other']
 
+const COMPACT_RUN_LABEL: Record<RunStatusResult['status'], string> = {
+  idle: 'Idle',
+  queued: 'Queue',
+  running: 'Run',
+  approval_pending: 'Wait',
+  interrupted: 'Stop',
+  failed: 'Fail',
+  timeout: 'Time',
+  cancelled: 'Done',
+}
+
 export interface SessionChipProps {
   /** The current (canonical) session key (chat.js:1223). */
   sessionKey: string
@@ -37,6 +49,8 @@ export interface SessionChipProps {
   onSwitch: (key: string) => void
   /** Reset the current session (chat.js:2723 `sessions.reset`). */
   onReset: () => void
+  /** Export the current transcript as Markdown. */
+  onExport?: () => void
   /**
    * Copy the current key to the clipboard (chat.js:1782
    * `_copySessionKeyToClipboard`). Injected so the component stays pure of the
@@ -89,6 +103,7 @@ export function SessionChip({
   runState = sessionRunStatus(undefined),
   onSwitch,
   onReset,
+  onExport,
   onCopy = defaultCopy,
   fetchSessions = defaultFetchSessions,
 }: SessionChipProps) {
@@ -99,7 +114,23 @@ export function SessionChip({
   const [sessions, setSessions] = useState<SessionListItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [manualKey, setManualKey] = useState('')
+  const [actionsOpen, setActionsOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const actionsTriggerRef = useRef<HTMLButtonElement>(null)
+  const actionsMenuRef = useRef<HTMLDivElement>(null)
+
+  const getSessionTrigger = useCallback(
+    () => document.querySelector<HTMLButtonElement>('#chat-session-switcher-trigger'),
+    [],
+  )
+  const getActionsTrigger = useCallback(
+    () => document.querySelector<HTMLButtonElement>('#chat-session-actions-trigger'),
+    [],
+  )
+
+  const focusBeforeDismiss = useCallback((target: () => HTMLElement | null) => {
+    target()?.focus()
+  }, [])
 
   const copy = useCallback(() => {
     if (!sessionKey) return
@@ -112,6 +143,7 @@ export function SessionChip({
 
   const dismiss = useCallback(() => {
     setOpen(false)
+    setActionsOpen(false)
     setFilter('')
     setSessions(null)
     setFailed(false)
@@ -119,6 +151,7 @@ export function SessionChip({
   }, [sessionKey])
 
   const toggle = useCallback(() => {
+    setActionsOpen(false)
     setOpen((wasOpen) => {
       if (wasOpen) {
         setFilter('')
@@ -130,12 +163,31 @@ export function SessionChip({
     })
   }, [sessionKey])
 
+  const toggleActions = useCallback(() => {
+    setOpen(false)
+    setFilter('')
+    setSessions(null)
+    setFailed(false)
+    setManualKey(sessionKey)
+    setActionsOpen((wasOpen) => !wasOpen)
+  }, [sessionKey])
+
+  const runHeaderAction = useCallback(
+    (action: () => void) => {
+      focusBeforeDismiss(getActionsTrigger)
+      action()
+      dismiss()
+    },
+    [dismiss, focusBeforeDismiss, getActionsTrigger],
+  )
+
   const switchTo = useCallback(
     (key: string) => {
+      focusBeforeDismiss(getSessionTrigger)
       dismiss()
       if (key && key !== sessionKey) onSwitch(key)
     },
-    [dismiss, onSwitch, sessionKey],
+    [dismiss, focusBeforeDismiss, getSessionTrigger, onSwitch, sessionKey],
   )
 
   // chat.js:1960-2076 — opening the chip fetches the session list (the close-time
@@ -160,15 +212,23 @@ export function SessionChip({
     }
   }, [open, fetchSessions, sessionKey])
 
+  useEffect(() => {
+    if (!actionsOpen) return
+    actionsMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
+  }, [actionsOpen])
+
   // chat.js:2004-2020 — dismiss on outside click / Escape while open.
   useEffect(() => {
-    if (!open) return
+    if (!open && !actionsOpen) return
     const onDocClick = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) dismiss()
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        e.preventDefault()
         e.stopPropagation()
+        const restoreTarget = actionsOpen ? getActionsTrigger : getSessionTrigger
+        focusBeforeDismiss(restoreTarget)
         dismiss()
       }
     }
@@ -182,7 +242,43 @@ export function SessionChip({
       document.removeEventListener('mousedown', onDocClick, true)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open, dismiss])
+  }, [open, actionsOpen, dismiss, focusBeforeDismiss, getActionsTrigger, getSessionTrigger])
+
+  const onActionsKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      const items = Array.from(
+        actionsMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+      )
+      if (!items.length) return
+
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        const trigger = actionsTriggerRef.current
+        const contextButtons = Array.from(
+          trigger
+            ?.closest('[data-chat-session-context]')
+            ?.querySelectorAll<HTMLButtonElement>('button:not([disabled])') ?? [],
+        ).filter((button) => !actionsMenuRef.current?.contains(button))
+        const triggerIndex = trigger ? contextButtons.indexOf(trigger) : -1
+        const target = event.shiftKey ? trigger : contextButtons[triggerIndex + 1] || trigger
+        focusBeforeDismiss(() => target)
+        dismiss()
+        return
+      }
+
+      const current = items.indexOf(document.activeElement as HTMLButtonElement)
+      let next = current
+      if (event.key === 'ArrowDown') next = (current + 1) % items.length
+      else if (event.key === 'ArrowUp') next = (current - 1 + items.length) % items.length
+      else if (event.key === 'Home') next = 0
+      else if (event.key === 'End') next = items.length - 1
+      else return
+
+      event.preventDefault()
+      items[next]?.focus()
+    },
+    [dismiss, focusBeforeDismiss],
+  )
 
   // chat.js:1901-1957 — group the fetched sessions, apply the filter.
   const groups: Array<{ label: SessionGroup; items: SessionListItem[] }> = []
@@ -213,6 +309,7 @@ export function SessionChip({
     <div className="chat-session" ref={rootRef}>
       <span className="chat-session-label">session</span>
       <button
+        id="chat-session-switcher-trigger"
         type="button"
         className={`chat-session-chip${open ? ' is-active' : ''}`}
         aria-label="Switch chat session"
@@ -223,9 +320,7 @@ export function SessionChip({
         <span className="chat-session-chip-key" title={sessionKey}>
           {sessionKey}
         </span>
-        <span className="chat-session-chip-caret" aria-hidden="true">
-          ▾
-        </span>
+        <ChevronDown className="chat-session-chip-caret" aria-hidden="true" />
       </button>
       <span
         id="chat-run-status"
@@ -240,28 +335,75 @@ export function SessionChip({
           .join(' - ')}
         data-status={runState.status}
       >
-        {runState.label}
+        <span className="chat-session-run-status__full">{runState.label}</span>
+        <span className="chat-session-run-status__compact" aria-hidden="true">
+          {COMPACT_RUN_LABEL[runState.status]}
+        </span>
       </span>
-      <button
-        type="button"
-        className="chat-session-copy"
-        title={'Copy session key: ' + sessionKey}
-        aria-label="Copy session key"
-        onClick={copy}
-      >
-        <Copy className="chat-session-action-icon" aria-hidden="true" />
-        <span className="chat-session-action-label">copy</span>
-      </button>
-      <button
-        type="button"
-        className="chat-session-reset"
-        title="Reset the current session"
-        aria-label="Reset session"
-        onClick={onReset}
-      >
-        <RotateCcw className="chat-session-action-icon" aria-hidden="true" />
-        <span className="chat-session-action-label">reset</span>
-      </button>
+      <div className="chat-session-actions">
+        <button
+          id="chat-session-actions-trigger"
+          ref={actionsTriggerRef}
+          type="button"
+          className="chat-session-actions-trigger"
+          title="Chat actions"
+          aria-label="Chat actions"
+          aria-haspopup="menu"
+          aria-expanded={actionsOpen}
+          onClick={toggleActions}
+        >
+          <MoreHorizontal aria-hidden="true" />
+        </button>
+
+        {actionsOpen && (
+          <div
+            ref={actionsMenuRef}
+            className="chat-session-actions-menu"
+            role="menu"
+            aria-label="Chat actions"
+            onKeyDown={onActionsKeyDown}
+          >
+            <button
+              type="button"
+              className="chat-session-actions-menu__item"
+              role="menuitem"
+              tabIndex={-1}
+              aria-label="Copy session key"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runHeaderAction(copy)}
+            >
+              <Copy aria-hidden="true" />
+              <span>Copy session key</span>
+            </button>
+            <button
+              type="button"
+              className="chat-session-actions-menu__item"
+              role="menuitem"
+              tabIndex={-1}
+              aria-label="Reset session"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runHeaderAction(onReset)}
+            >
+              <RotateCcw aria-hidden="true" />
+              <span>Reset session</span>
+            </button>
+            {onExport ? (
+              <button
+                type="button"
+                className="chat-session-actions-menu__item"
+                role="menuitem"
+                tabIndex={-1}
+                aria-label="Export chat as Markdown"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runHeaderAction(onExport)}
+              >
+                <FileDown aria-hidden="true" />
+                <span>Export Markdown</span>
+              </button>
+            ) : null}
+          </div>
+        )}
+      </div>
 
       {open && (
         <div className="chat-session-popover" role="dialog" aria-label="Switch session">
@@ -291,6 +433,7 @@ export function SessionChip({
                 <button
                   type="button"
                   className="chat-session-popover-item"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => switchTo(manualKey.trim())}
                 >
                   <span className="chat-session-popover-item-key">Switch to typed session</span>
@@ -330,6 +473,7 @@ export function SessionChip({
                             type="button"
                             key={k}
                             className={`chat-session-popover-item${isCurrent ? ' is-current' : ''}`}
+                            onMouseDown={(event) => event.preventDefault()}
                             onClick={() => switchTo(k)}
                           >
                             <span className="chat-session-popover-item-key" title={k}>

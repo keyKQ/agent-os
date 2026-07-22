@@ -19,32 +19,53 @@
 
 import type { StreamEventPayload } from '../types'
 
-/* ── Constants (ported verbatim from chat.js) ───────────────────────────── */
+/* ── Constants (ported from chat.js, modernized to vector icon keys) ────── */
 
-// chat.js:503-516 — tool-name → emoji icon map.
-const TOOL_EMOJI: Record<string, string> = {
-  bash: '💻', // 💻
-  read_file: '📄', // 📄
-  write_file: '✏️', // ✏️
-  edit_file: '✏️', // ✏️
-  web_search: '🔍', // 🔍
-  search: '🔍', // 🔍
-  http_request: '🌐', // 🌐
-  web_fetch: '🌐', // 🌐
-  list_files: '📂', // 📂
-  memory_search: '🧠', // 🧠
-  memory_store: '🧠', // 🧠
+export type ToolIconName =
+  | 'terminal'
+  | 'file-text'
+  | 'pen-line'
+  | 'search'
+  | 'globe'
+  | 'folder-open'
+  | 'brain-circuit'
+  | 'zap'
+
+const TOOL_ICONS: Record<string, ToolIconName> = {
+  bash: 'terminal',
+  exec_command: 'terminal',
+  execute_code: 'terminal',
+  read_file: 'file-text',
+  skill_view: 'file-text',
+  write_file: 'pen-line',
+  edit_file: 'pen-line',
+  apply_patch: 'pen-line',
+  web_search: 'search',
+  search: 'search',
+  http_request: 'globe',
+  web_fetch: 'globe',
+  list_files: 'folder-open',
+  memory_search: 'brain-circuit',
+  memory_store: 'brain-circuit',
 }
 
-// chat.js:517-519 — emoji for a tool name, ⚡ default.
-export function toolEmoji(name: string): string {
-  return TOOL_EMOJI[name] || '⚡'
+export function toolIconName(name: string): ToolIconName {
+  return TOOL_ICONS[name] || 'zap'
 }
 
-// chat.js:444 — provider → logo map used on the web_search badge.
-const PROVIDER_LOGOS: Record<string, string> = {
-  brave: '🦁', // 🦁
-  duckduckgo: '🦆', // 🦆
+function createToolIcon(name: string): HTMLSpanElement {
+  const icon = document.createElement('span')
+  icon.className = 'chat-tools-icon'
+  icon.dataset.icon = toolIconName(name)
+  icon.setAttribute('aria-hidden', 'true')
+  return icon
+}
+
+function createToolName(name: string, input: unknown): HTMLSpanElement {
+  const label = document.createElement('span')
+  label.className = 'chat-tools-name'
+  label.textContent = toolDisplayName(name, input)
+  return label
 }
 
 /* ── Pure helpers (unit-tested) ─────────────────────────────────────────── */
@@ -317,9 +338,10 @@ function injectProviderBadge(summary: Element | null, providerRaw: string): void
   if (!badge) {
     badge = document.createElement('span')
     badge.className = 'chat-tool-provider'
-    summary.appendChild(badge)
+    const status = summary.querySelector('.chat-tools-status')
+    summary.insertBefore(badge, status)
   }
-  badge.textContent = (PROVIDER_LOGOS[provider] || '') + ' ' + provider
+  badge.textContent = provider
   badge.title = 'Search provider: ' + provider
 }
 
@@ -415,16 +437,13 @@ export function createToolRenderer(deps: ToolRendererDeps) {
     const currentStatus = summary.querySelector<HTMLElement>('.chat-tools-status')
     const statusText = currentStatus?.dataset?.status || currentStatus?.textContent || ''
     summary.textContent = ''
-    const iconSpan = document.createElement('span')
-    iconSpan.className = 'chat-tools-icon'
-    iconSpan.textContent = toolEmoji(name)
-    summary.appendChild(iconSpan)
-    summary.appendChild(document.createTextNode(' ' + toolDisplayName(name, input)))
+    summary.appendChild(createToolIcon(name))
+    summary.appendChild(createToolName(name, input))
+    if (providerBadge) summary.appendChild(providerBadge)
     const statusSpan = document.createElement('span')
     statusSpan.className = 'chat-tools-status'
     applyToolSummaryStatus(statusSpan, statusText)
     summary.appendChild(statusSpan)
-    if (providerBadge) summary.appendChild(providerBadge)
   }
 
   /* ── build tool-call DOM (chat.js:7061-7105) ──────────────────────────── */
@@ -435,7 +454,6 @@ export function createToolRenderer(deps: ToolRendererDeps) {
     input: unknown,
     isRunning: boolean,
   ): HTMLElement {
-    const displayName = toolDisplayName(name, input)
     const preview = truncate(
       typeof input === 'string' ? input : JSON.stringify(input || '', null, 2),
       200,
@@ -455,11 +473,8 @@ export function createToolRenderer(deps: ToolRendererDeps) {
     summary.addEventListener('click', (e) => {
       if (details.classList.contains('chat-tools-collapse--running')) e.preventDefault()
     })
-    const iconSpan = document.createElement('span')
-    iconSpan.className = 'chat-tools-icon'
-    iconSpan.textContent = toolEmoji(name)
-    summary.appendChild(iconSpan)
-    summary.appendChild(document.createTextNode(' ' + displayName))
+    summary.appendChild(createToolIcon(name))
+    summary.appendChild(createToolName(name, input))
     const statusSpan = document.createElement('span')
     statusSpan.className = 'chat-tools-status'
     applyToolSummaryStatus(statusSpan, isRunning ? 'running' : '')
