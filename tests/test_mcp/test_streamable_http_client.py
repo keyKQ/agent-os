@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import stat
 
 import pytest
@@ -47,8 +48,11 @@ async def test_oauth_storage_round_trips_privately(tmp_path) -> None:
     )
     assert (await restored.get_tokens()).access_token == "access-secret"
     assert (await restored.get_client_info()).client_id == "client-id"
-    assert stat.S_IMODE(restored.path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(restored.path.parent.stat().st_mode) == 0o700
+    # Windows does not expose POSIX owner-only mode bits through stat/chmod;
+    # credential files inherit the current user's state-directory ACL instead.
+    if os.name != "nt":
+        assert stat.S_IMODE(restored.path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(restored.path.parent.stat().st_mode) == 0o700
     assert await restored.is_authenticated() is True
 
     restored.clear()

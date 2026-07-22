@@ -338,8 +338,9 @@ uv sync --extra mcp
 
 OAuth access and refresh tokens are not written to `config.toml`. AgentOS keeps
 them in a server-scoped JSON file under the configured state directory with
-file mode `0600`. Removing the server from the MCP screen also clears that
-credential file.
+file mode `0600` inside a `0700` directory on POSIX systems. On Windows, the
+credential file inherits the current user's state-directory ACL. Removing the
+server from the MCP screen also clears that credential file.
 
 ## Memory Configuration
 

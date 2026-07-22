@@ -108,7 +108,9 @@ Use the approvals area when:
 Open **Settings > MCP Servers** to add and manage external MCP connections. The
 screen supports local `stdio`, legacy SSE, and Streamable HTTP servers. Remote
 servers can use custom headers or OAuth. OAuth tokens are stored separately
-from `config.toml` in the AgentOS state directory with file mode `0600`.
+from `config.toml` in the AgentOS state directory. AgentOS applies mode `0600`
+inside a `0700` directory on POSIX systems; Windows uses the current user's
+state-directory ACL.
 
 The featured Robinhood Trading connection uses:
 
