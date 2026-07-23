@@ -74,9 +74,6 @@ The React console lives in `frontend/` (Node >= 22) and builds to
   retired console.
 - Dev loop: `agentos gateway run` + `cd frontend && npm run dev`
   (Vite proxies `/ws` and `/control/api` to the gateway).
-- Every ported behavior updates
-  `docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md`
-  in the same commit (see the rewrite spec §6).
 
 ## Source layout — `src/agentos/`
 
