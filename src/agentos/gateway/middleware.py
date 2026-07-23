@@ -318,11 +318,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         response: Response = await call_next(request)  # type: ignore[assignment]
         if request.url.path.startswith(self._path_prefix):
+            # Remote gateway profiles are a supported operator feature: the
+            # browser may connect to a bootstrap-provided endpoint or the
+            # explicit ``agentos.wsUrl`` override. CSP cannot enumerate that
+            # user-selected authority ahead of time, so permit only the two
+            # WebSocket schemes in addition to same-origin HTTP requests.
             response.headers["content-security-policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
+                "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:; "
+                "img-src 'self' data: https://raw.githubusercontent.com; "
                 "connect-src 'self' ws: wss:; "
                 "font-src 'self';"
             )

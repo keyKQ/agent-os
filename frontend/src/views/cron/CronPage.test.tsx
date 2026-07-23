@@ -96,6 +96,8 @@ function wireRpc(
     runsReject?: boolean
     removeReject?: boolean
     createReject?: boolean
+    removePending?: boolean
+    createPending?: boolean
     runs?: unknown[]
   } = {},
 ) {
@@ -109,6 +111,7 @@ function wireRpc(
       case 'cron.unsubscribe':
         return Promise.resolve({})
       case 'cron.create':
+        if (opts.createPending) return new Promise(() => undefined)
         return opts.createReject ? Promise.reject(new Error('create failed')) : Promise.resolve({})
       case 'cron.update':
         return opts.updateReject ? Promise.reject(new Error('update failed')) : Promise.resolve({})
@@ -121,6 +124,7 @@ function wireRpc(
           ? Promise.reject(new Error('runs down'))
           : Promise.resolve(opts.runs ?? RUNS)
       case 'cron.remove':
+        if (opts.removePending) return new Promise(() => undefined)
         return opts.removeReject ? Promise.reject(new Error('remove failed')) : Promise.resolve({})
       default:
         return Promise.resolve({})
@@ -302,6 +306,43 @@ describe('CronPage', () => {
     expect(callsTo('cron.remove')).toBe(0)
   })
 
+  it('traps delete-confirm focus and restores it to the delete trigger on Escape', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Daily standup')).toBeInTheDocument())
+    const trigger = screen.getByRole('button', { name: /delete daily standup/i })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('alertdialog')
+    const cancel = within(dialog).getByRole('button', { name: /cancel/i })
+    const confirm = within(dialog).getByRole('button', { name: /^delete$/i })
+    expect(cancel).toHaveFocus()
+
+    cancel.focus()
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(confirm).toHaveFocus()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+  })
+
+  it('keeps the delete confirmation open while deletion is pending', async () => {
+    wireRpc({ removePending: true })
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Daily standup')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /delete daily standup/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^delete$/i }))
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: /^delete$/i })).toBeDisabled(),
+    )
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.mouseDown(dialog.parentElement!)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
+
   it('refreshes on the Refresh button', async () => {
     wireRpc()
     renderPage()
@@ -348,6 +389,49 @@ describe('CronPage', () => {
 })
 
 describe('CronPage — create/edit panel', () => {
+  it('traps panel focus and restores it to New job after Escape', async () => {
+    wireRpc({ jobs: [] })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    const trigger = screen.getByRole('button', { name: /new job/i })
+    trigger.focus()
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog')
+    const first = within(dialog).getByLabelText(/^name$/i)
+    const last = within(dialog).getByRole('button', { name: /save schedule/i })
+    expect(first).toHaveFocus()
+
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(first).toHaveFocus()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(trigger).toHaveFocus()
+  })
+
+  it('keeps the create panel open while saving is pending', async () => {
+    wireRpc({ jobs: [], createPending: true })
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/No schedules yet/i)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /new job/i }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/^name$/i), {
+      target: { value: 'Standup' },
+    })
+    fireEvent.change(within(dialog).getByLabelText('Cron expression', { selector: 'input' }), {
+      target: { value: '0 9 * * 1-5' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: /save schedule/i }))
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: /save schedule/i })).toBeDisabled(),
+    )
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.mouseDown(dialog.parentElement!)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
   it('New job opens the create panel; Save with a name+cron calls cron.create and invalidates', async () => {
     wireRpc({ jobs: [] })
     renderPage()

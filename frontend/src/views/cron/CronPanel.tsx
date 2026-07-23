@@ -1,5 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import {
   buildSavePayload,
@@ -137,14 +138,7 @@ export function CronPanel({
   const [form, setForm] = useState<CronForm>(() => seedForm(job, template, activeSessionKey))
   const [error, setError] = useState<string | null>(null)
   const titleId = useId()
-  const panelRef = useRef<HTMLDivElement>(null)
   const isEdit = !!job
-
-  useEffect(() => {
-    // cron.js:979 — focus the name field on open.
-    const first = panelRef.current?.querySelector<HTMLElement>('#cp-name')
-    first?.focus()
-  }, [])
 
   function set<K extends keyof CronForm>(key: K, value: CronForm[K]) {
     setForm((f) => ({ ...f, [key]: value }))
@@ -176,418 +170,406 @@ export function CronPanel({
   }
 
   return (
-    <div
-      className="cron-modal__overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !saving) onCancel()
-      }}
+    <ModalShell
+      role="dialog"
+      labelledBy={titleId}
+      onClose={onCancel}
+      dismissible={!saving}
+      overlayClassName="cron-modal__overlay"
+      className="cron-panel panel"
     >
-      <div
-        ref={panelRef}
-        className="cron-panel panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && !saving) {
-            e.stopPropagation()
-            onCancel()
-          }
-        }}
-      >
-        {/* noValidate: validation is JS-only (buildSavePayload), matching the
+      {/* noValidate: validation is JS-only (buildSavePayload), matching the
             legacy view — native constraints (e.g. number min) must not
             intercept submit before our validators run. */}
-        <form className="cron-panel__form" noValidate onSubmit={submit}>
-          <header className="cron-panel__head">
-            <span className="t-label">{isEdit ? 'Edit schedule' : 'New schedule'}</span>
-            <h2 id={titleId} className="cron-panel__title">
-              {isEdit ? 'Edit Schedule' : 'Create a job'}
-            </h2>
-          </header>
+      <form className="cron-panel__form" noValidate onSubmit={submit}>
+        <header className="cron-panel__head">
+          <span className="t-label">{isEdit ? 'Edit schedule' : 'New schedule'}</span>
+          <h2 id={titleId} className="cron-panel__title">
+            {isEdit ? 'Edit Schedule' : 'Create a job'}
+          </h2>
+        </header>
 
-          <div className="cron-panel__body">
-            <label className="cron-field">
-              <span className="t-label">Name</span>
-              <input
-                id="cp-name"
-                className="cron-input"
-                type="text"
-                autoComplete="off"
-                placeholder="my-job"
-                value={form.name}
-                onChange={(e) => set('name', e.target.value)}
-              />
-            </label>
+        <div className="cron-panel__body">
+          <label className="cron-field">
+            <span className="t-label">Name</span>
+            <input
+              id="cp-name"
+              className="cron-input"
+              type="text"
+              autoComplete="off"
+              placeholder="my-job"
+              value={form.name}
+              onChange={(e) => set('name', e.target.value)}
+            />
+          </label>
 
-            <label className="cron-field">
-              <span className="t-label">Schedule type</span>
-              <select
-                className="cron-input"
-                value={form.scheduleKind}
-                onChange={(e) => set('scheduleKind', e.target.value as ScheduleKind)}
-              >
-                {SCHEDULE_TYPES.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <label className="cron-field">
+            <span className="t-label">Schedule type</span>
+            <select
+              className="cron-input"
+              value={form.scheduleKind}
+              onChange={(e) => set('scheduleKind', e.target.value as ScheduleKind)}
+            >
+              {SCHEDULE_TYPES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-            {form.scheduleKind === 'cron' ? (
-              <div className="cron-field">
-                <label className="t-label" htmlFor="cp-cron">
-                  Cron expression
-                </label>
-                <input
-                  id="cp-cron"
-                  className="cron-input cron-input--mono"
-                  type="text"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="0 9 * * 1-5"
-                  value={form.cron}
-                  onChange={(e) => set('cron', e.target.value)}
-                />
-                <CronExplain expr={form.cron} />
-                <div className="cron-presets">
-                  <span className="cron-presets__label t-label">Presets</span>
-                  {PRESETS.map((p) => (
-                    <button
-                      key={p.cron}
-                      type="button"
-                      className="cron-preset"
-                      onClick={() => set('cron', p.cron)}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {form.scheduleKind === 'every' ? (
-              <label className="cron-field">
-                <span className="t-label">Interval (seconds)</span>
-                <input
-                  className="cron-input"
-                  type="number"
-                  min="1"
-                  placeholder="60"
-                  value={form.every}
-                  onChange={(e) => set('every', e.target.value)}
-                />
+          {form.scheduleKind === 'cron' ? (
+            <div className="cron-field">
+              <label className="t-label" htmlFor="cp-cron">
+                Cron expression
               </label>
-            ) : null}
-
-            {form.scheduleKind === 'at' ? (
-              <label className="cron-field">
-                <span className="t-label">ISO time</span>
-                <input
-                  className="cron-input cron-input--mono"
-                  type="text"
-                  placeholder="2026-05-18T09:00:00+08:00"
-                  value={form.at}
-                  onChange={(e) => set('at', e.target.value)}
-                />
-              </label>
-            ) : null}
-
-            <label className="cron-field">
-              <span className="t-label">Timezone (IANA)</span>
               <input
+                id="cp-cron"
                 className="cron-input cron-input--mono"
                 type="text"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="America/Los_Angeles"
-                value={form.tz}
-                onChange={(e) => set('tz', e.target.value)}
+                placeholder="0 9 * * 1-5"
+                value={form.cron}
+                onChange={(e) => set('cron', e.target.value)}
               />
-              <span className="cron-field__hint">
-                Leave empty to evaluate the cron expression in UTC.
-              </span>
-            </label>
-
-            <label className="cron-field">
-              <span className="t-label">Job mode</span>
-              <select
-                className="cron-input"
-                value={form.payloadKind}
-                onChange={(e) => set('payloadKind', e.target.value as PayloadKind)}
-              >
-                {JOB_MODES.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
+              <CronExplain expr={form.cron} />
+              <div className="cron-presets">
+                <span className="cron-presets__label t-label">Presets</span>
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.cron}
+                    type="button"
+                    className="cron-preset"
+                    onClick={() => set('cron', p.cron)}
+                  >
+                    {p.label}
+                  </button>
                 ))}
-              </select>
-            </label>
+              </div>
+            </div>
+          ) : null}
 
+          {form.scheduleKind === 'every' ? (
             <label className="cron-field">
-              <span className="t-label">Agent ID</span>
+              <span className="t-label">Interval (seconds)</span>
+              <input
+                className="cron-input"
+                type="number"
+                min="1"
+                placeholder="60"
+                value={form.every}
+                onChange={(e) => set('every', e.target.value)}
+              />
+            </label>
+          ) : null}
+
+          {form.scheduleKind === 'at' ? (
+            <label className="cron-field">
+              <span className="t-label">ISO time</span>
+              <input
+                className="cron-input cron-input--mono"
+                type="text"
+                placeholder="2026-05-18T09:00:00+08:00"
+                value={form.at}
+                onChange={(e) => set('at', e.target.value)}
+              />
+            </label>
+          ) : null}
+
+          <label className="cron-field">
+            <span className="t-label">Timezone (IANA)</span>
+            <input
+              className="cron-input cron-input--mono"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="America/Los_Angeles"
+              value={form.tz}
+              onChange={(e) => set('tz', e.target.value)}
+            />
+            <span className="cron-field__hint">
+              Leave empty to evaluate the cron expression in UTC.
+            </span>
+          </label>
+
+          <label className="cron-field">
+            <span className="t-label">Job mode</span>
+            <select
+              className="cron-input"
+              value={form.payloadKind}
+              onChange={(e) => set('payloadKind', e.target.value as PayloadKind)}
+            >
+              {JOB_MODES.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="cron-field">
+            <span className="t-label">Agent ID</span>
+            <input
+              className="cron-input"
+              type="text"
+              placeholder="main"
+              value={form.agentId}
+              onChange={(e) => set('agentId', e.target.value)}
+            />
+          </label>
+
+          <label className="cron-field">
+            <span className="t-label">Session target</span>
+            <select
+              className="cron-input"
+              value={targetRes.target}
+              disabled={targetRes.locked}
+              onChange={(e) => set('sessionTarget', e.target.value as SessionTarget)}
+            >
+              {SESSION_TARGETS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {targetRes.showTargetSessionRow ? (
+            <label className="cron-field">
+              <span className="t-label">
+                {targetRes.target === 'current' ? 'Current session key' : 'Named session key'}
+              </span>
               <input
                 className="cron-input"
                 type="text"
-                placeholder="main"
-                value={form.agentId}
-                onChange={(e) => set('agentId', e.target.value)}
+                placeholder="agent:main:webchat:abc123"
+                value={form.targetSessionKey}
+                onChange={(e) => set('targetSessionKey', e.target.value)}
               />
             </label>
+          ) : null}
 
-            <label className="cron-field">
-              <span className="t-label">Session target</span>
-              <select
-                className="cron-input"
-                value={targetRes.target}
-                disabled={targetRes.locked}
-                onChange={(e) => set('sessionTarget', e.target.value as SessionTarget)}
-              >
-                {SESSION_TARGETS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <label className="cron-field">
+            <span className="t-label">{targetRes.messageLabel}</span>
+            <textarea
+              className="cron-input cron-input--textarea"
+              rows={4}
+              placeholder="Run daily report…"
+              value={form.message}
+              onChange={(e) => set('message', e.target.value)}
+            />
+          </label>
 
-            {targetRes.showTargetSessionRow ? (
+          <details className="cron-advanced">
+            <summary className="cron-advanced__summary">Advanced delivery &amp; wake</summary>
+            <div className="cron-advanced__body">
               <label className="cron-field">
-                <span className="t-label">
-                  {targetRes.target === 'current' ? 'Current session key' : 'Named session key'}
-                </span>
-                <input
+                <span className="t-label">Wake mode</span>
+                <select
                   className="cron-input"
-                  type="text"
-                  placeholder="agent:main:webchat:abc123"
-                  value={form.targetSessionKey}
-                  onChange={(e) => set('targetSessionKey', e.target.value)}
-                />
+                  value={form.wakeMode}
+                  onChange={(e) => set('wakeMode', e.target.value)}
+                >
+                  {WAKE_MODES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </label>
-            ) : null}
 
-            <label className="cron-field">
-              <span className="t-label">{targetRes.messageLabel}</span>
-              <textarea
-                className="cron-input cron-input--textarea"
-                rows={4}
-                placeholder="Run daily report…"
-                value={form.message}
-                onChange={(e) => set('message', e.target.value)}
-              />
-            </label>
+              <label className="cron-field">
+                <span className="t-label">Delivery mode</span>
+                <select
+                  className="cron-input"
+                  value={form.deliveryMode}
+                  onChange={(e) => set('deliveryMode', e.target.value as DeliveryMode)}
+                >
+                  {DELIVERY_MODES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-            <details className="cron-advanced">
-              <summary className="cron-advanced__summary">Advanced delivery &amp; wake</summary>
-              <div className="cron-advanced__body">
-                <label className="cron-field">
-                  <span className="t-label">Wake mode</span>
-                  <select
-                    className="cron-input"
-                    value={form.wakeMode}
-                    onChange={(e) => set('wakeMode', e.target.value)}
-                  >
-                    {WAKE_MODES.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="cron-field">
-                  <span className="t-label">Delivery mode</span>
-                  <select
-                    className="cron-input"
-                    value={form.deliveryMode}
-                    onChange={(e) => set('deliveryMode', e.target.value as DeliveryMode)}
-                  >
-                    {DELIVERY_MODES.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {isAnnounce ? (
-                  <>
-                    <label className="cron-field">
-                      <span className="t-label">Channel</span>
-                      <input
-                        className="cron-input"
-                        type="text"
-                        placeholder="slack"
-                        value={form.deliveryChannel}
-                        onChange={(e) => set('deliveryChannel', e.target.value)}
-                      />
-                    </label>
-                    <label className="cron-field">
-                      <span className="t-label">Recipient</span>
-                      <input
-                        className="cron-input"
-                        type="text"
-                        placeholder="C-team-alerts"
-                        value={form.deliveryTo}
-                        onChange={(e) => set('deliveryTo', e.target.value)}
-                      />
-                    </label>
-                    <label className="cron-field">
-                      <span className="t-label">Account id</span>
-                      <input
-                        className="cron-input"
-                        type="text"
-                        value={form.deliveryAccount}
-                        onChange={(e) => set('deliveryAccount', e.target.value)}
-                      />
-                    </label>
-                  </>
-                ) : null}
-
-                {isWebhook ? (
-                  <>
-                    <label className="cron-field">
-                      <span className="t-label">Webhook URL</span>
-                      <input
-                        className="cron-input cron-input--mono"
-                        type="url"
-                        placeholder="https://hooks.example/cron"
-                        value={form.deliveryWebhookUrl}
-                        onChange={(e) => set('deliveryWebhookUrl', e.target.value)}
-                      />
-                    </label>
-                    <label className="cron-field">
-                      <span className="t-label">Webhook bearer token</span>
-                      <input
-                        className="cron-input"
-                        type="password"
-                        placeholder="optional bearer token"
-                        value={form.deliveryWebhookToken}
-                        onChange={(e) => set('deliveryWebhookToken', e.target.value)}
-                      />
-                    </label>
-                  </>
-                ) : null}
-
-                {showBestEffort ? (
-                  <label className="cron-toggle">
+              {isAnnounce ? (
+                <>
+                  <label className="cron-field">
+                    <span className="t-label">Channel</span>
                     <input
-                      type="checkbox"
-                      checked={form.deliveryBestEffort}
-                      onChange={(e) => set('deliveryBestEffort', e.target.checked)}
+                      className="cron-input"
+                      type="text"
+                      placeholder="slack"
+                      value={form.deliveryChannel}
+                      onChange={(e) => set('deliveryChannel', e.target.value)}
                     />
-                    <span>Best-effort delivery (do not fail the job when delivery fails)</span>
                   </label>
-                ) : null}
+                  <label className="cron-field">
+                    <span className="t-label">Recipient</span>
+                    <input
+                      className="cron-input"
+                      type="text"
+                      placeholder="C-team-alerts"
+                      value={form.deliveryTo}
+                      onChange={(e) => set('deliveryTo', e.target.value)}
+                    />
+                  </label>
+                  <label className="cron-field">
+                    <span className="t-label">Account id</span>
+                    <input
+                      className="cron-input"
+                      type="text"
+                      value={form.deliveryAccount}
+                      onChange={(e) => set('deliveryAccount', e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
 
-                <details className="cron-advanced cron-advanced--nested">
-                  <summary className="cron-advanced__summary">Failure destination</summary>
-                  <div className="cron-advanced__body">
-                    <label className="cron-field">
-                      <span className="t-label">Route failures to</span>
-                      <select
-                        className="cron-input"
-                        value={form.fdMode}
-                        onChange={(e) => set('fdMode', e.target.value as FailureDestMode)}
-                      >
-                        {FD_MODES.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+              {isWebhook ? (
+                <>
+                  <label className="cron-field">
+                    <span className="t-label">Webhook URL</span>
+                    <input
+                      className="cron-input cron-input--mono"
+                      type="url"
+                      placeholder="https://hooks.example/cron"
+                      value={form.deliveryWebhookUrl}
+                      onChange={(e) => set('deliveryWebhookUrl', e.target.value)}
+                    />
+                  </label>
+                  <label className="cron-field">
+                    <span className="t-label">Webhook bearer token</span>
+                    <input
+                      className="cron-input"
+                      type="password"
+                      placeholder="optional bearer token"
+                      value={form.deliveryWebhookToken}
+                      onChange={(e) => set('deliveryWebhookToken', e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : null}
 
-                    {isFdChannel ? (
-                      <>
-                        <label className="cron-field">
-                          <span className="t-label">Channel</span>
-                          <input
-                            className="cron-input"
-                            type="text"
-                            placeholder="slack"
-                            value={form.fdChannel}
-                            onChange={(e) => set('fdChannel', e.target.value)}
-                          />
-                        </label>
-                        <label className="cron-field">
-                          <span className="t-label">Recipient</span>
-                          <input
-                            className="cron-input"
-                            type="text"
-                            placeholder="C-ops-alerts"
-                            value={form.fdTo}
-                            onChange={(e) => set('fdTo', e.target.value)}
-                          />
-                        </label>
-                        <label className="cron-field">
-                          <span className="t-label">Account id</span>
-                          <input
-                            className="cron-input"
-                            type="text"
-                            value={form.fdAccount}
-                            onChange={(e) => set('fdAccount', e.target.value)}
-                          />
-                        </label>
-                      </>
-                    ) : null}
+              {showBestEffort ? (
+                <label className="cron-toggle">
+                  <input
+                    type="checkbox"
+                    checked={form.deliveryBestEffort}
+                    onChange={(e) => set('deliveryBestEffort', e.target.checked)}
+                  />
+                  <span>Best-effort delivery (do not fail the job when delivery fails)</span>
+                </label>
+              ) : null}
 
-                    {isFdWebhook ? (
-                      <>
-                        <label className="cron-field">
-                          <span className="t-label">Webhook URL</span>
-                          <input
-                            className="cron-input cron-input--mono"
-                            type="url"
-                            placeholder="https://hooks.example/alert"
-                            value={form.fdWebhookUrl}
-                            onChange={(e) => set('fdWebhookUrl', e.target.value)}
-                          />
-                        </label>
-                        <label className="cron-field">
-                          <span className="t-label">Webhook bearer token</span>
-                          <input
-                            className="cron-input"
-                            type="password"
-                            placeholder="optional bearer token"
-                            value={form.fdWebhookToken}
-                            onChange={(e) => set('fdWebhookToken', e.target.value)}
-                          />
-                        </label>
-                      </>
-                    ) : null}
-                  </div>
-                </details>
-              </div>
-            </details>
+              <details className="cron-advanced cron-advanced--nested">
+                <summary className="cron-advanced__summary">Failure destination</summary>
+                <div className="cron-advanced__body">
+                  <label className="cron-field">
+                    <span className="t-label">Route failures to</span>
+                    <select
+                      className="cron-input"
+                      value={form.fdMode}
+                      onChange={(e) => set('fdMode', e.target.value as FailureDestMode)}
+                    >
+                      {FD_MODES.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-            <label className="cron-toggle">
-              <input
-                type="checkbox"
-                checked={form.enabled}
-                onChange={(e) => set('enabled', e.target.checked)}
-              />
-              <span>Enabled</span>
-            </label>
+                  {isFdChannel ? (
+                    <>
+                      <label className="cron-field">
+                        <span className="t-label">Channel</span>
+                        <input
+                          className="cron-input"
+                          type="text"
+                          placeholder="slack"
+                          value={form.fdChannel}
+                          onChange={(e) => set('fdChannel', e.target.value)}
+                        />
+                      </label>
+                      <label className="cron-field">
+                        <span className="t-label">Recipient</span>
+                        <input
+                          className="cron-input"
+                          type="text"
+                          placeholder="C-ops-alerts"
+                          value={form.fdTo}
+                          onChange={(e) => set('fdTo', e.target.value)}
+                        />
+                      </label>
+                      <label className="cron-field">
+                        <span className="t-label">Account id</span>
+                        <input
+                          className="cron-input"
+                          type="text"
+                          value={form.fdAccount}
+                          onChange={(e) => set('fdAccount', e.target.value)}
+                        />
+                      </label>
+                    </>
+                  ) : null}
 
-            {error ? (
-              <p className="cron-panel__error" role="alert">
-                {error}
-              </p>
-            ) : null}
-          </div>
+                  {isFdWebhook ? (
+                    <>
+                      <label className="cron-field">
+                        <span className="t-label">Webhook URL</span>
+                        <input
+                          className="cron-input cron-input--mono"
+                          type="url"
+                          placeholder="https://hooks.example/alert"
+                          value={form.fdWebhookUrl}
+                          onChange={(e) => set('fdWebhookUrl', e.target.value)}
+                        />
+                      </label>
+                      <label className="cron-field">
+                        <span className="t-label">Webhook bearer token</span>
+                        <input
+                          className="cron-input"
+                          type="password"
+                          placeholder="optional bearer token"
+                          value={form.fdWebhookToken}
+                          onChange={(e) => set('fdWebhookToken', e.target.value)}
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                </div>
+              </details>
+            </div>
+          </details>
 
-          <footer className="cron-panel__foot">
-            <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving}>
-              Save schedule
-            </Button>
-          </footer>
-        </form>
-      </div>
-    </div>
+          <label className="cron-toggle">
+            <input
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(e) => set('enabled', e.target.checked)}
+            />
+            <span>Enabled</span>
+          </label>
+
+          {error ? (
+            <p className="cron-panel__error" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        <footer className="cron-panel__foot">
+          <Button type="button" variant="ghost" disabled={saving} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={saving}>
+            Save schedule
+          </Button>
+        </footer>
+      </form>
+    </ModalShell>
   )
 }

@@ -27,7 +27,7 @@ def _config(tmp_path, *, base_path: str, max_requests: int = 120) -> GatewayConf
     )
 
 
-def _patch_base_path(config: GatewayConfig, base_path: str) -> None:
+def _patch_base_path(config: GatewayConfig, base_path: str):
     context = RpcContext(
         conn_id="ui-exemption-test",
         config=config,
@@ -46,8 +46,7 @@ def _patch_base_path(config: GatewayConfig, base_path: str) -> None:
             context,
         )
     )
-    assert result.error is None, result.error
-    assert result.payload["restartRequired"] is True
+    return result
 
 
 @pytest.mark.parametrize("base_path", ["/", "/api", "/api/v1"])
@@ -60,7 +59,9 @@ def test_runtime_ui_base_path_change_cannot_disable_auth(tmp_path, base_path: st
         )
         assert authorized.status_code != 401
 
-        _patch_base_path(config, base_path)
+        result = _patch_base_path(config, base_path)
+        assert result.error is not None
+        assert config.control_ui.base_path == "/control"
         unauthorized = client.get("/api/config")
         assert unauthorized.status_code == 401
 
@@ -75,7 +76,9 @@ def test_runtime_ui_base_path_change_cannot_disable_rate_limit(
         first = client.get("/api/config", headers=headers)
         assert first.status_code != 429
 
-        _patch_base_path(config, base_path)
+        result = _patch_base_path(config, base_path)
+        assert result.error is not None
+        assert config.control_ui.base_path == "/control"
         second = client.get("/api/config", headers=headers)
         third = client.get("/api/config", headers=headers)
         assert second.status_code != 429

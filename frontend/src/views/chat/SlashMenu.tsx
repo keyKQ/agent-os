@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { parseSlashInput, type SlashCommand } from './logic'
 
 /**
@@ -54,9 +62,23 @@ export interface SlashMenuProps {
   onClose?: () => void
   /** The imperative keyboard handle for the composer to consult (chat.js:2654). */
   handleRef?: React.Ref<SlashMenuHandle>
+  /** Stable listbox ID referenced by the composer textarea. */
+  listboxId?: string
+  /** Mirrors the active option ID back to the composer for aria-activedescendant. */
+  onActiveDescendantChange?: (optionId: string | undefined) => void
 }
 
-export function SlashMenu({ value, commands, onExecute, onClose, handleRef }: SlashMenuProps) {
+export function SlashMenu({
+  value,
+  commands,
+  onExecute,
+  onClose,
+  handleRef,
+  listboxId,
+  onActiveDescendantChange,
+}: SlashMenuProps) {
+  const generatedId = useId()
+  const resolvedListboxId = listboxId ?? `chat-slash-${generatedId}`
   // The active index into the filtered list (chat.js:2646 `_slashIdx`).
   const [activeIdx, setActiveIdx] = useState(0)
   // Escape dismisses the menu for the CURRENT input (chat.js:2675 sets
@@ -92,6 +114,18 @@ export function SlashMenu({ value, commands, onExecute, onClose, handleRef }: Sl
 
   // Keep the active index in range if the filtered list shrinks.
   const boundedIdx = filtered.length > 0 ? Math.min(activeIdx, filtered.length - 1) : 0
+  const activeOptionId = open ? `${resolvedListboxId}-option-${boundedIdx}` : undefined
+
+  useEffect(() => {
+    onActiveDescendantChange?.(activeOptionId)
+  }, [activeOptionId, onActiveDescendantChange])
+
+  useEffect(
+    () => () => {
+      onActiveDescendantChange?.(undefined)
+    },
+    [onActiveDescendantChange],
+  )
 
   const close = useCallback(() => {
     setDismissed(true)
@@ -158,10 +192,11 @@ export function SlashMenu({ value, commands, onExecute, onClose, handleRef }: Sl
   if (!open) return null
 
   return (
-    <div className="chat-slash" role="listbox" aria-label="Slash commands">
+    <div id={resolvedListboxId} className="chat-slash" role="listbox" aria-label="Slash commands">
       {filtered.map((cmd, i) => (
         <div
           key={cmd.cmd || cmd.name || i}
+          id={`${resolvedListboxId}-option-${i}`}
           role="option"
           aria-selected={i === boundedIdx}
           className={`chat-slash-item${i === boundedIdx ? ' chat-slash-item--active' : ''}`}

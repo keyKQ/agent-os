@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApprovalPrompt } from './ApprovalPrompt'
 import { approvalMonitor, useApprovals, type Approval } from '@/services/approval-monitor'
@@ -53,6 +53,33 @@ describe('ApprovalPrompt', () => {
     expect(screen.getByText('shell')).toBeInTheDocument()
     expect(screen.getByText('Namespace: exec · Mode: prompt · Session: s-42')).toBeInTheDocument()
     expect(screen.getByText('rm -rf /tmp/x')).toBeInTheDocument()
+  })
+
+  it('traps focus, blocks implicit dismissal, and restores the previous focus', () => {
+    const trigger = document.createElement('button')
+    trigger.textContent = 'External trigger'
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    setPending([{ id: 'a1', namespace: 'exec', command: 'ls', toolName: 'shell' }])
+    render(<ApprovalPrompt />)
+
+    const dialog = screen.getByRole('alertdialog')
+    const first = screen.getByRole('button', { name: /copy command/i })
+    const last = screen.getByRole('button', { name: /^deny$/i })
+    expect(first).toHaveFocus()
+
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
+    expect(last).toHaveFocus()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.mouseDown(document.querySelector('.approval-backdrop')!)
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+
+    act(() => setPending([]))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
+    trigger.remove()
   })
 
   it('prompts only the FIRST pending item', () => {

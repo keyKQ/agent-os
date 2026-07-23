@@ -1,5 +1,12 @@
 # React+Vite Console Rewrite — Plan 1: Foundation Implementation Plan
 
+> **ARCHIVED — non-runnable migration record.** This plan was completed before
+> the React-only cutover on 2026-07-23. It intentionally describes intermediate
+> stubs, legacy assets, an inventory extractor, and commands that have since
+> been retired. Do not execute its checklist against the current tree. Use
+> `AGENTS.md`, `CONTRIBUTING.md`, `docs/web-ui.md`, and
+> `scripts/build_control_ui.py` for current development and release procedures.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up the `frontend/` React 19 + Vite 6 toolchain, parity-matrix tooling, typed WS-RPC client, AppShell with all 13 routes stubbed, and the first fully-migrated view (Health) — without touching how the legacy UI is served.

@@ -56,23 +56,13 @@ GEMINI.md
 /plans/
 /docs/superpowers/
 *.png
-# Brand assets are intentionally tracked: top-level assets/ for branding,
-# and the WebUI static asset path so the gateway page renders the mark.
+# Brand assets are intentionally tracked in the public branding and React
+# asset directories.
 !/assets/*.png
-!/src/agentos/gateway/static/img/*.png
+!/frontend/src/assets/*.png
 
-# Public release artifacts that intentionally live inside otherwise-local
-# planning/editor directories. Keep the surrounding scratch trees ignored.
-!/.claude/
-/.claude/*
-!/.claude/workflows/
-/.claude/workflows/*
-!/.claude/workflows/parity-fix-round.js
-!/.superpowers/
-/.superpowers/*
-!/.superpowers/sdd/
-/.superpowers/sdd/*
-!/.superpowers/sdd/task-6-report.md
+# Public release documents that intentionally live inside the otherwise-local
+# planning tree. Keep editor workflows and private execution reports ignored.
 !/docs/superpowers/
 /docs/superpowers/*
 !/docs/superpowers/plans/
@@ -85,7 +75,6 @@ GEMINI.md
 !/docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md
 !/docs/superpowers/specs/2026-07-19-react-vite-console-rewrite-design.md
 !/docs/superpowers/specs/2026-07-20-chat-view-migration-design.md
-!/frontend/src/assets/agentos-mark.png
 site/
 /plugins/
 crontab-*

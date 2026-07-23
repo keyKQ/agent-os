@@ -71,6 +71,7 @@ function fetchOk(body: unknown = { mode: 'bypass', resolvedPending: 0 }, status 
 describe('Toolbar', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     useApprovals.setState({ elevatedMode: '' })
     mockRpc.call.mockReset()
     mockRpc.waitForConnection.mockReset().mockResolvedValue(undefined)
@@ -90,6 +91,7 @@ describe('Toolbar', () => {
   })
 
   it('enabling bypass confirms, POSTs /api/elevated-mode, and persists storage version 2', async () => {
+    sessionStorage.setItem('agentos.wsToken', 'session-token')
     const fetchSpy = fetchOk()
     vi.stubGlobal('fetch', fetchSpy)
     render(<Toolbar sessionKey={SESSION} />)
@@ -102,7 +104,14 @@ describe('Toolbar', () => {
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/elevated-mode',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer session-token',
+          },
+          credentials: 'same-origin',
+        }),
       )
     })
     // The POST body carries the session key + the bypass mode (chat.js:2283).

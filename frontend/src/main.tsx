@@ -5,10 +5,11 @@ import { AppProviders } from './app/providers'
 import { AppShell } from './app/AppShell'
 import { routeChildren } from './app/routes'
 import { RouteErrorBoundary } from './app/RouteErrorBoundary'
+import { controlBasePath } from './lib/control-base'
 import './styles/globals.css'
 import './styles/control-surface.css'
 
-const basename = import.meta.env.BASE_URL.replace(/static\/dist\/?$/, '').replace(/\/$/, '')
+const basename = controlBasePath()
 const router = createBrowserRouter(
   [
     {
@@ -18,7 +19,7 @@ const router = createBrowserRouter(
     },
   ],
   {
-    basename: basename || '/',
+    basename,
   },
 )
 

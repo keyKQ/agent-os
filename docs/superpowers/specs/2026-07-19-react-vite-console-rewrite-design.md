@@ -1,8 +1,8 @@
 # AgentOS Control UI — React 19 + Vite 6 Rewrite (Design)
 
 Date: 2026-07-19
-Status: Approved design, pending implementation plan
-Branch: `worktree-fe-core-swap` (to be rebranded `feat/...` at PR time)
+Status: Implemented; Layer 3 cutover complete (2026-07-23)
+Release target: `main`
 
 > **Current implementation note (2026-07-23).** The original migration kept
 > the 13 legacy route contracts described below. The current console also has a
@@ -30,6 +30,12 @@ Strategy: **single-branch full rewrite with one cutover**. No period of the
 two frontends coexisting on `main`. Playwright E2E is an optional follow-up,
 not part of this rewrite.
 
+> **Completion note (2026-07-23).** Layer 3 now serves the generated Vite
+> bundle exclusively, removes the legacy templates/static sources, supports
+> runtime custom base paths, and verifies release artifacts and React browser
+> smoke in CI. Playwright coverage was pulled into the cutover instead of being
+> left as a follow-up.
+
 This is a technical rewrite that also adopts a component library: each view
 keeps the *behavior and information structure* of its legacy counterpart
 (legacy `static/js/views/*.js` files are the behavioral spec) but is rebuilt
@@ -56,7 +62,8 @@ on shadcn components — not a pixel-faithful port.
 
 ```
 frontend/                          # React source — NOT packaged in the wheel
-  index.html                       # Vite entry (carries theme flash-prevention inline script)
+  index.html                       # Vite entry (loads the pre-paint theme bootstrap)
+  public/theme-bootstrap.js        # same-origin pre-paint script; strict-CSP compatible
   package.json, vite.config.ts, tsconfig.json,
   eslint/prettier/vitest configs, tailwind config (v4, CSS-first)
   src/
@@ -81,12 +88,13 @@ Packaging rules:
   `static/dist/` enters the wheel automatically — no force-include needed.
 - `frontend/` sits outside `src/agentos/`, so React source never enters the
   wheel.
-- **`dist/` is gitignored.** The release pipeline runs
-  `npm ci && npm run build` (in `frontend/`) *before* `hatch build`, so
-  published wheels always contain a fresh `dist/`. Contributors running from
-  source either run `npm run build` once or use the Vite dev server.
-  A guard in the release workflow fails the build if `dist/` is missing or
-  empty. This is the Jupyter/Streamlit/Gradio pattern.
+- **`dist/` is gitignored.** Every artifact path runs
+  `python scripts/build_control_ui.py build` before Hatch. The shared builder
+  enforces Node 22+, performs a clean npm install, builds and budgets the Vite
+  output, generates complete production-dependency license text from the npm
+  lockfile, and rejects missing/non-relative/legacy assets. Hatch explicitly
+  includes that ignored output in wheel and sdist artifacts. Source installers,
+  Docker, PyPI, wheelhouse and CI all use the same contract.
 
 ## 4. Build/serve integration
 
@@ -95,7 +103,7 @@ Packaging rules:
   need Node.
 - **Prod:** `control_ui.py` serves `static/dist/` — Vite-generated
   `index.html` as the SPA fallback response, hashed assets under
-  `{base_path}/static/`. Keep: base path `/control`, SPA fallback, cache
+  `{base_path}/static/dist/`. Keep: configurable base path, SPA fallback, cache
   headers (Vite content-hashing makes the `?v=` scheme unnecessary for
   hashed assets; keep no-cache on `index.html` itself).
 - **Bootstrap data:** replace Jinja data-attr injection with
@@ -103,8 +111,10 @@ Packaging rules:
   base_path, ...}` as JSON; the app fetches it at startup before opening the
   WS. Jinja templating of `index.html` is removed. (`ws_url` derivation
   logic in `_request_ws_url` moves to/behind this endpoint unchanged.)
-- Theme flash prevention: the inline `data-theme` script currently in the
-  Jinja template is preserved verbatim in Vite's `index.html`.
+- Theme flash prevention: the `data-theme` logic runs from the external,
+  same-origin `public/theme-bootstrap.js` before stylesheet links. This
+  preserves the first paint while allowing production to enforce
+  `script-src 'self'` without `unsafe-inline`.
 
 ## 5. Rewrite organization (layers, in order; each green before the next)
 
@@ -205,7 +215,7 @@ Each matrix row: `behavior | legacy source (file:line) | status
    `waived` + reason. A view is **done only when its matrix section has
    zero `pending` rows.**
 
-### 6.3 Mechanical completeness checks (scripted, run at cutover)
+### 6.3 Mechanical completeness checks (completed at cutover)
 
 - **RPC coverage diff:** script extracts the set of RPC methods used by
   legacy JS and the set used by the new TS client; the diff must be empty
@@ -227,8 +237,9 @@ Each matrix row: `behavior | legacy source (file:line) | status
    the matrix), both themes, desktop + narrow viewport.
 5. Docs, AGENTS.md FE lane, THIRD_PARTY_NOTICES updated.
 
-Only then does Layer 3 delete `static/js`, `static/css`, `static/vendor`
-and the Jinja template — in the same PR that flips serving to `dist/`.
+Layer 3 completed these gates, deleted `static/js`, `static/css`,
+`static/vendor` and the Jinja template, and flipped serving to `dist/` in the
+same change.
 
 ## 7. Data flow & error handling
 
@@ -277,7 +288,6 @@ and the Jinja template — in the same PR that flips serving to `dist/`.
 
 ## 10. Out of scope
 
-- Playwright E2E (optional follow-up).
 - Backend feature expansion beyond the additive Agent setup read composite and
   write-hardening contract documented above.
 - Visual redesign beyond what adopting shadcn/ui implies; feature additions.

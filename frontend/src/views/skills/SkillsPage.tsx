@@ -19,8 +19,8 @@ import { MotionListItem } from '@/lib/motion'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
-import bankrSymbolUrl from '../../../../src/agentos/gateway/static/img/bankr-symbol.svg'
-import robinhoodSymbolUrl from '../../../../src/agentos/gateway/static/img/robinhood-symbol.png'
+import bankrSymbolUrl from '@/assets/bankr-symbol.svg'
+import robinhoodSymbolUrl from '@/assets/robinhood-symbol.png'
 import {
   CAT_LABEL,
   REGISTRY_SEARCH_DEBOUNCE_MS,
@@ -128,7 +128,16 @@ function LogoBadge({ item, cls }: { item: RegistryItem; cls: string }) {
   if (!logoUrl || broken) {
     return <span className={`${cls} ${cls}--initials`}>{initials(item.provider || item.name)}</span>
   }
-  return <img className={cls} src={logoUrl} alt="" loading="lazy" onError={() => setBroken(true)} />
+  return (
+    <img
+      className={cls}
+      src={logoUrl}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setBroken(true)}
+    />
+  )
 }
 
 // ── Installed skill card (skills.js:447-465) ──────────────────────────────────

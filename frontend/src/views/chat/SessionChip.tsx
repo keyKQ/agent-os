@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { toast } from 'sonner'
 import { ChevronDown, Copy, FileDown, MoreHorizontal, RotateCcw } from 'lucide-react'
+import { authenticatedHeaders } from '@/lib/http-auth'
 import {
   classifySessionKey,
   runStatusChipClass,
@@ -91,7 +92,10 @@ function defaultCopy(key: string): Promise<void> {
 async function defaultFetchSessions(): Promise<SessionListItem[]> {
   // chat.js:2026-2032 — GET /api/sessions → data.sessions || data.keys, filtered
   // to items that actually carry a key. A non-OK response throws → manual entry.
-  const resp = await fetch('/api/sessions')
+  const resp = await fetch('/api/sessions', {
+    headers: authenticatedHeaders(),
+    credentials: 'same-origin',
+  })
   if (!resp.ok) throw new Error('Session list unavailable')
   const data = (await resp.json()) as { sessions?: SessionListItem[]; keys?: SessionListItem[] }
   const raw = data.sessions || data.keys || []

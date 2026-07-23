@@ -312,12 +312,15 @@ you plan to change the code, use
 
 1. **Clone the code, with the large files too**
 
+   Source installs build the bundled Control UI and therefore require
+   **Node.js 22 or newer** in addition to Python 3.12+, Git, Git LFS, and `uv`.
+
    ```sh
    git lfs install
    git clone https://github.com/use-agent-os/agent-os.git
    cd agent-os
    git lfs pull --include="src/agentos/memory/models/**"
-git lfs pull --include="src/agentos/agentos_router/models/**"
+   git lfs pull --include="src/agentos/agentos_router/models/**"
    ```
 
 2. **Run the installer**
@@ -334,8 +337,9 @@ git lfs pull --include="src/agentos/agentos_router/models/**"
    powershell -ExecutionPolicy Bypass -File ./scripts/install_source.ps1
    ```
 
-   This script installs `.[recommended]` (Pilot Router + memory + local
-   models). It uses `uv tool install`, in its own environment. If
+   This script first builds and verifies the React Control UI, then installs
+   `.[recommended]` (Pilot Router + memory + local models). It uses `uv tool
+   install`, in its own environment. If
    `uv` is not there, it falls back to `python -m pip install
    --user`. If `agentos` is not found after install, open a new
    terminal.
@@ -357,7 +361,7 @@ git lfs pull --include="src/agentos/agentos_router/models/**"
 <details>
 <summary>Install from source — terminal prerequisites and installer options</summary>
 
-**Install Git, Git LFS, and uv from a terminal**
+**Install Git, Git LFS, Node.js 22+, and uv from a terminal**
 
 Windows PowerShell:
 
@@ -413,11 +417,14 @@ commands using the files in this checkout.
 
 ```sh
 uv sync --extra recommended --extra dev
+python scripts/build_control_ui.py build
 uv run agentos --help
 ```
 
 The `recommended` extra also brings Pilot Router here. The `dev` extra
-adds the test, lint, and type-check tools. To add more extras to
+adds the test, lint, and type-check tools. The build command uses Node.js 22+
+to produce and verify the React Control UI served by the local gateway. To add
+more extras to
 this same setup:
 
 ```sh

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { useRpc } from '@/app/providers'
+import { authenticatedHeaders } from '@/lib/http-auth'
 import {
   approvalMonitor,
   isApprovalBypassMode,
@@ -90,7 +91,8 @@ export function Toolbar({
       try {
         const resp = await fetch('/api/elevated-mode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authenticatedHeaders({ 'Content-Type': 'application/json' }),
+          credentials: 'same-origin',
           body: JSON.stringify({ sessionKey, mode: mode || 'off' }),
         })
         if (resp.status === 403) {

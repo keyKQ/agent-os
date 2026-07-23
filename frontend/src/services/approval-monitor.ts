@@ -12,6 +12,7 @@
  * persistence, the toast-on-new-pending hook, and pollNow() are preserved 1:1.
  */
 import { create } from 'zustand'
+import { authenticatedHeaders } from '@/lib/http-auth'
 import { toast } from 'sonner'
 
 // approval_monitor.js:4-8 — polling cadence + elevated-mode storage constants.
@@ -124,21 +125,6 @@ export const useApprovals = create<ApprovalsState>((set) => ({
   setElevatedMode: (mode) => set({ elevatedMode: mode }),
   clear: () => set({ pending: [], count: 0 }),
 }))
-
-// approval_monitor.js:56-61 — Authorization header from the per-tab session
-// token. Legacy read App.getAuthToken() → sessionStorage['agentos.wsToken']
-// (app.js:205-213); storage access is guarded like every other reader.
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const headers: Record<string, string> = { ...(extra || {}) }
-  let token = ''
-  try {
-    token = sessionStorage.getItem('agentos.wsToken') || ''
-  } catch {
-    /* storage unavailable */
-  }
-  if (token) headers['Authorization'] = `Bearer ${token}`
-  return headers
-}
 
 // approval_monitor.js:227-239 — normalize + persist the browser elevated mode
 // under storage version '2'. Only on/bypass/full are valid; anything else
@@ -286,7 +272,7 @@ export class ApprovalMonitor {
     try {
       const resp = await fetch(approvalsUrl(), {
         cache: 'no-store',
-        headers: authHeaders(),
+        headers: authenticatedHeaders(),
       })
       if (!resp.ok) {
         // approval_monitor.js:71-74 — zero the badge only; an open prompt keeps
@@ -347,7 +333,7 @@ export class ApprovalMonitor {
     try {
       const resp = await fetch(approvalsResolveUrl(), {
         method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        headers: authenticatedHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(body),
       })
       if (!resp.ok) throw new Error('HTTP ' + resp.status)
@@ -409,7 +395,7 @@ export function approvalsSettingsUrl(): string {
 export async function saveApprovalMode(mode: string): Promise<void> {
   const resp = await fetch(approvalsSettingsUrl(), {
     method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    headers: authenticatedHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ mode }),
   })
   if (!resp.ok) throw new Error('HTTP ' + resp.status)

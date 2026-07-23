@@ -1,9 +1,25 @@
 import DOMPurify from 'dompurify'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import python from 'highlight.js/lib/languages/python'
+import typescript from 'highlight.js/lib/languages/typescript'
+import yaml from 'highlight.js/lib/languages/yaml'
 import 'highlight.js/styles/github-dark.css'
 import { marked } from 'marked'
 import { toast } from 'sonner'
 import type { MarkdownDep } from './transcript/stream'
+
+// Import the lightweight core plus the languages used in AgentOS transcripts.
+// Importing `highlight.js` registers every bundled grammar and adds roughly a
+// megabyte to the first Chat route download.
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('yaml', yaml)
 
 // Ported from static/js/markdown.js:11-37. Code spans win at the same position,
 // so dollar signs inside code are never interpreted as LaTeX-ish content.

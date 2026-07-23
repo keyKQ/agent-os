@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { Link, Outlet, useLocation } from 'react-router'
 import {
   Activity,
@@ -23,7 +32,6 @@ import {
 } from 'lucide-react'
 import { Toaster } from '@/components/ui/sonner'
 import { Button } from '@/components/ui/button'
-import { ApprovalPrompt } from '@/components/ApprovalPrompt'
 import { AsciiField } from '@/components/AsciiField'
 import { useTheme } from '@/stores/theme'
 import { useConnection } from '@/stores/connection'
@@ -32,6 +40,10 @@ import { useBootstrap } from './providers'
 import { defaultViewPath } from './routes'
 import { ShellHeaderSlotProvider } from './ShellHeaderSlot'
 import agentosMark from '@/assets/agentos-mark.png'
+
+const ApprovalPrompt = lazy(async () => ({
+  default: (await import('@/components/ApprovalPrompt')).ApprovalPrompt,
+}))
 
 // app.js:72-88 — legacy sidebar information architecture: nav items grouped
 // under labels, Chat first, Approvals last under Settings. Order within each
@@ -120,6 +132,7 @@ export function AppShell() {
   // approval_monitor.js:118-138 — the pending approval count drives a nav badge
   // on the Approvals item (legacy #approval-count, hidden at 0).
   const approvalCount = useApprovals((s) => s.count)
+  const hasPendingApprovals = useApprovals((s) => s.pending.length > 0)
   const bootstrap = useBootstrap()
   const location = useLocation()
 
@@ -133,6 +146,12 @@ export function AppShell() {
   const sidebarRef = useRef<HTMLElement | null>(null)
   const toggleRef = useRef<HTMLButtonElement | null>(null)
   const mainRef = useRef<HTMLElement | null>(null)
+  const restoreDrawerFocusRef = useRef(false)
+
+  const closeMobileDrawer = useCallback((restoreTriggerFocus: boolean) => {
+    restoreDrawerFocusRef.current = restoreTriggerFocus
+    setSidebarOpen(false)
+  }, [])
 
   useEffect(() => {
     const mq = mobileQuery()
@@ -154,13 +173,38 @@ export function AppShell() {
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as Node
       if (sidebarRef.current?.contains(target) || toggleRef.current?.contains(target)) return
-      setSidebarOpen(false)
+      closeMobileDrawer(true)
     }
     // app.js:152-157 — Esc closes the drawer for keyboard users.
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setSidebarOpen(false)
-        toggleRef.current?.focus()
+        closeMobileDrawer(true)
+        return
+      }
+      if (e.key !== 'Tab') return
+
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+      const focusable = Array.from(
+        sidebar.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute('inert') && !element.closest('[inert]'))
+      if (focusable.length === 0) {
+        e.preventDefault()
+        sidebar.focus({ preventScroll: true })
+        return
+      }
+
+      const first = focusable[0]!
+      const last = focusable.at(-1)!
+      const active = document.activeElement
+      if (e.shiftKey && (active === first || !sidebar.contains(active))) {
+        e.preventDefault()
+        last.focus({ preventScroll: true })
+      } else if (!e.shiftKey && (active === last || !sidebar.contains(active))) {
+        e.preventDefault()
+        first.focus({ preventScroll: true })
       }
     }
     document.addEventListener('click', onDocClick)
@@ -168,6 +212,29 @@ export function AppShell() {
     return () => {
       document.removeEventListener('click', onDocClick)
       document.removeEventListener('keydown', onKeydown)
+    }
+  }, [closeMobileDrawer, isMobile, sidebarOpen])
+
+  useLayoutEffect(() => {
+    if (!isMobile) {
+      restoreDrawerFocusRef.current = false
+      return
+    }
+    if (sidebarOpen) {
+      restoreDrawerFocusRef.current = false
+      const sidebar = sidebarRef.current
+      const target =
+        sidebar?.querySelector<HTMLElement>('[aria-current="page"]') ??
+        sidebar?.querySelector<HTMLElement>('a[href], button:not([disabled])')
+      target?.focus({ preventScroll: true })
+      return
+    }
+    // Restore only after the closing commit has removed `inert` from the
+    // workspace. Approval-driven closes deliberately leave focus to the
+    // critical ApprovalPrompt that mounts in the same commit.
+    if (restoreDrawerFocusRef.current) {
+      restoreDrawerFocusRef.current = false
+      toggleRef.current?.focus({ preventScroll: true })
     }
   }, [isMobile, sidebarOpen])
 
@@ -179,6 +246,14 @@ export function AppShell() {
       document.body.style.overflow = previousOverflow
     }
   }, [isMobile, sidebarOpen])
+
+  useEffect(
+    () =>
+      useApprovals.subscribe((state) => {
+        if (state.pending.length > 0) closeMobileDrawer(false)
+      }),
+    [closeMobileDrawer],
+  )
 
   // app.js:160-171 — a closed drawer on mobile is hidden from AT and inert.
   const drawerHidden = isMobile && !sidebarOpen
@@ -230,6 +305,24 @@ export function AppShell() {
 
   const version = sidebarVersion(bootstrap.version)
 
+  const focusMainContent = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault()
+    const main = mainRef.current
+    if (!main) return
+    main.focus({ preventScroll: true })
+    try {
+      const current = new URL(window.location.href)
+      current.hash = 'main-content'
+      window.history.replaceState(
+        window.history.state,
+        '',
+        `${current.pathname}${current.search}${current.hash}`,
+      )
+    } catch {
+      // Focus is the accessibility behavior; the cosmetic hash is optional.
+    }
+  }
+
   return (
     <div
       className="shell flex h-dvh font-sans"
@@ -237,14 +330,18 @@ export function AppShell() {
       data-design="unified"
       style={{ ['--shell-header-h' as string]: '0px' }}
     >
-      <a className="shell-skip-link" href="#main-content">
+      <a className="shell-skip-link" href="#main-content" onClick={focusMainContent}>
         Skip to main content
       </a>
       <aside
         ref={sidebarRef}
         id="sidebar-nav"
+        role={isMobile && sidebarOpen ? 'dialog' : undefined}
+        aria-label={isMobile && sidebarOpen ? 'Workspace navigation' : undefined}
+        aria-modal={isMobile && sidebarOpen ? true : undefined}
         aria-hidden={drawerHidden || undefined}
         inert={drawerHidden || undefined}
+        tabIndex={isMobile && sidebarOpen ? -1 : undefined}
         data-collapsed={compactSidebar}
         data-drawer-open={isMobile ? sidebarOpen : undefined}
         className="shell-sidebar flex shrink-0 flex-col border border-sidebar-border bg-sidebar"
@@ -265,6 +362,8 @@ export function AppShell() {
             aria-label={compactSidebar ? 'Expand navigation' : 'Collapse navigation'}
             aria-controls="sidebar-nav"
             aria-expanded={!compactSidebar}
+            aria-hidden={isMobile || undefined}
+            tabIndex={isMobile ? -1 : undefined}
             onClick={toggleSidebarCollapsed}
           >
             {compactSidebar ? (
@@ -291,7 +390,7 @@ export function AppShell() {
                   <Link
                     key={v.path}
                     to={`/${v.path}`}
-                    onClick={() => setSidebarOpen(false)}
+                    onClick={() => closeMobileDrawer(false)}
                     aria-current={active ? 'page' : undefined}
                     aria-label={compactSidebar ? v.title : undefined}
                     title={compactSidebar ? v.title : undefined}
@@ -371,10 +470,14 @@ export function AppShell() {
           type="button"
           className="shell-sidebar__backdrop"
           aria-label="Close navigation"
-          onClick={() => setSidebarOpen(false)}
+          onClick={() => closeMobileDrawer(true)}
         />
       ) : null}
-      <div className="shell-workspace flex min-w-0 flex-1 flex-col">
+      <div
+        className="shell-workspace flex min-w-0 flex-1 flex-col"
+        inert={(isMobile && sidebarOpen) || undefined}
+        aria-hidden={(isMobile && sidebarOpen) || undefined}
+      >
         <Button
           ref={toggleRef}
           variant="ghost"
@@ -384,7 +487,14 @@ export function AppShell() {
           aria-label="Toggle menu"
           aria-controls="sidebar-nav"
           aria-expanded={sidebarOpen}
-          onClick={() => setSidebarOpen((open) => !open)}
+          onClick={() => {
+            if (sidebarOpen) {
+              closeMobileDrawer(true)
+            } else {
+              restoreDrawerFocusRef.current = false
+              setSidebarOpen(true)
+            }
+          }}
         >
           <Menu className="size-4" />
         </Button>
@@ -442,8 +552,12 @@ export function AppShell() {
           </ShellHeaderSlotProvider>
         </main>
       </div>
-      {/* approval_monitor.js:140-184 — global approval prompt, mounted once. */}
-      <ApprovalPrompt />
+      {/* approval_monitor.js:140-184 — global approval prompt, loaded only when needed. */}
+      {hasPendingApprovals ? (
+        <Suspense fallback={null}>
+          <ApprovalPrompt />
+        </Suspense>
+      ) : null}
       <Toaster />
     </div>
   )

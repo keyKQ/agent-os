@@ -1,17 +1,22 @@
 # Chat View Migration — Design (Plan 3)
 
 **Date:** 2026-07-20
-**Status:** Approved (brainstorming complete; awaiting spec review)
-**Scope:** Migrate the legacy `chat` view (`src/agentos/gateway/static/js/views/chat.js`,
-8,841 lines / ~403 functions / ~42% of the legacy JS) to the React + Vite console.
-This is the final and largest view; `chat` is the only remaining `StubView` in
-`frontend/src/app/routes.tsx`.
+**Status:** Archived (migration completed; React-only cutover 2026-07-23)
+**Scope:** Historical migration of the legacy `chat` view
+(`src/agentos/gateway/static/js/views/chat.js`, 8,841 lines / ~403 functions /
+~42% of the retired JavaScript) to the React + Vite console. It was the final
+and largest view; the production route now renders `ChatPage`.
+
+> **ARCHIVED — non-runnable design record.** Legacy source paths and one-time
+> audit tooling below document how parity was established; they were removed
+> after the React-only cutover. For current behavior and evidence, use the
+> parity matrix. For current development and release commands, use `AGENTS.md`,
+> `CONTRIBUTING.md`, `docs/web-ui.md`, and `scripts/build_control_ui.py`.
 
 Sibling docs (read alongside this one):
 - Rewrite design: `docs/superpowers/specs/2026-07-19-react-vite-console-rewrite-design.md`
 - Parity matrix (single source of truth): `docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md`
 - Plans 1 & 2 (complete): `docs/superpowers/plans/2026-07-19-*.md`, `2026-07-20-*-plan-2-views.md`
-- Progress ledger: `.superpowers/sdd/progress.md`
 
 ---
 
@@ -175,18 +180,18 @@ WS events: `session.event.text_delta`, `.tool_use_start`, `.tool_result`,
 `session.epoch_changed`, `sessions.changed`, `task.queued`, `task.running`, plus
 transport `_gap`/`_hello`/`_state`/`*`.
 
-**Lesson from Plans 1 & 2:** this list is a starting point, not a contract.
-Implementers MUST read `chat.js` end-to-end and cross-check against
-`scripts/fe_parity_inventory.py`. We nearly lost functionality in the cron view
-by trusting a documented RPC list.
+**Historical lesson from Plans 1 & 2:** this list was a starting point, not a
+contract. Implementers read `chat.js` end-to-end and cross-checked the one-time
+mechanical inventory. The legacy file and extractor were retired after cutover;
+the completed parity matrix preserves the result.
 
 ---
 
 ## 6. Migration protocol (per module)
 
-1. **Inventory** the legacy functions for the module; cross-check the mechanical
-   inventory (`scripts/fe_parity_inventory.py`). Do not assume the documented RPC
-   list is complete.
+1. **Inventory (historical)** — the migration read the legacy functions for
+   each module and cross-checked a mechanical inventory. Both inputs are now
+   retired; current work starts from the React source and regression tests.
 2. **`logic.ts` (TDD)** — pure transforms with unit tests written first.
 3. **Component / controller** — React (RTL) for shell modules; ref-driven
    controller for the imperative region.
@@ -224,8 +229,10 @@ by trusting a documented RPC list.
   cd frontend
   AGENTOS_GATEWAY=http://127.0.0.1:18999 npm run dev   # proxies /ws, /control/api, /api
   ```
-  Use claude-in-chrome to verify runtime behavior.
-- **Parity fix round:** use `.claude/workflows/parity-fix-round.js` post-audit.
+  Use local browser automation or a Chromium browser to verify runtime behavior.
+- **Parity fix round (historical):** a one-time multi-agent audit was completed
+  before cutover. Its editor workflow was retired and is not a public release
+  command.
 
 ---
 
@@ -246,8 +253,9 @@ by trusting a documented RPC list.
 - **RTL-invisible core:** the imperative transcript can't be unit-tested like the
   other views. Mitigation: the mandatory live-browser sweep is scoped precisely to
   this region, and the pure `logic.ts` helpers under it are TDD'd.
-- **Incomplete RPC brief:** mitigated by end-to-end read + `fe_parity_inventory.py`
-  cross-check (§5/§6).
+- **Incomplete RPC brief:** mitigated during migration by an end-to-end source
+  read and mechanical inventory; the resulting evidence is retained in the
+  parity matrix.
 - **Streaming timing:** seq-dedup / park-restore / idle-timeout ported verbatim to
   avoid drift; verified live.
 - **Scale:** 11 modules, foundation-first, each independently reviewed (Opus

@@ -82,6 +82,34 @@ describe('SlashMenu', () => {
     expect(options()[0]).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('assigns stable listbox/option IDs and reports the active descendant', async () => {
+    const onActiveDescendantChange = vi.fn()
+    const handleRef = createRef<SlashMenuHandle>()
+    render(
+      <SlashMenu
+        value="/"
+        commands={CATALOG}
+        onExecute={() => {}}
+        handleRef={handleRef}
+        listboxId="slash-commands"
+        onActiveDescendantChange={onActiveDescendantChange}
+      />,
+    )
+
+    expect(await screen.findByRole('listbox')).toHaveAttribute('id', 'slash-commands')
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('id', 'slash-commands-option-0')
+    await waitFor(() =>
+      expect(onActiveDescendantChange).toHaveBeenLastCalledWith('slash-commands-option-0'),
+    )
+
+    act(() => {
+      handleRef.current!.handleKeyDown({ key: 'ArrowDown', preventDefault() {} } as never)
+    })
+    await waitFor(() =>
+      expect(onActiveDescendantChange).toHaveBeenLastCalledWith('slash-commands-option-1'),
+    )
+  })
+
   it('Enter executes the active command (chat.js:2851 _selectSlashCmd)', async () => {
     const onExecute = vi.fn()
     const handleRef = createRef<SlashMenuHandle>()

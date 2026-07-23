@@ -9,14 +9,14 @@ import path from 'node:path'
 const gateway = process.env.AGENTOS_GATEWAY ?? 'http://127.0.0.1:18791'
 const gatewayWs = gateway.replace(/^http/, 'ws')
 
-// Prod build: assets are served by the gateway's existing static mount, so the
-// built index.html must reference them under {base_path}/static/dist/.
+// Prod build uses relative asset URLs. The gateway supplies a runtime <base>
+// whose href points at {base_path}/static/dist/ and whose
+// data-agentos-control-base value supplies React Router's mount path.
 // Dev server: serve under /control/ so the router basename (/control) and the
 // bootstrap URL (/control/api/bootstrap) line up exactly like production.
-// Custom base_path support is a cutover-plan item (see parity matrix).
 export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  base: command === 'serve' ? '/control/' : '/control/static/dist/',
+  base: command === 'serve' ? '/control/' : './',
   resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
   build: {
     outDir: path.resolve(__dirname, '../src/agentos/gateway/static/dist'),

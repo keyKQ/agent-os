@@ -900,6 +900,10 @@ describe('ChatPage', () => {
     expect(meta).toHaveTextContent('model')
     expect(meta).toHaveTextContent('↑1.3k ↓42')
     expect(meta).toHaveTextContent('$0.00125')
+    expect(meta.querySelector('.msg-meta__tokens')).toHaveAttribute(
+      'title',
+      'Turn — input: 1,250, output: 42 tokens',
+    )
     expect(meta.querySelector('.msg-meta__saved')).toBeNull()
     expect(meta.querySelector('.msg-meta__combo')).toBeNull()
   })

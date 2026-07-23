@@ -1,5 +1,12 @@
 # Chat View Migration Implementation Plan
 
+> **ARCHIVED — non-runnable migration record.** This plan was completed before
+> the React-only cutover on 2026-07-23. It cites the deleted legacy chat source
+> and one-time parity-inventory tooling for historical traceability only. Do not
+> execute its checklist against the current tree. Use `AGENTS.md`,
+> `CONTRIBUTING.md`, `docs/web-ui.md`, and `scripts/build_control_ui.py` for
+> current development and release procedures.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Migrate the legacy `chat` view (`src/agentos/gateway/static/js/views/chat.js`, 8,841 lines) to the React + Vite console at behavioral parity, replacing the last remaining `StubView`.
@@ -13,7 +20,10 @@
 - Design doc (authority): `docs/superpowers/specs/2026-07-20-chat-view-migration-design.md`.
 - Parity matrix (single source of truth): `docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md` — every task adds real rows.
 - Legacy source: `src/agentos/gateway/static/js/views/chat.js`. **Read cited line ranges verbatim; do not port from memory.**
-- **RPC brief is NOT exhaustive.** Every task implementer reads its legacy functions end-to-end and cross-checks `scripts/fe_parity_inventory.py`. (Cron view nearly lost functionality by trusting the documented list.)
+- **Historical RPC-inventory rule:** implementers read the legacy functions
+  end-to-end and cross-checked the one-time inventory. Both inputs were retired
+  at cutover; current changes use the React source, public regression tests,
+  and the completed parity matrix.
 - **Never** declare a legacy behavior "owner-approved" for removal. Deviations → recorded **waived** in the matrix; OWNER decides.
 - Follow migration protocol per module: `inventory → logic.ts (TDD) → component/controller → parity matrix with real evidence`. **Never cite tests that don't exist.**
 - Imperative region is **not** RTL-testable → verified by the **mandatory live-browser sweep** (§ each imperative task's final step).
@@ -23,10 +33,10 @@
 - Gate before marking any task done: `cd frontend && npm run check` (tsc + ESLint + Prettier + Vitest).
 - Dev loop for live sweeps:
   ```bash
-  AGENTOS_STATE_DIR=/private/tmp/claude-501/.../scratchpad/chat-state uv run agentos gateway run --port 18999
+  AGENTOS_STATE_DIR=/tmp/agentos-chat-state uv run agentos gateway run --port 18999
   cd frontend && AGENTOS_GATEWAY=http://127.0.0.1:18999 npm run dev   # proxies /ws, /control/api, /api
   ```
-  Verify with claude-in-chrome at `http://127.0.0.1:5173/control/chat`.
+  Verify in a local Chromium browser at `http://127.0.0.1:5173/control/chat`.
 
 ## File Structure
 
@@ -67,7 +77,11 @@ All under `frontend/src/views/chat/`:
   - `logic.ts`: `agentIdFromSessionKey(key: string): string` (port chat.js:1145); `webchatSessionKey(agentId: string, suffix?: string): string` (chat.js:1151); `canonicalSessionKey(key: string): string` (chat.js:1159); `readSessionFromUrl(search: string): string | null` (pure over an injected search string; port the URL-reading part of chat.js:1182); `messageTranscriptId(msg: ChatMessage): string | null` (chat.js:3086); `historyStableMessageIdentity(msg: ChatMessage): string` (chat.js:5833); `historyFallbackMessageIdentity(role: Role, text: string): string` (chat.js:5838).
   - `useTranscript.ts`: `function useTranscript(opts: { sessionKey: string }): { containerRef: React.RefObject<HTMLDivElement>; /* extended in later tasks */ }`.
 
-- [ ] **Step 1: Inventory.** Read `chat.js:1145-1197` (session-key helpers), `1182-1197` (`_readSessionFromUrl`), `3086-3101` (`_messageTranscriptId`), `5833-5864` (history identity helpers). Run `python3 scripts/fe_parity_inventory.py | grep -A30 chat` and record the localStorage keys this view owns. Note anything the design doc §5 list missed.
+- [ ] **Step 1: Inventory (historical).** The migration read
+  `chat.js:1145-1197` (session-key helpers), `1182-1197`
+  (`_readSessionFromUrl`), `3086-3101` (`_messageTranscriptId`), and
+  `5833-5864` (history identity helpers), then recorded the owned localStorage
+  keys in the parity matrix. The legacy file and extractor no longer exist.
 
 - [ ] **Step 2: Write failing tests for the pure helpers.**
 
@@ -178,7 +192,13 @@ describe('stream seq gate (parity chat.js:6345-6378)', () => {
 
 - [ ] **Step 6: Run gate.** `cd frontend && npm run check`. Expected: PASS.
 
-- [ ] **Step 7: LIVE-BROWSER SWEEP (mandatory).** Start the dev gateway + vite (Global Constraints). With claude-in-chrome at `/control/chat`: send a message; confirm the streaming bubble appears, text streams token-by-token, the block cursor shows, it auto-scrolls, the thinking indicator appears (>400ms) then clears, and the bubble finalizes. Confirm zero console errors. Record evidence (what you drove + result) for the matrix.
+- [ ] **Step 7: LIVE-BROWSER SWEEP (mandatory).** Start the dev gateway +
+  Vite (Global Constraints). In a local Chromium browser at `/control/chat`,
+  send a message; confirm the streaming bubble appears, text streams
+  token-by-token, the block cursor shows, it auto-scrolls, the thinking
+  indicator appears (>400ms) then clears, and the bubble finalizes. Confirm
+  zero console errors. Record evidence (what you drove + result) for the
+  matrix.
 
 - [ ] **Step 8: Add parity matrix rows** (seq-gate unit test names + live evidence for the DOM stream). Commit.
 
@@ -510,15 +530,14 @@ it('opens and filters the slash menu on "/" prefix', async () => {
 
 - [ ] **Step 1: Wire the route.** In `routes.tsx`, import `ChatPage` and return `<ChatPage />` for `path === 'chat'` in both `viewElement` and `routeChildren` (remove the StubView fallback for chat). Add the `chat` import alongside the others.
 - [ ] **Step 2: Run full gate.** `cd frontend && npm run check`. Expected: ALL tests pass (existing 829 + new chat tests), tsc/ESLint/Prettier clean.
-- [ ] **Step 3: RPC completeness cross-check.** Run `python3 scripts/fe_parity_inventory.py | grep -A40 chat` and diff every chat RPC + storage key + event against what the new code references. Any legacy RPC/event/key not wired → either wire it or record a **waived** matrix row for owner decision.
+- [ ] **Step 3: RPC completeness cross-check (historical).** The completed
+  migration diffed every legacy chat RPC, storage key, and event against the
+  React implementation; outcomes and waivers are retained in the parity
+  matrix. The one-time extractor was removed at cutover.
 - [ ] **Step 4: FULL LIVE-BROWSER SWEEP.** With the dev gateway + vite: exercise the entire view end-to-end — send/stream/abort, tool calls, artifacts, router-fx, compaction, attachments (all types + rejections + paste), slash commands, session switch (`?session=`/`?agent=`), elevated/bypass toggle, model change, pending queue, markdown export, inline approval. Open every dialog. Navigate to `/control/chat` from Overview/Sessions/Agents/Cron jump links and confirm they land correctly. Confirm zero console errors and zero failed requests across the whole session.
-- [ ] **Step 5: Update the parity matrix** chat section to complete with real evidence (test names that exist + live-sweep notes). Update `.superpowers/sdd/progress.md` (Plan 3 complete).
-- [ ] **Step 6: Commit (do NOT push).**
-
-```bash
-git add frontend/src/app/routes.tsx docs/superpowers/specs/2026-07-19-console-rewrite-parity-matrix.md .superpowers/sdd/progress.md
-git commit -m "feat(frontend): swap chat route to React ChatPage — Plan 3 complete"
-```
+- [ ] **Step 5: Update the parity matrix** chat section to complete with real
+  evidence (test names that exist + live-sweep notes).
+- [ ] **Step 6: Commit the completed route swap and public parity evidence.**
 
 - [ ] **Step 7: Report to owner.** Summarize what landed, the live-sweep evidence, any waived deviations awaiting owner decision, and ask before any push/PR.
 

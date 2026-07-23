@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { authenticatedHeaders } from '@/lib/http-auth'
 import {
   ATTACHMENT_ALLOWED_LABEL,
   ATTACHMENT_TEXT_HARD_CAP_BYTES,
@@ -30,17 +31,6 @@ import {
  * `{ file_uuid }` the outgoing payload references. The connection token (same
  * key useTranscript reads) is sent as `Authorization: Bearer …`.
  */
-
-// app.js:200-207 `getAuthToken` — the connection token in sessionStorage
-// (providers.tsx / useTranscript use the same key), sent on the upload POST.
-const WS_TOKEN_KEY = 'agentos.wsToken'
-function getAuthToken(): string {
-  try {
-    return sessionStorage.getItem(WS_TOKEN_KEY) || ''
-  } catch {
-    return ''
-  }
-}
 
 // chat.js:322 — the local-id counter (monotonic per view). A module-scope ref-
 // equivalent held in the hook so ids stay unique across adds within a session.
@@ -112,13 +102,10 @@ export function useAttachments(opts?: {
           : new File([file], file.name, { type: mime })
       form.append('file', uploadFile, file.name)
       form.append('mime', mime)
-      const headers: Record<string, string> = {}
-      const token = getAuthToken()
-      if (token) headers['Authorization'] = `Bearer ${token}`
       const response = await fetch('/api/v1/files/upload', {
         method: 'POST',
         body: form,
-        headers,
+        headers: authenticatedHeaders(),
         credentials: 'same-origin',
       })
       if (!response.ok) {

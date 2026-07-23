@@ -26,8 +26,8 @@ import { useBootstrap, useRpc } from '@/app/providers'
 import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { MotionListItem } from '@/lib/motion'
-import robinhoodSymbolUrl from '../../../../src/agentos/gateway/static/img/robinhood-symbol.png'
-import trustNetworkUrl from '../../../../src/agentos/gateway/static/img/mcp-trust-network.webp'
+import trustNetworkUrl from '@/assets/mcp-trust-network.webp'
+import robinhoodSymbolUrl from '@/assets/robinhood-symbol.png'
 import {
   ROBINHOOD_HELP_URL,
   ROBINHOOD_MCP_URL,

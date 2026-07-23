@@ -36,7 +36,9 @@ function renderChip(overrides: Partial<Parameters<typeof SessionChip>[0]> = {}) 
 }
 
 afterEach(() => {
+  sessionStorage.clear()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('SessionChip', () => {
@@ -53,6 +55,23 @@ describe('SessionChip', () => {
     expect(await screen.findByRole('dialog', { name: /switch session/i })).toBeInTheDocument()
     expect(await screen.findByText('agent:main:webchat:abc123')).toBeInTheDocument()
     expect(screen.getByText('agent:trader:cli:default')).toBeInTheDocument()
+  })
+
+  it('authenticates the default session-list request with the per-tab gateway token', async () => {
+    sessionStorage.setItem('agentos.wsToken', 'session-token')
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ sessions: SESSIONS }),
+    } as Response)
+    vi.stubGlobal('fetch', fetchSpy)
+    renderChip({ fetchSessions: undefined })
+
+    fireEvent.click(screen.getByRole('button', { name: /switch chat session/i }))
+    expect(await screen.findByText('agent:main:webchat:abc123')).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledWith('/api/sessions', {
+      headers: { Authorization: 'Bearer session-token' },
+      credentials: 'same-origin',
+    })
   })
 
   it('closes the switcher on Escape and restores focus to its trigger', async () => {

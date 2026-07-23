@@ -1,5 +1,12 @@
 # React+Vite Console Rewrite — Plan 2: 11 Standard Views Implementation Plan
 
+> **ARCHIVED — non-runnable migration record.** This plan was completed before
+> the React-only cutover on 2026-07-23. Its saved agent workflows, legacy source
+> inventory, and intermediate test commands have been retired with the old
+> frontend. Do not execute this checklist against the current tree. Use
+> `AGENTS.md`, `CONTRIBUTING.md`, `docs/web-ui.md`, and
+> `scripts/build_control_ui.py` for current development and release procedures.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Migrate the 11 remaining standard views (approvals, logs, overview, channels, agents, sessions, usage, config, skills, cron, setup) plus the approval-monitor background service to the React console, each behavior-faithful to its legacy file and styled with the established terminal design system.
@@ -118,14 +125,15 @@ Follow protocol steps 1-2-3 adapted (service instead of view): inventory rows in
 
 ### Task 13: Whole-batch parity audit + fix round
 
-Run the two saved workflows over the Plan-2 surface, in order:
-1. `Workflow` with the **migration-parity-review** script (session scripts dir) scoped to the 11 views + approval monitor: auditors per view-pair, critic, 3-lens verify. (Controller runs this — the implementer of this task prepares nothing; this task exists for the ledger.)
-2. `Workflow({scriptPath: '.claude/workflows/parity-fix-round.js'})` with the confirmed findings as batches (controller assembles args as in the Plan-1 round).
+Historical outcome: the Plan-2 surface received a multi-agent parity audit and
+the confirmed findings were fixed before cutover. The saved editor workflow
+used for that one-time migration was intentionally removed after completion;
+it is not part of the public build or release process.
 
 ### Task 14: Plan-2 close-out
 
 - `npm run check` + `npm run build` clean; count tests (expect 200+).
-- `uv run pytest tests/test_gateway tests/test_fe_parity_inventory.py -q` still green (no Python changes).
+- The then-current gateway and parity suites were green (no Python changes).
 - Legacy-untouched check (same git diff command as Plan 1 Task 10).
 - Matrix audit: all 11 view sections + approval-monitor section zero `pending` (waivers owner-reviewed); dated "Plan 2 complete" note.
 - Do NOT push or open a PR without explicit user approval.

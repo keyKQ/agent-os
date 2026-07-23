@@ -1,8 +1,8 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import { RouterProvider, createMemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { routeChildren } from './routes'
+import { routeChildren, VIEWS } from './routes'
 import { AppProviders } from './providers'
 import { AppShell, SIDEBAR_COLLAPSED_STORAGE_KEY } from './AppShell'
 import { useConnection } from '@/stores/connection'
@@ -39,7 +39,7 @@ vi.mock('./providers', async (importOriginal) => {
 })
 
 // Render the route tree without AppProviders (no network): test harness
-// provides QueryClient only; views under test here are stubs.
+// provides QueryClient only; lazy route modules still resolve normally.
 function renderAt(path: string) {
   const router = createMemoryRouter(routeChildren, { initialEntries: [path] })
   return render(
@@ -50,9 +50,19 @@ function renderAt(path: string) {
 }
 
 describe('routes', () => {
-  it('renders a stub for every registered view', () => {
+  it('renders a real lazily loaded registered view', async () => {
     renderAt('/sessions')
-    expect(screen.getByRole('heading', { name: 'Sessions' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Sessions' })).toBeInTheDocument()
+  })
+
+  it('registers every major view as a route-object lazy module', () => {
+    const registered = routeChildren.filter(
+      (route) => typeof route.path === 'string' && VIEWS.some((view) => view.path === route.path),
+    )
+
+    expect(registered).toHaveLength(VIEWS.length)
+    expect(registered.every((route) => route.lazy != null)).toBe(true)
+    expect(registered.every((route) => route.element == null && route.Component == null)).toBe(true)
   })
 
   it('renders XSS-safe 404 text for unknown paths', () => {
@@ -65,9 +75,9 @@ describe('routes', () => {
     expect(document.querySelector('script')).toBeNull()
   })
 
-  it('sets the document title from the route', () => {
+  it('sets the document title from the route', async () => {
     renderAt('/cron')
-    expect(document.title).toBe('Cron - AgentOS Control')
+    await waitFor(() => expect(document.title).toBe('Cron - AgentOS Control'))
   })
 
   // M1 — parity: router.js:68-71 — an unmatched route has no meta.title, so the
@@ -111,11 +121,10 @@ describe('index route renders the default view without changing the URL', () => 
     }
   }
 
-  it('renders Overview on desktop and leaves the URL at "/"', () => {
+  it('renders Overview on desktop and leaves the URL at "/"', async () => {
     stubMatchMedia(false)
     const { router } = renderShellAt('/')
-    // Default view rendered in place (Overview stub heading).
-    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
     // The address bar stays at the base path — no Navigate rewrite to /overview.
     expect(router.state.location.pathname).toBe('/')
     // The default view's nav item is highlighted (aria-current=page).
@@ -123,12 +132,12 @@ describe('index route renders the default view without changing the URL', () => 
     expect(overviewLink).toHaveAttribute('aria-current', 'page')
   })
 
-  it('renders Chat on mobile at the index URL', () => {
+  it('renders Chat on mobile at the index URL', async () => {
     stubMatchMedia(true)
     const { router } = renderShellAt('/')
     // The real ChatPage renders in place (its full-bleed thread region), not the
     // Overview view — proving the mobile index default resolves to chat.
-    expect(document.querySelector('.chat-thread')).not.toBeNull()
+    await waitFor(() => expect(document.querySelector('.chat-thread')).not.toBeNull())
     expect(router.state.location.pathname).toBe('/')
     // On mobile the closed drawer is aria-hidden/inert, so the nav link is not
     // in the accessibility tree; assert the highlight via the DOM node instead.
@@ -146,6 +155,7 @@ describe('app shell chrome', () => {
     vi.unstubAllGlobals()
     window.localStorage.removeItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
     document.body.style.overflow = ''
+    document.querySelector('base[data-test-skip-link]')?.remove()
     mockBootstrap = { ...mockBootstrap, version: '' }
     useConnection.getState().setState('disconnected')
   })
@@ -187,11 +197,38 @@ describe('app shell chrome', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(sidebar).not.toHaveAttribute('aria-hidden')
     expect(sidebar).not.toHaveAttribute('inert')
+    expect(sidebar).toHaveAttribute('role', 'dialog')
+    expect(sidebar).toHaveAttribute('aria-modal', 'true')
+    expect(screen.getByRole('link', { name: 'Cron' })).toHaveFocus()
+    expect(document.querySelector('.shell-workspace')).toHaveAttribute('inert')
 
     // app.js:141-143 — clicking a nav item closes the drawer.
     fireEvent.click(screen.getByRole('link', { name: 'Sessions' }))
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(sidebar).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('contains keyboard focus in the mobile drawer and restores its trigger', () => {
+    stubMatchMedia(true)
+    renderShellAt('/cron')
+    const toggle = screen.getByRole('button', { name: 'Toggle menu' })
+    fireEvent.click(toggle)
+
+    const sidebar = document.getElementById('sidebar-nav')!
+    const activeLink = screen.getByRole('link', { name: 'Cron' })
+    const theme = within(sidebar).getByRole('button', { name: /theme:/i })
+    expect(activeLink).toHaveFocus()
+
+    theme.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+    expect(theme).toHaveFocus()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(toggle).toHaveFocus()
+    expect(document.querySelector('.shell-workspace')).not.toHaveAttribute('inert')
   })
 
   it('closes on Escape and on outside click', () => {
@@ -212,7 +249,7 @@ describe('app shell chrome', () => {
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     // app.js:147-151 — a click outside the sidebar/toggle closes the drawer.
-    fireEvent.click(screen.getByRole('main'))
+    fireEvent.click(document.querySelector('main')!)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
 
     fireEvent.click(toggle)
@@ -336,6 +373,25 @@ describe('app shell chrome', () => {
     renderShellAt('/missing-page')
     expect(screen.queryByTestId('shell-header')).not.toBeInTheDocument()
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content')
+  })
+
+  it('focuses the current view without following the production asset base', () => {
+    stubMatchMedia(false)
+    const base = document.createElement('base')
+    base.href = '/control/static/dist/'
+    base.dataset.testSkipLink = 'true'
+    document.head.prepend(base)
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+
+    renderShellAt('/chat')
+    const skipLink = screen.getByRole('link', { name: 'Skip to main content' })
+    expect((skipLink as HTMLAnchorElement).href).toContain('/control/static/dist/#main-content')
+
+    fireEvent.click(skipLink)
+
+    expect(screen.getByRole('main')).toHaveFocus()
+    expect(replaceState).toHaveBeenCalled()
+    expect(replaceState.mock.calls.at(-1)?.[2]).not.toContain('/static/dist/')
   })
 
   it('resets the persistent route scroller before entering Chat', async () => {
@@ -489,14 +545,14 @@ describe('app shell chrome', () => {
     expect(pill).toHaveAttribute('data-variant', 'ok')
   })
 
-  it('places Chat controls in a floating route header while theme stays in the sidebar', () => {
+  it('places Chat controls in a floating route header while theme stays in the sidebar', async () => {
     stubMatchMedia(false)
     renderShellAt('/chat')
 
     const sidebar = document.getElementById('sidebar-nav')!
     const header = screen.getByTestId('shell-chat-header')
     const slot = screen.getByTestId('shell-chat-header-context')
-    const controls = screen.getByRole('group', { name: 'Chat session controls' })
+    const controls = await screen.findByRole('group', { name: 'Chat session controls' })
     const theme = screen.getByRole('button', { name: /Theme: (dark|light)\. Toggle theme/ })
 
     expect(header).toContainElement(controls)

@@ -38,6 +38,7 @@ export function ModalShell({
   labelledBy,
   describedBy,
   onClose,
+  dismissible = true,
   overlayClassName,
   className,
   children,
@@ -46,6 +47,7 @@ export function ModalShell({
   labelledBy: string
   describedBy?: string
   onClose: () => void
+  dismissible?: boolean
   overlayClassName: string
   className?: string
   children: React.ReactNode
@@ -86,7 +88,7 @@ export function ModalShell({
       exit="exit"
       {...overlayMotion}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (dismissible && e.target === e.currentTarget) onClose()
       }}
     >
       <motion.div
@@ -104,10 +106,15 @@ export function ModalShell({
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation()
-            onClose()
+            if (dismissible) onClose()
             return
           }
           if (e.key === 'Tab') {
+            // Portalled children still bubble through their React owner tree.
+            // A nested ModalShell therefore has to claim Tab before the outer
+            // trap sees it, otherwise Shift+Tab can move focus behind the
+            // topmost confirmation dialog.
+            e.stopPropagation()
             const panel = panelRef.current
             if (!panel) return
             const focusable = focusableElements(panel)

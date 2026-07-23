@@ -3,28 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <base data-agentos-control-base href="./" />
     <title>AgentOS Control</title>
-    <!-- Favicon parity: templates/index.html head — icon + shortcut icon +
-         apple-touch-icon all point at agentos-mark.png. Referenced from src
-         so Vite fingerprints the asset and rewrites the URL under base_path. -->
+    <!-- Keep browser and home-screen icons on the same AgentOS mark. Referenced
+         from src so Vite fingerprints the asset for the packaged console. -->
     <link rel="icon" type="image/png" href="/src/assets/agentos-mark.png" />
     <link rel="shortcut icon" type="image/png" href="/src/assets/agentos-mark.png" />
     <link rel="apple-touch-icon" href="/src/assets/agentos-mark.png" />
-    <script>
-      // Theme flash prevention: must run BEFORE CSS so the first paint
-      // already has the correct `data-theme`. Mirrors stores/theme.ts.
-      ;(function () {
-        try {
-          var t = localStorage.getItem('agentos-theme')
-          if (t !== 'dark' && t !== 'light') {
-            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-          }
-          document.documentElement.setAttribute('data-theme', t)
-        } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'light')
-        }
-      })()
-    </script>
+    <!-- External so the production CSP can reject all inline scripts. It runs
+         before Vite's stylesheet and module tags to prevent a theme flash. -->
+    <script vite-ignore src="./theme-bootstrap.js"></script>
   </head>
   <body>
     <noscript>

@@ -1,38 +1,76 @@
-import { useEffect } from 'react'
+import { lazy as reactLazy, Suspense, useEffect } from 'react'
 import { type RouteObject, useLocation } from 'react-router'
-import { StubView } from '@/views/StubView'
-import { HealthPage } from '@/views/health/HealthPage'
-import { ApprovalsPage } from '@/views/approvals/ApprovalsPage'
-import { LogsPage } from '@/views/logs/LogsPage'
-import { McpPage } from '@/views/mcp/McpPage'
-import { OverviewPage } from '@/views/overview/OverviewPage'
-import { ChannelsPage } from '@/views/channels/ChannelsPage'
-import { AgentsPage } from '@/views/agents/AgentsPage'
-import { SessionsPage } from '@/views/sessions/SessionsPage'
-import { UsagePage } from '@/views/usage/UsagePage'
-import { SkillsPage } from '@/views/skills/SkillsPage'
-import { CronPage } from '@/views/cron/CronPage'
-import { SettingsPage } from '@/views/settings/SettingsPage'
-import { ChatPage } from '@/views/chat/ChatPage'
 import { RouteErrorBoundary } from './RouteErrorBoundary'
 
-export const VIEWS: ReadonlyArray<{ path: string; title: string }> = [
-  { path: 'overview', title: 'Overview' },
-  { path: 'health', title: 'Health' },
-  { path: 'chat', title: 'Chat' },
-  { path: 'sessions', title: 'Sessions' },
-  { path: 'agents', title: 'Agents' },
-  { path: 'cron', title: 'Cron' },
-  { path: 'usage', title: 'Usage' },
-  { path: 'settings', title: 'Agent Setup' },
-  { path: 'config', title: 'Config' },
-  { path: 'setup', title: 'Setup' },
-  { path: 'channels', title: 'Channels' },
-  { path: 'mcp', title: 'MCP Servers' },
-  { path: 'approvals', title: 'Approvals' },
-  { path: 'skills', title: 'Skills' },
-  { path: 'logs', title: 'Logs' },
+type LazyRoute = NonNullable<RouteObject['lazy']>
+
+interface ViewRoute {
+  path: string
+  title: string
+  lazy: LazyRoute
+}
+
+const loadOverview: LazyRoute = async () => ({
+  Component: (await import('@/views/overview/OverviewPage')).OverviewPage,
+})
+const loadHealth: LazyRoute = async () => ({
+  Component: (await import('@/views/health/HealthPage')).HealthPage,
+})
+const loadChat: LazyRoute = async () => ({
+  Component: (await import('@/views/chat/ChatPage')).ChatPage,
+})
+const loadSessions: LazyRoute = async () => ({
+  Component: (await import('@/views/sessions/SessionsPage')).SessionsPage,
+})
+const loadAgents: LazyRoute = async () => ({
+  Component: (await import('@/views/agents/AgentsPage')).AgentsPage,
+})
+const loadCron: LazyRoute = async () => ({
+  Component: (await import('@/views/cron/CronPage')).CronPage,
+})
+const loadUsage: LazyRoute = async () => ({
+  Component: (await import('@/views/usage/UsagePage')).UsagePage,
+})
+const loadSettings: LazyRoute = async () => ({
+  Component: (await import('@/views/settings/SettingsPage')).SettingsPage,
+})
+const loadChannels: LazyRoute = async () => ({
+  Component: (await import('@/views/channels/ChannelsPage')).ChannelsPage,
+})
+const loadMcp: LazyRoute = async () => ({
+  Component: (await import('@/views/mcp/McpPage')).McpPage,
+})
+const loadApprovals: LazyRoute = async () => ({
+  Component: (await import('@/views/approvals/ApprovalsPage')).ApprovalsPage,
+})
+const loadSkills: LazyRoute = async () => ({
+  Component: (await import('@/views/skills/SkillsPage')).SkillsPage,
+})
+const loadLogs: LazyRoute = async () => ({
+  Component: (await import('@/views/logs/LogsPage')).LogsPage,
+})
+
+const VIEW_ROUTES: ReadonlyArray<ViewRoute> = [
+  { path: 'overview', title: 'Overview', lazy: loadOverview },
+  { path: 'health', title: 'Health', lazy: loadHealth },
+  { path: 'chat', title: 'Chat', lazy: loadChat },
+  { path: 'sessions', title: 'Sessions', lazy: loadSessions },
+  { path: 'agents', title: 'Agents', lazy: loadAgents },
+  { path: 'cron', title: 'Cron', lazy: loadCron },
+  { path: 'usage', title: 'Usage', lazy: loadUsage },
+  { path: 'settings', title: 'Agent Setup', lazy: loadSettings },
+  { path: 'config', title: 'Config', lazy: loadSettings },
+  { path: 'setup', title: 'Setup', lazy: loadSettings },
+  { path: 'channels', title: 'Channels', lazy: loadChannels },
+  { path: 'mcp', title: 'MCP Servers', lazy: loadMcp },
+  { path: 'approvals', title: 'Approvals', lazy: loadApprovals },
+  { path: 'skills', title: 'Skills', lazy: loadSkills },
+  { path: 'logs', title: 'Logs', lazy: loadLogs },
 ]
+
+export const VIEWS: ReadonlyArray<{ path: string; title: string }> = VIEW_ROUTES.map(
+  ({ path, title }) => ({ path, title }),
+)
 
 /**
  * Parity: js/router.js:32 — evaluated per resolve, not once at module load.
@@ -48,46 +86,29 @@ export function defaultViewPath(): string {
   }
 }
 
-function viewElement(path: string) {
-  const view = VIEWS.find((v) => v.path === path)
-  if (path === 'overview') return <OverviewPage />
-  if (path === 'health') return <HealthPage />
-  if (path === 'approvals') return <ApprovalsPage />
-  if (path === 'logs') return <LogsPage />
-  if (path === 'channels') return <ChannelsPage />
-  if (path === 'mcp') return <McpPage />
-  if (path === 'agents') return <AgentsPage />
-  if (path === 'sessions') return <SessionsPage />
-  if (path === 'usage') return <UsagePage />
-  if (path === 'settings' || path === 'config' || path === 'setup') return <SettingsPage />
-  if (path === 'skills') return <SkillsPage />
-  if (path === 'cron') return <CronPage />
-  if (path === 'chat') return <ChatPage />
-  return <StubView title={view?.title ?? 'Overview'} />
-}
+// The index route must choose again whenever it is entered, so it cannot use a
+// route.lazy function whose resolved module React Router caches. React.lazy
+// still keeps both heavy views outside the entry bundle while preserving the
+// legacy per-navigation desktop/mobile decision.
+const IndexOverview = reactLazy(async () => ({
+  default: (await import('@/views/overview/OverviewPage')).OverviewPage,
+}))
+const IndexChat = reactLazy(async () => ({
+  default: (await import('@/views/chat/ChatPage')).ChatPage,
+}))
 
-/**
- * Parity: js/router.js:29-66 — the index route renders the *default view in
- * place* while LEAVING the address bar at the base path (legacy never rewrites
- * the URL here; it only picks which view to render and highlights that view's
- * nav item). We therefore render the default view's element directly instead of
- * issuing a <Navigate replace>. AppShell reads defaultViewPath() to highlight
- * the matching nav item, since NavLink cannot mark itself active at the base URL.
- */
 function IndexView() {
-  return viewElement(defaultViewPath())
+  const Component = defaultViewPath() === 'chat' ? IndexChat : IndexOverview
+  return (
+    <Suspense fallback={<RoutePending />}>
+      <Component />
+    </Suspense>
+  )
 }
 
 function NotFound() {
   // Parity: js/router.js:48-55 — path rendered as text, never HTML.
-  // Parity: js/router.js:54 — legacy shows the basename-relative path (`rel`),
-  // i.e. the path with the base_path stripped. useLocation().pathname is
-  // basename-relative under react-router (main.tsx sets basename from
-  // BASE_URL), so this restores that legacy display AND — unlike
-  // window.location.pathname, which createMemoryRouter never updates — actually
-  // reflects the routed path so a hostile path reaches the DOM (as text).
-  // Parity: js/router.js:68 — an unmatched route has no meta.title, so the
-  // legacy title resolves to 'Not Found - AgentOS Control'.
+  // useLocation().pathname is basename-relative under react-router.
   const { pathname } = useLocation()
   useEffect(() => {
     document.title = 'Not Found - AgentOS Control'
@@ -95,34 +116,25 @@ function NotFound() {
   return <div className="p-8 text-muted-foreground">{'Page not found: ' + pathname}</div>
 }
 
-const unguardedRouteChildren: RouteObject[] = [
-  { index: true, element: <IndexView /> },
-  ...VIEWS.map((v) => {
-    if (v.path === 'overview') return { path: v.path, element: <OverviewPage /> }
-    if (v.path === 'health') return { path: v.path, element: <HealthPage /> }
-    if (v.path === 'approvals') return { path: v.path, element: <ApprovalsPage /> }
-    if (v.path === 'logs') return { path: v.path, element: <LogsPage /> }
-    if (v.path === 'channels') return { path: v.path, element: <ChannelsPage /> }
-    if (v.path === 'mcp') return { path: v.path, element: <McpPage /> }
-    if (v.path === 'agents') return { path: v.path, element: <AgentsPage /> }
-    if (v.path === 'sessions') return { path: v.path, element: <SessionsPage /> }
-    if (v.path === 'usage') return { path: v.path, element: <UsagePage /> }
-    if (v.path === 'settings' || v.path === 'config' || v.path === 'setup') {
-      return { path: v.path, element: <SettingsPage /> }
-    }
-    if (v.path === 'skills') return { path: v.path, element: <SkillsPage /> }
-    if (v.path === 'cron') return { path: v.path, element: <CronPage /> }
-    if (v.path === 'chat') return { path: v.path, element: <ChatPage /> }
-    return { path: v.path, element: <StubView title={v.title} /> }
-  }),
-  { path: 'mcp/oauth/callback', element: <McpPage /> },
-  { path: '*', element: <NotFound /> },
-]
+function RoutePending() {
+  return (
+    <div className="p-8 text-muted-foreground" aria-hidden="true">
+      Opening view…
+    </div>
+  )
+}
 
-// Keep the shell mounted when an individual view fails. React Router otherwise
-// falls back to its stack-heavy developer page, which strands users without
-// navigation or a recovery path.
-export const routeChildren: RouteObject[] = unguardedRouteChildren.map((route) => ({
-  ...route,
-  errorElement: <RouteErrorBoundary />,
-}))
+function guarded(route: RouteObject): RouteObject {
+  return {
+    ...route,
+    HydrateFallback: route.lazy ? RoutePending : undefined,
+    errorElement: <RouteErrorBoundary />,
+  }
+}
+
+export const routeChildren: RouteObject[] = [
+  guarded({ index: true, Component: IndexView }),
+  ...VIEW_ROUTES.map(({ path, lazy }) => guarded({ path, lazy })),
+  guarded({ path: 'mcp/oauth/callback', lazy: loadMcp }),
+  guarded({ path: '*', Component: NotFound }),
+]

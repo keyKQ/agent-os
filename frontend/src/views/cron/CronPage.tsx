@@ -1,5 +1,5 @@
 import './cron.css'
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence } from 'motion/react'
@@ -16,6 +16,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import { MotionListItem } from '@/lib/motion'
 import { useRpc } from '@/app/providers'
@@ -399,39 +400,32 @@ function DeleteConfirm({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const titleId = useId()
+
   return (
-    <div
-      className="cron-modal__overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget && !busy) onCancel()
-      }}
+    <ModalShell
+      role="alertdialog"
+      labelledBy={titleId}
+      onClose={onCancel}
+      dismissible={!busy}
+      overlayClassName="cron-modal__overlay"
+      className="cron-modal panel"
     >
-      <div
-        className="cron-modal panel"
-        role="alertdialog"
-        aria-modal="true"
-        aria-label="Delete schedule"
-        onKeyDown={(e) => {
-          if (e.key === 'Escape' && !busy) {
-            e.stopPropagation()
-            onCancel()
-          }
-        }}
-      >
-        <h2 className="cron-modal__title">Delete schedule</h2>
-        <p className="cron-modal__body">
-          Delete <strong>{jobName}</strong>? This cannot be undone.
-        </p>
-        <footer className="cron-modal__foot">
-          <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" disabled={busy} onClick={onConfirm}>
-            Delete
-          </Button>
-        </footer>
-      </div>
-    </div>
+      <h2 id={titleId} className="cron-modal__title">
+        Delete schedule
+      </h2>
+      <p className="cron-modal__body">
+        Delete <strong>{jobName}</strong>? This cannot be undone.
+      </p>
+      <footer className="cron-modal__foot">
+        <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="button" variant="destructive" disabled={busy} onClick={onConfirm}>
+          Delete
+        </Button>
+      </footer>
+    </ModalShell>
   )
 }
 

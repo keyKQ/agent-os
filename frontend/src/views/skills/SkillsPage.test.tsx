@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
 import { SkillsPage } from './SkillsPage'
-import bankrSymbolUrl from '../../../../src/agentos/gateway/static/img/bankr-symbol.svg'
-import robinhoodSymbolUrl from '../../../../src/agentos/gateway/static/img/robinhood-symbol.png'
+import bankrSymbolUrl from '@/assets/bankr-symbol.svg'
+import robinhoodSymbolUrl from '@/assets/robinhood-symbol.png'
 
 vi.mock('sonner', () => ({
   toast: {
@@ -66,6 +66,7 @@ const CATALOG_ITEM = {
   identifier: 'uniswap-swap',
   provider: 'Uniswap',
   source: 'clawhub',
+  logo: 'https://raw.githubusercontent.com/BankrBot/skills/main/uniswap/uniswap.svg',
   description: 'DEX swaps',
   category: 'defi',
   demo: { code: 'swap(1, ETH)', language: 'python', title: 'Quote a swap' },
@@ -290,6 +291,19 @@ describe('SkillsPage', () => {
     // The intermediate keystrokes never reached the server.
     expect(searchesFor('u')).toHaveLength(0)
     expect(searchesFor('un')).toHaveLength(0)
+  })
+
+  it('loads registry logos without sending the operator page as a referrer', async () => {
+    wireRpc()
+    renderPage()
+    await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: /^Community$/i }))
+
+    const card = await screen.findByLabelText('Catalog skill Uniswap')
+    const logo = within(card).getByRole('presentation')
+
+    expect(logo).toHaveAttribute('src', CATALOG_ITEM.logo)
+    expect(logo).toHaveAttribute('referrerpolicy', 'no-referrer')
   })
 
   // ── Install (per-item busy, correct RPC + params + invalidation) ─────────

@@ -31,6 +31,39 @@ The default gateway binds to `127.0.0.1` for safety.
 For gateway lifecycle, host/port, and exposure details, see
 [`gateway.md`](gateway.md).
 
+## React bundle and development
+
+Published AgentOS wheels contain a prebuilt React/Vite Control UI. The gateway
+serves that single application for the base route and every deep link; there is
+no legacy-console fallback. The SPA shell is never cached, while
+content-hashed assets are cached immutably.
+
+A source checkout must build the browser bundle before starting the production
+gateway:
+
+```sh
+python scripts/build_control_ui.py build
+npm --prefix frontend run check
+```
+
+The shared build command requires Node.js 22 or newer, performs the clean npm
+install, builds and verifies the bundle, and generates its exact third-party
+license ledger. The source-install scripts perform it automatically. If a
+checkout is started without a bundle, the Control UI returns an actionable
+`503` instead of a blank page or a different interface.
+
+For hot reload during frontend work, run the gateway and Vite together:
+
+```sh
+agentos gateway run
+npm --prefix frontend run dev
+```
+
+Vite serves `/control/` and proxies the gateway API and WebSocket. Production
+builds use relative assets plus a server-provided runtime base, so custom
+non-root mounts such as `/console/` work without rebuilding. Root, `/api`, and
+`/ws` mounts are rejected because they overlap the gateway's public endpoints.
+
 ## Main Areas
 
 | Area | Use it for |

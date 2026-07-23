@@ -1,3 +1,5 @@
+import { controlBasePath, controlPath } from './control-base'
+
 export interface Bootstrap {
   version: string
   ws_url: string
@@ -7,10 +9,9 @@ export interface Bootstrap {
   features: { diagnostics: boolean }
 }
 
-/** BASE_URL is '/control/static/dist/'; the API lives at '/control/api/'. */
-export function bootstrapUrl(): string {
-  const base = import.meta.env.BASE_URL.replace(/static\/dist\/?$/, '')
-  return `${base}api/bootstrap`
+/** Resolve the API from the server-provided Control UI mount path. */
+export function bootstrapUrl(basePath = controlBasePath()): string {
+  return controlPath('api/bootstrap', basePath)
 }
 
 export async function fetchBootstrap(): Promise<Bootstrap> {
@@ -66,7 +67,7 @@ export function fallbackBootstrap(): Bootstrap {
     version: '',
     ws_url: defaultWsUrl(),
     auth_mode: '',
-    base_path: import.meta.env.BASE_URL.replace(/static\/dist\/?$/, '').replace(/\/$/, '') || '/',
+    base_path: controlBasePath(),
     config_path: '',
     features: { diagnostics: false },
   }

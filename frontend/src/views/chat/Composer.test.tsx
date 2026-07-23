@@ -41,6 +41,30 @@ describe('Composer', () => {
     expect(screen.getByRole('button', { name: /send/i })).toBeDisabled()
   })
 
+  it('exposes the active slash-command option to assistive technology', () => {
+    const { rerender } = render(
+      <Composer
+        onSend={() => {}}
+        busy={false}
+        slashMenu={<div id="slash-commands" role="listbox" />}
+        slashListboxId="slash-commands"
+        slashActiveDescendant="slash-commands-option-0"
+      />,
+    )
+
+    expect(textbox()).toHaveAttribute('aria-autocomplete', 'list')
+    expect(textbox()).toHaveAttribute('aria-expanded', 'true')
+    expect(textbox()).toHaveAttribute('aria-controls', 'slash-commands')
+    expect(textbox()).toHaveAttribute('aria-activedescendant', 'slash-commands-option-0')
+
+    rerender(
+      <Composer onSend={() => {}} busy={false} slashMenu={null} slashListboxId="slash-commands" />,
+    )
+    expect(textbox()).toHaveAttribute('aria-expanded', 'false')
+    expect(textbox()).not.toHaveAttribute('aria-controls')
+    expect(textbox()).not.toHaveAttribute('aria-activedescendant')
+  })
+
   it('shows an abort affordance while busy', () => {
     render(<Composer onSend={() => {}} onAbort={() => {}} busy={true} />)
     const stop = screen.getByRole('button', { name: /abort|stop/i })

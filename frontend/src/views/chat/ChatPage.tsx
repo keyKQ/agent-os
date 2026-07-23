@@ -1,6 +1,6 @@
 import './chat.css'
 import './chat-unified.css'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { SquarePen, Terminal, X } from 'lucide-react'
@@ -186,6 +186,8 @@ export function ChatPage() {
   // path. These refs bridge the boundary without reactifying message rows.
   const [composerValue, setComposerValue] = useState('')
   const slashHandleRef = useRef<SlashMenuHandle>(null)
+  const slashListboxId = useId()
+  const [slashActiveDescendant, setSlashActiveDescendant] = useState<string>()
   const composerHandleRef = useRef<ComposerHandle>(null)
   const regenerateMessageRef = useRef<(text: string) => void>(() => {})
   const editMessage = useCallback((text: string) => {
@@ -607,12 +609,16 @@ export function ChatPage() {
         onValueChange={setComposerValue}
         onSlashKeyDown={onSlashKeyDown}
         composerRef={composerHandleRef}
+        slashListboxId={slashListboxId}
+        slashActiveDescendant={slashActiveDescendant}
         slashMenu={
           <SlashMenu
             value={composerValue}
             commands={commands}
             onExecute={onMenuExecute}
             handleRef={slashHandleRef}
+            listboxId={slashListboxId}
+            onActiveDescendantChange={setSlashActiveDescendant}
           />
         }
         onAbort={abortAndRecover}

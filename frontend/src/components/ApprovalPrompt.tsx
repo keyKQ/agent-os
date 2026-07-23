@@ -1,7 +1,8 @@
 import './ApprovalPrompt.css'
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { CommandLine } from '@/components/CommandLine'
+import { ModalShell } from '@/components/ModalShell'
 import {
   approvalCommand,
   approvalDetail,
@@ -33,7 +34,6 @@ export function ApprovalPrompt() {
   const pending = useApprovals((s) => s.pending)
   const mode = useApprovals((s) => s.mode)
   const [busy, setBusy] = useState(false)
-  const dialogRef = useRef<HTMLDivElement | null>(null)
 
   // approval_monitor.js:90-91 — legacy PINNED the modal to the item captured at
   // open time and short-circuited polls while the modal was open (`if (_modal)
@@ -69,13 +69,6 @@ export function ApprovalPrompt() {
     setItem(nextItem)
   }
 
-  // Move focus into the dialog when the pinned item changes (open / advance) so
-  // keyboard users land inside it.
-  useEffect(() => {
-    if (!item) return
-    dialogRef.current?.focus()
-  }, [item])
-
   if (!item) return null
 
   const command = approvalCommand(item)
@@ -106,63 +99,61 @@ export function ApprovalPrompt() {
   }
 
   return (
-    <div className="approval-backdrop" role="presentation">
-      <div
-        ref={dialogRef}
-        className="approval-modal panel tone-warn"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="approval-modal-title"
-        tabIndex={-1}
-      >
-        <div className="panel__head">
-          <span id="approval-modal-title">Approval Required</span>
-        </div>
-        <div className="panel__body approval-modal__body">
-          <div className="approval-modal__tool">{toolLabel}</div>
-          {meta ? <div className="approval-modal__meta t-data">{meta}</div> : null}
-          {command ? <CommandLine command={command} toastIdPrefix="approval-copy" /> : null}
-          {detail ? <pre className="approval-modal__detail">{detail}</pre> : null}
-        </div>
-        <div className="approval-modal__foot">
-          <Button
-            type="button"
-            disabled={busy}
-            title="Approve only this pending tool call"
-            onClick={() => void resolve('once')}
-          >
-            Approve This Time
-          </Button>
-          {showAlways ? (
-            <Button
-              type="button"
-              variant="outline"
-              disabled={busy}
-              title="Remember this operation type for future matching intents"
-              onClick={() => void resolve('always')}
-            >
-              Always Allow This Type
-            </Button>
-          ) : null}
+    <ModalShell
+      role="alertdialog"
+      labelledBy="approval-modal-title"
+      onClose={() => undefined}
+      dismissible={false}
+      overlayClassName="approval-backdrop"
+      className="approval-modal panel tone-warn"
+    >
+      <div className="panel__head">
+        <span id="approval-modal-title">Approval Required</span>
+      </div>
+      <div className="panel__body approval-modal__body">
+        <div className="approval-modal__tool">{toolLabel}</div>
+        {meta ? <div className="approval-modal__meta t-data">{meta}</div> : null}
+        {command ? <CommandLine command={command} toastIdPrefix="approval-copy" /> : null}
+        {detail ? <pre className="approval-modal__detail">{detail}</pre> : null}
+      </div>
+      <div className="approval-modal__foot">
+        <Button
+          type="button"
+          disabled={busy}
+          title="Approve only this pending tool call"
+          onClick={() => void resolve('once')}
+        >
+          Approve This Time
+        </Button>
+        {showAlways ? (
           <Button
             type="button"
             variant="outline"
             disabled={busy}
-            title="Enable approval bypass in this browser session and approve this pending tool call"
-            onClick={() => void resolve('bypass')}
+            title="Remember this operation type for future matching intents"
+            onClick={() => void resolve('always')}
           >
-            Bypass Approvals
+            Always Allow This Type
           </Button>
-          <Button
-            type="button"
-            variant="destructive"
-            disabled={busy}
-            onClick={() => void resolve('deny')}
-          >
-            Deny
-          </Button>
-        </div>
+        ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          disabled={busy}
+          title="Enable approval bypass in this browser session and approve this pending tool call"
+          onClick={() => void resolve('bypass')}
+        >
+          Bypass Approvals
+        </Button>
+        <Button
+          type="button"
+          variant="destructive"
+          disabled={busy}
+          onClick={() => void resolve('deny')}
+        >
+          Deny
+        </Button>
       </div>
-    </div>
+    </ModalShell>
   )
 }

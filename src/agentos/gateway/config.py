@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import threading
 import warnings
 from enum import StrEnum
@@ -101,7 +102,10 @@ class RateLimitConfig(BaseSettings):
 
 
 class ControlUiConfig(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AGENTOS_CONTROL_UI_")
+    model_config = SettingsConfigDict(
+        env_prefix="AGENTOS_CONTROL_UI_",
+        validate_assignment=True,
+    )
 
     enabled: bool = True
     base_path: str = "/control"
@@ -109,8 +113,26 @@ class ControlUiConfig(BaseSettings):
 
     @field_validator("base_path")
     @classmethod
-    def _strip_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
+    def _validate_base_path(cls, value: str) -> str:
+        base_path = value.rstrip("/")
+        if not base_path:
+            raise ValueError("control_ui.base_path cannot be empty or root-mounted")
+        if not base_path.startswith("/") or base_path.startswith("//"):
+            raise ValueError("control_ui.base_path must start with one '/'")
+
+        segments = base_path.removeprefix("/").split("/")
+        if any(
+            not segment
+            or segment in {".", ".."}
+            or re.fullmatch(r"[A-Za-z0-9._~-]+", segment) is None
+            for segment in segments
+        ):
+            raise ValueError(
+                "control_ui.base_path must contain only safe URL path segments"
+            )
+        if base_path in {"/api", "/ws"} or base_path.startswith(("/api/", "/ws/")):
+            raise ValueError("control_ui.base_path cannot overlap gateway API or WebSocket routes")
+        return base_path
 
 
 class SkillsConfig(BaseSettings):

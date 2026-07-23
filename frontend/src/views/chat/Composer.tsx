@@ -74,6 +74,10 @@ export interface ComposerProps {
    * the menu just above the composer). Null / absent when there is no menu.
    */
   slashMenu?: React.ReactNode
+  /** ID of the slash-command listbox controlled by the message field. */
+  slashListboxId?: string
+  /** ID of the currently active slash-command option, when the listbox is open. */
+  slashActiveDescendant?: string
   /** Abort the in-flight turn. Wired to chat.abort by ChatPage (chat.js:8444). */
   onAbort?: () => void
   /** Streaming in flight (legacy `_isStreaming`) — drives the Abort affordance. */
@@ -138,6 +142,8 @@ export function Composer({
   onValueChange,
   onSlashKeyDown,
   slashMenu,
+  slashListboxId,
+  slashActiveDescendant,
   composerRef,
   onAbort,
   busy,
@@ -540,6 +546,10 @@ export function Composer({
           placeholder="Send a message..."
           rows={1}
           aria-label="Message"
+          aria-autocomplete={slashListboxId ? 'list' : undefined}
+          aria-expanded={slashListboxId ? Boolean(slashActiveDescendant) : undefined}
+          aria-controls={slashActiveDescendant ? slashListboxId : undefined}
+          aria-activedescendant={slashActiveDescendant}
         />
         {busy ? (
           <button

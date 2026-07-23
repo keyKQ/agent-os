@@ -86,6 +86,8 @@
   --radius-surface: 14px;
   --radius-dialog: 18px;
   --radius-pill: 999px;
+  /* Blocking tool approvals must stay above every route-owned dialog. */
+  --z-critical-approval: 2000;
 
   --background: #060608; /* legacy --bg */
   --foreground: #ececef; /* legacy --text */
