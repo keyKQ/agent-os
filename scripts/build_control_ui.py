@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 MINIMUM_NODE_MAJOR = 22
+IS_WINDOWS = os.name == "nt"
 LICENSE_BUNDLE_NAME = "THIRD_PARTY_LICENSES.txt"
 LICENSE_BUNDLE_PREAMBLE = (
     "AgentOS Control UI third-party licenses\n"
@@ -254,7 +256,21 @@ def require_supported_node() -> None:
         )
 
 
+def _resolve_npm_command() -> str:
+    candidates = ("npm.cmd", "npm") if IS_WINDOWS else ("npm",)
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved is not None:
+            return resolved
+    raise ControlUIError("Required command is unavailable: npm")
+
+
 def _run_npm(args: list[str], frontend_dir: Path) -> None:
+    if not args or args[0] != "npm":
+        command = args[0] if args else "npm"
+        raise ControlUIError(f"Unsupported npm command: {command}")
+
+    resolved_args = [_resolve_npm_command(), *args[1:]]
     env = os.environ.copy()
     env.update(
         {
@@ -265,9 +281,9 @@ def _run_npm(args: list[str], frontend_dir: Path) -> None:
         }
     )
     try:
-        subprocess.run(args, cwd=frontend_dir, env=env, check=True)
+        subprocess.run(resolved_args, cwd=frontend_dir, env=env, check=True)
     except FileNotFoundError as exc:
-        raise ControlUIError(f"Required command is unavailable: {args[0]}") from exc
+        raise ControlUIError("Required command is unavailable: npm") from exc
     except subprocess.CalledProcessError as exc:
         raise ControlUIError(
             f"Command failed with exit code {exc.returncode}: {' '.join(args)}"

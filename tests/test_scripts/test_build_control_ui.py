@@ -250,6 +250,29 @@ def test_npm_failure_is_reported_as_control_ui_error(monkeypatch, tmp_path: Path
         module._run_npm(["npm", "ci"], tmp_path)
 
 
+def test_run_npm_resolves_windows_cmd_shim(monkeypatch, tmp_path: Path) -> None:
+    module = load_script()
+    npm_cmd = r"C:\hostedtoolcache\windows\node\22.23.1\x64\npm.cmd"
+    resolved_candidates: list[str] = []
+    calls: list[list[str]] = []
+
+    def resolve(candidate: str) -> str | None:
+        resolved_candidates.append(candidate)
+        return npm_cmd if candidate == "npm.cmd" else None
+
+    def run(args, **kwargs) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(module, "IS_WINDOWS", True)
+    monkeypatch.setattr(module.shutil, "which", resolve)
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    module._run_npm(["npm", "ci"], tmp_path)
+
+    assert resolved_candidates == ["npm.cmd"]
+    assert calls == [[npm_cmd, "ci"]]
+
+
 def test_hatch_includes_ignored_control_ui_and_excludes_local_sdist_trees() -> None:
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     targets = pyproject["tool"]["hatch"]["build"]["targets"]
