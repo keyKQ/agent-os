@@ -205,6 +205,88 @@ def test_blank_line_before_table_preserved_and_table_not_glued() -> None:
     assert lines[6] == "after"
 
 
+# ---------------------------------------------------------------------------
+# Think blocks (<think>…</think> from reasoning models)
+# ---------------------------------------------------------------------------
+
+
+def test_think_tags_hidden_and_body_dim_italic() -> None:
+    out = _render_all(["<think>\n", "reasoning here\n", "</think>\n"])
+    assert "<think>" not in out and "</think>" not in out
+    assert "[dim italic]reasoning here[/]" in out
+    assert "▎" in out
+
+
+def test_think_body_does_not_compete_with_reply() -> None:
+    out = _render_all(["<think>\n", "drafting\n", "</think>\n", "answer **bold**\n"])
+    # Think body carries no accent color; the reply keeps its styling.
+    think_part, _, reply_part = out.partition("[/]\n\n")  # end of think body
+    assert "#CCFF00" not in think_part and "#DDFF66" not in think_part
+    assert "[bold]bold[/]" in reply_part
+
+
+def test_think_single_line_form() -> None:
+    out = _render_all(["<think>quick thought</think>\n"])
+    assert "<think>" not in out
+    assert "[dim italic]quick thought[/]" in out
+
+
+def test_empty_think_block_produces_no_body_lines() -> None:
+    out = _render_all(["before\n", "<think>\n", "</think>\n", "after\n"])
+    lines = _display_lines(out)
+    assert lines == ["before", "", "", "after"]
+
+
+def test_think_stray_angle_bracket_closes_block() -> None:
+    """A bare ``<>`` line (mangled ``</think>``) must not leave the stream
+    stuck in think state forever."""
+    out = _render_all(["<think>\n", "reasoning\n", "<>\n", "real answer\n"])
+    assert "[dim italic]reasoning[/]" in out
+    assert "[dim italic]real answer[/]" not in out
+    assert "real answer" in _display_lines(out)[-1]
+
+
+def test_think_blank_line_keeps_bar_but_no_text() -> None:
+    out = _render_all(["<think>\n", "first\n", "\n", "second\n", "</think>\n"])
+    lines = _display_lines(out)
+    # Layout: blank (hidden open tag), bar+text, bare bar, bar+text,
+    # blank (hidden close tag).
+    assert lines[0] == ""
+    assert "▎" in lines[1] and "first" in lines[1]
+    assert lines[2] == "▎"
+    assert "▎" in lines[3] and "second" in lines[3]
+    assert lines[4] == ""
+
+
+def test_think_inside_fence_stays_literal_code() -> None:
+    out = _render_all(["```\n", "<think>\n", "```\n"])
+    assert "[#DDFF66 on #1a1a1a]<think>[/]" in out
+
+
+def test_unclosed_think_flushes_dim() -> None:
+    out = _render_all(["<think>\n", "trailing thought"])
+    assert "[dim italic]trailing thought[/]" in out
+
+
+def test_think_state_resets_between_blocks() -> None:
+    out = _render_all(
+        [
+            "<think>\n",
+            "one\n",
+            "</think>\n",
+            "main content\n",
+            "<think>\n",
+            "two\n",
+            "</think>\n",
+            "more content\n",
+        ]
+    )
+    assert "[dim italic]one[/]" in out
+    assert "[dim italic]two[/]" in out
+    assert "[dim italic]main content[/]" not in out
+    assert "[dim italic]more content[/]" not in out
+
+
 def test_table_cjk_cells_align_by_display_width() -> None:
     out = _render_all(["| 名前 | val |\n|---|---|\n| 世界 | 1 |\n"])
     from rich.cells import cell_len

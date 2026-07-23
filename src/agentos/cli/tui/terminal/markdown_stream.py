@@ -58,6 +58,12 @@ _ITALIC_STYLE = "italic"
 _STRIKE_STYLE = "strike"
 _LINK_STYLE = f"underline {ACCENT_SOFT}"
 _LINK_URL_STYLE = "dim"
+# Think blocks (<think>…</think> from reasoning models): deliberately
+# *less* prominent than quotes — no accent color at all, just a near-gray
+# bar and dim italic text, so the reasoning reads as background context
+# and never competes with the actual reply.
+_THINK_BAR_STYLE = "#3a3a3a"
+_THINK_TEXT_STYLE = "dim italic"
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +81,16 @@ _BOLD_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 _ITALIC_RE = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 _STRIKE_RE = re.compile(r"~~([^~\n]+)~~")
 _LINK_RE = re.compile(r"\[([^\]\n]+)\]\(([^)\s]+)\)")
+
+# Reasoning-model think tags. The block forms own a whole line; the
+# single-line form wraps content inline (``<think>…</think>``). A bare
+# ``<>`` line while a block is open is accepted as a defensive closer —
+# some models / transports mangle ``</think>`` into it, and without the
+# valve everything after would render dim forever.
+_THINK_OPEN_RE = re.compile(r"^\s*<think>\s*$")
+_THINK_CLOSE_RE = re.compile(r"^\s*</think>\s*$")
+_THINK_INLINE_RE = re.compile(r"^\s*<think>(.*?)</think>\s*$")
+_THINK_STRAY_CLOSER = "<>"
 
 
 def _styled(text: str, style: str) -> str:
@@ -149,6 +165,19 @@ def _render_inline(text: str) -> str:
 def _render_code_line(line: str) -> str:
     """A line inside a fenced code block: uniform code style, escaped."""
     return _styled(_rich_escape(line) or " ", _CODE_STYLE)
+
+
+def _render_think_line(line: str) -> str:
+    """A line inside a ``<think>`` block: near-gray bar + dim italic text.
+
+    Intentionally plainer than the quote style — the accent palette is
+    reserved for the actual reply, so the reasoning stays visibly present
+    but visually recessive.
+    """
+    bar = _styled("▎", _THINK_BAR_STYLE)
+    if not line.strip():
+        return bar
+    return f"{bar} {_styled(_rich_escape(line), _THINK_TEXT_STYLE)}"
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +503,9 @@ class MarkdownStreamRenderer:
         self._enabled = enabled
         self._pending = ""
         self._in_fence = False
+        # Inside a ``<think>`` block (reasoning models). Body lines render
+        # dim-italic with a near-gray bar until the closing tag.
+        self._in_think = False
         # Blockquote continuation state: a `>` line opens a quote block;
         # consecutive non-empty lines keep it so multiline quotes style
         # uniformly. Cleared by a blank line or a non-quote block line.
@@ -561,6 +593,21 @@ class MarkdownStreamRenderer:
             return (table_out + "\n") if table_out else ""
         if self._in_fence:
             return _render_code_line(line)
+        # Think blocks: tags own their line and are hidden; body lines
+        # render dim-italic with a near-gray bar. Checked after fences so
+        # a ``<think>`` inside a code fence stays literal code.
+        inline_think = _THINK_INLINE_RE.match(line)
+        if inline_think:
+            return _render_think_line(inline_think.group(1))
+        if _THINK_OPEN_RE.match(line):
+            self._in_think = True
+            table_out = self._flush_table()
+            return (table_out + "\n") if table_out else ""
+        if self._in_think:
+            if _THINK_CLOSE_RE.match(line) or line.strip() == _THINK_STRAY_CLOSER:
+                self._in_think = False
+                return ""
+            return _render_think_line(line)
         # Table lines buffer until the block closes.
         if _is_table_line(line):
             self._table_lines.append(line)

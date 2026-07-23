@@ -153,7 +153,10 @@ code color (no waiting for the closing fence), and inline spans —
 `**bold**`, `*italic*`, `~~strike~~`, inline `` `code` ``, and
 `[text](url)` links —
 are styled in place. File names, branch names, and other important terms
-the model wraps in backticks stand out in the accent color. The render is
+the model wraps in backticks stand out in the accent color. Reasoning-model
+`<think>…</think>` blocks render as a recessive gray-bar, dim-italic region
+(the tags themselves are hidden) so the chain-of-thought stays visible but
+never competes with the reply. The render is
 write-once (no repaint loop), and `NO_COLOR` (or a non-color terminal)
 downgrades the stream to plain text so piped output stays greppable.
 

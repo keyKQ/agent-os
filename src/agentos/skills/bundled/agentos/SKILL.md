@@ -85,7 +85,10 @@ accent, `>` quotes with a dimmed bar, `---` rules, tinted list markers,
 aligned tables, fenced code blocks streamed in a uniform code color, and
 inline `**bold**` / `*italic*` / `~~strike~~` / `code` / `[text](url)`
 links. Backticked file names and branch names stand out in the accent
-color. The render is write-once (no repaint); `NO_COLOR` or a non-color
+color. Reasoning-model `<think>…</think>` blocks render as a recessive
+gray-bar, dim-italic region with the tags hidden, so chain-of-thought
+stays visible but never competes with the reply. The render is
+write-once (no repaint); `NO_COLOR` or a non-color
 terminal downgrades the stream to plain text. In the
 multiline input, `Home`/`End` and `Ctrl+A`/`Ctrl+E` move to the current line's
 start/end; macOS `Cmd+Left`/`Cmd+Right` work when the terminal maps them to
