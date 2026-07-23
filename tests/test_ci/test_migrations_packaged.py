@@ -104,9 +104,10 @@ def test_installed_wheel_resolves_migrations(tmp_path: Path) -> None:
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker not on PATH")
 @pytest.mark.skipif(os.name == "nt", reason="docker smoke uses Linux container images")
 @pytest.mark.skipif(
-    os.environ.get("AGENTOS_SKIP_DOCKER_SMOKE") == "1",
-    reason="docker smoke disabled via env",
+    os.environ.get("AGENTOS_RUN_DOCKER_SMOKE") != "1",
+    reason="live Docker registry smoke is opt-in",
 )
+@pytest.mark.slow
 def test_docker_image_resolves_migrations() -> None:
     """`docker build` + `docker run` resolves _migrations including V010.
 
