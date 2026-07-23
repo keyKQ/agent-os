@@ -15,12 +15,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [2026.7.22.post1] - 2026-07-22
 
+### Added
+
+- Managed MCP server configuration in the Web UI, with stdio, SSE, and
+  Streamable HTTP transports, OAuth authorization, dynamic tool discovery, a
+  Robinhood Trading preset, and a bundled safety-focused Robinhood skill (#66).
+- Mouse-wheel scrolling and Home/End and Ctrl+A/Ctrl+E line navigation in the
+  full-screen `agentos chat` interface (#67).
+
+### Changed
+
+- Promoted the MCP SDK to a standard dependency so remote MCP integrations work
+  without installing an optional extra (#71).
+- Renamed the Web UI chat assistant label from `Cap` to `AGENTOS` (#73).
+
 ### Fixed
 
 - `agentos chat` full-screen transcript now responds to the first mouse wheel
   tick instead of needing several scrolls before the pane moves: the wheel step
   is larger and the tick that releases follow mode is compensated so the
-  wrapped-line cursor leaves the viewport immediately.
+  wrapped-line cursor leaves the viewport immediately (#69).
+- Unauthenticated OAuth MCP servers no longer connect during gateway startup;
+  authenticated servers continue to reconnect automatically (#72).
+- MCP cancellation cleanup now closes partial Streamable HTTP and discovery
+  state so slow or unavailable remote servers cannot leave open AnyIO contexts
+  or crash gateway startup (#71, #72).
 
 ## [2026.7.22] - 2026-07-22
 
