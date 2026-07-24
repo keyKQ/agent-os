@@ -228,9 +228,13 @@ agentos upgrade --timeout 900   # bound the upgrade subprocess (default 600s)
 
 Per install method:
 
-- **uv tool / pipx** — delegated automatically (`uv tool upgrade use-agent-os`
-  / `pipx upgrade use-agent-os`), resolving the tool to an absolute path over a
-  hardened PATH.
+- **uv tool / pipx** — delegated automatically (`uv tool upgrade use-agent-os
+  --reinstall` / `pipx upgrade use-agent-os --force`), resolving the tool to an
+  absolute path over a hardened PATH. Both rebuild the managed venv rather than
+  bumping it in place — `--reinstall` (uv, implies `--refresh`) and `--force`
+  (pipx) self-heal a stale cache or an orphaned interpreter (e.g. after the base
+  Python moves) that would otherwise force a manual reinstall. Extras recorded
+  in the tool receipt are preserved.
 - **pip / editable / source checkout** — not faked: prints the exact manual
   command (e.g. `python -m pip install --upgrade "use-agent-os"`) and exits
   with a distinct code.
