@@ -255,7 +255,7 @@ class LlmProviderConfig(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AGENTOS_LLM_")
 
     provider: str = "openrouter"
-    model: str = "deepseek/deepseek-v4-flash"
+    model: str = "openai/gpt-5.6-luna"
     api_key: str = ""
     api_key_env: str = ""
     base_url: str = "https://openrouter.ai/api/v1"
@@ -276,6 +276,7 @@ class LlmProviderConfig(BaseSettings):
         aliases = {
             "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
             "deepseek/deepseek-v4-pro": "deepseek-v4-pro",
+            "openai/gpt-5.6-luna": "gpt-5.6-luna",
         }
         model = str(self.model or "").strip()
         if model in aliases:
@@ -698,9 +699,9 @@ def _openrouter_tiers() -> dict:
     return {
         "c0": {
             "provider": "openrouter",
-            "model": "deepseek/deepseek-v4-flash",
+            "model": "openai/gpt-5.6-luna",
             "description": (
-                "fast DeepSeek V4 Flash route for trivial chat, short rewrites, "
+                "fast GPT-5.6 Luna route for trivial chat, short rewrites, "
                 "extraction, and low-risk simple Q&A"
             ),
             "supports_image": False,
