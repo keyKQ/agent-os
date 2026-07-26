@@ -297,6 +297,67 @@ def test_ordinary_turns_are_still_persisted(run_kind: str):
     assert _is_internal_turn(run_kind) is False
 
 
+async def test_nudge_counts_even_when_the_transcript_is_not_persisted():
+    """`append_message` returns False wherever no session manager is wired.
+
+    Nesting the nudge under that result meant the counter never advanced and
+    the review silently never fired in those deployments -- which is exactly
+    what CLI runs do.
+    """
+    from agentos.engine.turn_runner.turn_finalizer_stage import (
+        TurnFinalizerStage,
+        TurnFinalizerStageInput,
+    )
+
+    noted: list[str] = []
+
+    class _NoTranscript:
+        async def append_message(self, *_a: Any, **_k: Any) -> bool:
+            return False  # no session manager wired
+
+    class _Capture:
+        async def capture_turn(self, **_k: Any) -> None:
+            raise AssertionError("capture must stay paired with the transcript")
+
+    class _Nudge:
+        def note_turn(self, *, run_kind: str, **_k: Any) -> None:
+            noted.append(run_kind)
+
+    class _Noop:
+        async def persist_error(self, **_k: Any) -> None: ...
+        async def roll_up(self, **_k: Any) -> Any:
+            return None
+
+    stage = TurnFinalizerStage(
+        transcript_append=_NoTranscript(),
+        turn_memory_capture=_Capture(),
+        session_totals=_Noop(),
+        turn_error_persist=_Noop(),
+        memory_nudge=_Nudge(),
+    )
+    await stage.run(
+        TurnFinalizerStageInput(
+            final_text_parts=["hello"],
+            turn_segments=[],
+            turn_artifacts=[],
+            error_message=None,
+            pending_error_event=None,
+            done_event=None,
+            runtime_message="hi",
+            input_mode="user",
+            input_provenance=None,
+            resolved_model="m",
+            agent_id="main",
+            session_key="s1",
+            tool_context=None,
+            run_kind="default",
+            heartbeat_ack_max_chars=300,
+            no_memory_capture=False,
+        )
+    )
+    assert noted == ["default"]
+
+
 def test_review_prompt_is_not_persisted_as_user_input():
     """persist_input=False keeps the harness prompt out of the transcript."""
     import inspect

@@ -515,25 +515,31 @@ class TurnFinalizerStage:
                         error=str(exc),
                     )
 
-                # Periodic memory review. Fire-and-forget: the reply is
-                # already on the wire, and a review must never hold the turn
-                # open -- a slow one would leave the task marked running.
-                try:
-                    self._memory_nudge.note_turn(
-                        agent_id=inp.agent_id,
-                        session_key=inp.session_key,
-                        input_mode=inp.input_mode,
-                        run_kind=inp.run_kind,
-                        no_memory_capture=inp.no_memory_capture,
-                        turn_segments=turn_segments,
-                    )
-                except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
-                    log.warning(
-                        "turn_runner.memory_nudge_failed",
-                        session_key=inp.session_key,
-                        agent_id=inp.agent_id,
-                        error=str(exc),
-                    )
+        # Periodic memory review. Deliberately outside the transcript-append
+        # branch: how many turns the user has taken is independent of whether
+        # this deployment persists transcripts, and nesting it there meant the
+        # counter never advanced wherever append returns False (no session
+        # manager wired), so the nudge silently never fired.
+        #
+        # Fire-and-forget: the reply is already on the wire, and a review must
+        # never hold the turn open -- a slow one would leave the task marked
+        # running for its whole duration.
+        try:
+            self._memory_nudge.note_turn(
+                agent_id=inp.agent_id,
+                session_key=inp.session_key,
+                input_mode=inp.input_mode,
+                run_kind=inp.run_kind,
+                no_memory_capture=inp.no_memory_capture,
+                turn_segments=turn_segments,
+            )
+        except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
+            log.warning(
+                "turn_runner.memory_nudge_failed",
+                session_key=inp.session_key,
+                agent_id=inp.agent_id,
+                error=str(exc),
+            )
 
         # 4. Error persist (only when error_message is truthy; the
         # adapter folds the session-manager-None guard, and the helper
