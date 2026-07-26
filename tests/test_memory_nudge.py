@@ -275,6 +275,36 @@ def test_hydration_ignores_nonsense_counts():
     assert _note(r, prior_user_turns=-5) is False
 
 
+# -- the review must not pollute the conversation --------------------------
+
+
+def test_review_turns_are_classified_internal():
+    """The review's reply is addressed to the harness, not the user.
+
+    Persisting it would leave stray "Nothing to save." lines in the
+    transcript and then replay them as context on the next real turn.
+    """
+    from agentos.engine.turn_runner.turn_finalizer_stage import _is_internal_turn
+
+    assert _is_internal_turn("memory_nudge") is True
+
+
+@pytest.mark.parametrize("run_kind", ["default", "cron_turn", "subagent", "heartbeat", ""])
+def test_ordinary_turns_are_still_persisted(run_kind: str):
+    """Only the nudge is internal -- everything else keeps its transcript."""
+    from agentos.engine.turn_runner.turn_finalizer_stage import _is_internal_turn
+
+    assert _is_internal_turn(run_kind) is False
+
+
+def test_review_prompt_is_not_persisted_as_user_input():
+    """persist_input=False keeps the harness prompt out of the transcript."""
+    import inspect
+
+    src = inspect.getsource(TurnRunner._run_memory_nudge_review)
+    assert "persist_input=False" in src
+
+
 # -- prompt ----------------------------------------------------------------
 
 

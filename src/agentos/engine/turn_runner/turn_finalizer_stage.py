@@ -48,6 +48,15 @@ log = structlog.get_logger(__name__)
 
 _UNCONFIRMED_BACKGROUND_TOOL_NAMES = frozenset({"background_process", "process"})
 
+# Turn kinds whose reply belongs to the harness rather than the conversation.
+# Their output must not be persisted: it would show up as unexplained
+# assistant lines in the user's transcript and then be replayed as context.
+_INTERNAL_TURN_KINDS = frozenset({"memory_nudge"})
+
+
+def _is_internal_turn(run_kind: str | None) -> bool:
+    return bool(run_kind) and run_kind in _INTERNAL_TURN_KINDS
+
 
 def _unconfirmed_background_tool_names(turn_segments: list[dict]) -> list[str]:
     names: list[str] = []
@@ -448,7 +457,14 @@ class TurnFinalizerStage:
 
         # 2. Transcript append + 3. memory capture (paired -- memory
         # only fires if transcript persisted).
-        if final_text or turn_segments or inp.turn_artifacts:
+        #
+        # Internal turns are excluded: their reply is addressed to the
+        # harness, not the user. Persisting it would leave stray lines like
+        # "Nothing to save." in the conversation and, worse, feed them back
+        # as context on the next real turn.
+        if (final_text or turn_segments or inp.turn_artifacts) and not _is_internal_turn(
+            inp.run_kind
+        ):
             persisted_content = (
                 _json.dumps(
                     {"text": final_text, "artifacts": inp.turn_artifacts},
