@@ -554,6 +554,11 @@ def _normalize_capture_kind(value: str) -> str:
 # the thing the nudge would ask for, so it resets the counter instead.
 _MEMORY_WRITE_TOOL_NAMES: Final[frozenset[str]] = frozenset({"memory", "memory_save"})
 
+# Cap on retained nudge counters. Far above any realistic concurrent-session
+# count, low enough that the dict cannot grow without bound in a gateway that
+# runs for weeks.
+_MAX_NUDGE_COUNTERS: Final[int] = 2048
+
 # Prompt for the periodic memory review. Adapted from hermes-agent
 # (MIT, © 2025 Nous Research). Two properties matter and are easy to lose:
 # it names what is worth keeping (durable facts about the user, not task
@@ -1902,6 +1907,7 @@ class TurnRunner:
             self._memory_nudge_counters[key] = 0
             return False
 
+        self._evict_nudge_counters_if_needed()
         interval = int(getattr(nudge_cfg, "interval", 0))
         prior = self._memory_nudge_counters.get(key)
         if prior is None:
@@ -1936,8 +1942,27 @@ class TurnRunner:
         return max(0, prior_user_turns - 1) % interval
 
     def forget_memory_nudge_counter(self, session_key: str) -> None:
-        """Drop nudge counters for *session_key* so they do not outlive it."""
+        """Drop nudge counters for *session_key* so they do not outlive it.
+
+        Sessions have no teardown hook reaching this far, so this is a
+        courtesy for callers that do know a session ended; the size cap in
+        ``_note_turn_for_memory_nudge`` is what actually bounds the dict.
+        """
         for key in [k for k in self._memory_nudge_counters if k[1] == session_key]:
+            self._memory_nudge_counters.pop(key, None)
+
+    def _evict_nudge_counters_if_needed(self) -> None:
+        """Keep the counter dict bounded in a long-lived gateway process.
+
+        Nothing notifies this runner when a session ends, so without a cap
+        the dict grows once per session for the life of the process. Losing a
+        counter only costs a re-seed from the transcript on that session's
+        next turn, so evicting the oldest half is cheap; insertion order
+        approximates least-recently-started.
+        """
+        if len(self._memory_nudge_counters) <= _MAX_NUDGE_COUNTERS:
+            return
+        for key in list(self._memory_nudge_counters)[: _MAX_NUDGE_COUNTERS // 2]:
             self._memory_nudge_counters.pop(key, None)
 
     async def _run_memory_nudge_review(

@@ -41,6 +41,7 @@ class _Runner:
     _turn_used_memory_tool = staticmethod(TurnRunner._turn_used_memory_tool)
     _capture_filter_matches = staticmethod(TurnRunner._capture_filter_matches)
     _hydrate_nudge_counter = staticmethod(TurnRunner._hydrate_nudge_counter)
+    _evict_nudge_counters_if_needed = TurnRunner._evict_nudge_counters_if_needed
     _note_turn_for_memory_nudge = TurnRunner._note_turn_for_memory_nudge
     forget_memory_nudge_counter = TurnRunner.forget_memory_nudge_counter
 
@@ -202,6 +203,31 @@ def test_forgetting_resets_progress_for_that_session():
     _note(r, session_key="a")
     r.forget_memory_nudge_counter("a")
     assert _note(r, session_key="a") is False
+
+
+def test_counter_dict_stays_bounded():
+    """Nothing tells the runner a session ended, so the dict must self-bound.
+
+    A gateway running for weeks would otherwise retain one entry per session
+    it ever saw.
+    """
+    from agentos.engine.runtime import _MAX_NUDGE_COUNTERS
+
+    r = _Runner(MemoryNudgeConfig(interval=1000))
+    for i in range(_MAX_NUDGE_COUNTERS + 100):
+        _note(r, session_key=f"s{i}")
+    assert len(r._memory_nudge_counters) <= _MAX_NUDGE_COUNTERS
+
+
+def test_eviction_keeps_the_most_recent_sessions():
+    """Evicting the oldest half costs a re-seed, never a wrong count."""
+    from agentos.engine.runtime import _MAX_NUDGE_COUNTERS
+
+    r = _Runner(MemoryNudgeConfig(interval=1000))
+    for i in range(_MAX_NUDGE_COUNTERS + 1):
+        _note(r, session_key=f"s{i}")
+    newest = f"s{_MAX_NUDGE_COUNTERS}"
+    assert ("main", newest) in r._memory_nudge_counters
 
 
 # -- hydration across processes --------------------------------------------
