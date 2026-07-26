@@ -90,6 +90,7 @@ def _with_unconfirmed_action_notice(final_text: str, turn_segments: list[dict]) 
 # Ports -- four narrow Protocols
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class TranscriptAppendPort(Protocol):
     """Persist the assistant turn via ``SessionManager.append_message(...)``.
@@ -118,6 +119,7 @@ class TranscriptAppendPort(Protocol):
         token_count: int | None,
     ) -> bool: ...
 
+
 @runtime_checkable
 class TurnMemoryCapturePort(Protocol):
     """Wrap ``TurnRunner._capture_turn_memory(...)``.
@@ -140,6 +142,34 @@ class TurnMemoryCapturePort(Protocol):
         run_kind: str,
         no_memory_capture: bool,
     ) -> None: ...
+
+
+@runtime_checkable
+class MemoryNudgePort(Protocol):
+    """Wrap ``TurnRunner.note_turn_for_memory_nudge(...)``.
+
+    Synchronous by design: the adapter only advances a counter and, when a
+    review is due, schedules it as a background task. Nothing here awaits the
+    review itself, so a slow review cannot hold the turn open.
+    """
+
+    def note_turn(
+        self,
+        *,
+        agent_id: str,
+        session_key: str,
+        input_mode: str,
+        run_kind: str,
+        no_memory_capture: bool,
+        turn_segments: Any,
+    ) -> None: ...
+
+
+class _NoopMemoryNudge:
+    """Stand-in used when no nudge port is wired. Never nudges."""
+
+    def note_turn(self, **_kwargs: Any) -> None:
+        return None
 
 
 def _turn_usage_payload(
@@ -174,6 +204,7 @@ def _turn_usage_payload(
         "total_savings_usd": float(done_event.total_savings_usd or 0.0),
     }
 
+
 @runtime_checkable
 class SessionTotalsPort(Protocol):
     """Roll up session token + cost + cache totals from a DoneEvent.
@@ -200,6 +231,7 @@ class SessionTotalsPort(Protocol):
         resolved_model: str,
     ) -> CostRollupResult | None: ...
 
+
 @runtime_checkable
 class TurnErrorPersistPort(Protocol):
     """Wrap ``TurnRunner._persist_turn_error(session_key, event)``.
@@ -217,9 +249,11 @@ class TurnErrorPersistPort(Protocol):
         event: ErrorEvent | None,
     ) -> None: ...
 
+
 # ---------------------------------------------------------------------------
 # Cost-rollup result -- exposed for equivalence-harness pinning
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class CostRollupResult:
@@ -243,9 +277,11 @@ class CostRollupResult:
     cache_write: int
     model_override: str | None
 
+
 # ---------------------------------------------------------------------------
 # Stage I/O dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class TurnFinalizerStageInput:
@@ -285,15 +321,16 @@ class TurnFinalizerStageInput:
     heartbeat_ack_max_chars: int
     no_memory_capture: bool
 
+
 @dataclass(frozen=True)
 class TurnFinalizerStageOutput:
     """Outputs the harness applies to ``TurnContext`` after the stage runs.
 
-   Downstream consumers read ``final_text``, ``turn_segments``,
-    ``turn_artifacts``, ``error_message``, ``pending_error_event``,
-    ``done_event`` for its turn_end trace + decision entry. The
-    ``cost_rollup`` snapshot is observability-only (pinned by the
-    equivalence harness, not consumed downstream).
+    Downstream consumers read ``final_text``, ``turn_segments``,
+     ``turn_artifacts``, ``error_message``, ``pending_error_event``,
+     ``done_event`` for its turn_end trace + decision entry. The
+     ``cost_rollup`` snapshot is observability-only (pinned by the
+     equivalence harness, not consumed downstream).
     """
 
     # Heartbeat-normalized final text (the harness writes this onto
@@ -315,39 +352,41 @@ class TurnFinalizerStageOutput:
     # Did the memory capture fire?
     memory_captured: bool
 
+
 # ---------------------------------------------------------------------------
 # Outer stage class
 # ---------------------------------------------------------------------------
 
+
 class TurnFinalizerStage:
     """Persist the assistant turn, capture memory, roll up session totals.
 
-    Stable boundary: runs ONCE per turn, after StreamConsumerStage
-    exhausts (and after the harness flushes the trailing text segment),
-   . The four ports execute in the original order:
+     Stable boundary: runs ONCE per turn, after StreamConsumerStage
+     exhausts (and after the harness flushes the trailing text segment),
+    . The four ports execute in the original order:
 
-    1. Heartbeat-normalize the accumulated text.
-    2. ``TranscriptAppendPort.append_message`` (assistant turn).
-    3. ``TurnMemoryCapturePort.capture_turn`` (memory write -- wrapped
-       in log-and-continue try/except intentional).
-    4. ``TurnErrorPersistPort.persist_error`` (pending error, only if
-       ``error_message`` is truthy).
-    5. ``SessionTotalsPort.rollup`` (DoneEvent-driven session.update --
-       wrapped in log-and-continue try/except intentional).
+     1. Heartbeat-normalize the accumulated text.
+     2. ``TranscriptAppendPort.append_message`` (assistant turn).
+     3. ``TurnMemoryCapturePort.capture_turn`` (memory write -- wrapped
+        in log-and-continue try/except intentional).
+     4. ``TurnErrorPersistPort.persist_error`` (pending error, only if
+        ``error_message`` is truthy).
+     5. ``SessionTotalsPort.rollup`` (DoneEvent-driven session.update --
+        wrapped in log-and-continue try/except intentional).
 
-    The order is load-bearing: transcript persistence MUST precede
-    memory capture (memory capture reads ``final_text`` AS PERSISTED);
-    error persist MUST precede totals rollup for diagnostic ordering
-    that downstream observability relies on.
+     The order is load-bearing: transcript persistence MUST precede
+     memory capture (memory capture reads ``final_text`` AS PERSISTED);
+     error persist MUST precede totals rollup for diagnostic ordering
+     that downstream observability relies on.
 
-    Exception model: the stage does NOT wrap the ``append_message``
-    call. Any exception there propagates to the outer ``_run_turn``
-    terminal handler --. The memory-capture
-    and totals-rollup ports each have their own log-and-continue
-    try/except inside the stage body.
+     Exception model: the stage does NOT wrap the ``append_message``
+     call. Any exception there propagates to the outer ``_run_turn``
+     terminal handler --. The memory-capture
+     and totals-rollup ports each have their own log-and-continue
+     try/except inside the stage body.
 
-    No ``TurnHook.after_turn`` fan-out today; that wiring belongs in a separate
-    production hook pass.
+     No ``TurnHook.after_turn`` fan-out today; that wiring belongs in a separate
+     production hook pass.
     """
 
     name = "turn_finalizer_stage"
@@ -359,11 +398,15 @@ class TurnFinalizerStage:
         turn_memory_capture: TurnMemoryCapturePort,
         session_totals: SessionTotalsPort,
         turn_error_persist: TurnErrorPersistPort,
+        memory_nudge: MemoryNudgePort | None = None,
     ) -> None:
         self._transcript_append = transcript_append
         self._turn_memory_capture = turn_memory_capture
         self._session_totals = session_totals
         self._turn_error_persist = turn_error_persist
+        # Optional so existing constructions (tests, older wiring) keep
+        # working; a stage without it simply never nudges.
+        self._memory_nudge = memory_nudge or _NoopMemoryNudge()
 
     async def run(
         self,
@@ -418,14 +461,10 @@ class TurnFinalizerStage:
             if (
                 inp.done_event is not None
                 and inp.done_event.reasoning_content
-                and _is_deepseek_model_id(
-                    inp.done_event.model or inp.resolved_model or ""
-                )
+                and _is_deepseek_model_id(inp.done_event.model or inp.resolved_model or "")
             ):
                 reasoning_content = inp.done_event.reasoning_content
-            token_count = (
-                inp.done_event.output_tokens if inp.done_event is not None else None
-            )
+            token_count = inp.done_event.output_tokens if inp.done_event is not None else None
             transcript_appended = await self._transcript_append.append_message(
                 inp.session_key,
                 role="assistant",
@@ -455,6 +494,26 @@ class TurnFinalizerStage:
                 except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
                     log.warning(
                         "turn_runner.capture_failed",
+                        session_key=inp.session_key,
+                        agent_id=inp.agent_id,
+                        error=str(exc),
+                    )
+
+                # Periodic memory review. Fire-and-forget: the reply is
+                # already on the wire, and a review must never hold the turn
+                # open -- a slow one would leave the task marked running.
+                try:
+                    self._memory_nudge.note_turn(
+                        agent_id=inp.agent_id,
+                        session_key=inp.session_key,
+                        input_mode=inp.input_mode,
+                        run_kind=inp.run_kind,
+                        no_memory_capture=inp.no_memory_capture,
+                        turn_segments=turn_segments,
+                    )
+                except Exception as exc:  # noqa: BLE001 - log-and-continue intentional
+                    log.warning(
+                        "turn_runner.memory_nudge_failed",
                         session_key=inp.session_key,
                         agent_id=inp.agent_id,
                         error=str(exc),
