@@ -16,7 +16,17 @@ log = structlog.get_logger(__name__)
 
 _retriever: HybridRetriever | None = None
 _retriever_lock = threading.Lock()
-_elig_ctx = EligibilityContext.auto()
+
+
+def _eligibility_context() -> EligibilityContext:
+    """Build a fresh eligibility context for this turn.
+
+    A process-wide context cached negative `shutil.which()` and env lookups
+    forever: installing a missing binary or setting a credential never took
+    effect until restart, while every RPC surface builds its own context per
+    call and so reported the skill as ready. ~15 `which()` calls per turn is
+    cheap next to that divergence."""
+    return EligibilityContext.auto()
 
 
 def _get_retriever(skills_cfg: Any) -> HybridRetriever:
@@ -57,13 +67,14 @@ def _get_retriever(skills_cfg: Any) -> HybridRetriever:
 def _deterministic_gate(
     skills: list[SkillSpec],
     available_tools: set[str],
+    elig_ctx: EligibilityContext,
 ) -> list[SkillSpec]:
     """Pure-Python gate: eligibility, requires_tools, fallback, visibility."""
     gated: list[SkillSpec] = []
     for s in skills:
         if s.disable_model_invocation:
             continue
-        if not check_eligibility(s, _elig_ctx):
+        if not check_eligibility(s, elig_ctx):
             continue
         if s.requires_tools and not all(t in available_tools for t in s.requires_tools):
             continue
@@ -93,7 +104,7 @@ async def filter_skills(ctx: TurnContext) -> TurnContext:
 
     # ── deterministic gate (no LLM, pure Python) ──
     available_tools = {t.name for t in ctx.tool_defs} if ctx.tool_defs else set()
-    gated = _deterministic_gate(all_skills, available_tools)
+    gated = _deterministic_gate(all_skills, available_tools, _eligibility_context())
 
     # ── always skills bypass filter, guaranteed visibility ──
     pinned = [s for s in gated if s.always]
@@ -120,18 +131,6 @@ async def filter_skills(ctx: TurnContext) -> TurnContext:
 
     final = pinned + filtered
 
-    # Publish the post-filter skill-ID list so the pipeline wrapper can
-    # surface it in the decision log's PipelineStepRecord. Non-mutating
-    # additive read for callers that don't consume the metadata.
-    try:
-        ctx.metadata["filtered_skill_ids"] = [
-            getattr(s, "id", None) or getattr(s, "name", None)
-            for s in filtered
-            if getattr(s, "id", None) or getattr(s, "name", None)
-        ]
-    except Exception:  # pragma: no cover — metadata is best-effort
-        ctx.metadata["filtered_skill_ids"] = []
-
     from agentos.skills.injector import SkillInjector
 
     injector = SkillInjector()
@@ -144,15 +143,43 @@ async def filter_skills(ctx: TurnContext) -> TurnContext:
     else:
         base, suffix = ctx.system_prompt
 
+    dropped: list[str] = []
     if injection_mode == "user_message":
         skills_prompt = injector.inject_compact("", final)
-    elif injection_mode == "user_context":
-        skills_prompt = injector.inject_skills("", final, max_chars=max_chars)
     else:
-        skills_prompt = injector.inject_skills("", final, max_chars=max_chars)
-    ctx.metadata["skill_count"] = len(final)
+        # "system" and "user_context" both budget-select full vs compact.
+        skills_prompt, dropped = injector.inject_skills("", final, max_chars=max_chars)
+
+    # Everything below describes what actually reached the prompt, not the
+    # pre-truncation list: a metadata count that includes skills the budget
+    # threw away is how this stayed invisible.
+    dropped_names = set(dropped)
+    injected = [s for s in final if not s.disable_model_invocation and s.name not in dropped_names]
+
+    # Publish the injected skill-ID list so the pipeline wrapper can
+    # surface it in the decision log's PipelineStepRecord. Non-mutating
+    # additive read for callers that don't consume the metadata.
+    try:
+        ctx.metadata["filtered_skill_ids"] = [
+            getattr(s, "id", None) or getattr(s, "name", None)
+            for s in filtered
+            if (getattr(s, "id", None) or getattr(s, "name", None)) and s.name not in dropped_names
+        ]
+    except Exception:  # pragma: no cover — metadata is best-effort
+        ctx.metadata["filtered_skill_ids"] = []
+
+    ctx.metadata["skill_count"] = len(injected)
     ctx.metadata["skills_prompt_chars"] = len(skills_prompt)
     ctx.metadata["skills_injection_mode"] = injection_mode
+    ctx.metadata["skills_dropped_for_budget"] = dropped
+
+    if dropped:
+        log.warning(
+            "skills_filter.budget_truncated",
+            dropped=dropped,
+            budget=max_chars,
+            kept=len(injected),
+        )
 
     # Surface the actual skill IDs the retriever picked. Without this,
     # operators can see a query passed through (total → filtered count)
@@ -170,7 +197,7 @@ async def filter_skills(ctx: TurnContext) -> TurnContext:
         total=len(all_skills),
         gated=len(gated),
         pinned=len(pinned),
-        filtered=len(final),
+        filtered=len(injected),
         mode=injection_mode,
         strategy=getattr(skills_cfg, "filter_strategy", "lexical") if filter_enabled else "off",
         query_preview=(

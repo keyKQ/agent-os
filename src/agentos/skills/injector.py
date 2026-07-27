@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from agentos.skills.types import SkillSpec
+from agentos.skills.types import SkillLayer, SkillSpec
+
+# Highest precedence first. When the budget forces a cut, shipped skills are
+# sacrificed before the ones an operator installed on purpose.
+_LAYER_PRECEDENCE: dict[SkillLayer, int] = {
+    SkillLayer.WORKSPACE: 0,
+    SkillLayer.PROJECT: 1,
+    SkillLayer.PERSONAL: 2,
+    SkillLayer.MANAGED: 3,
+    SkillLayer.BUNDLED: 4,
+    SkillLayer.EXTRA: 5,
+}
+_UNKNOWN_LAYER_RANK = len(_LAYER_PRECEDENCE)
 
 
 def _escape_xml(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _skill_location(skill: SkillSpec) -> str:
-    if skill.file_path:
-        return skill.file_path
-    if skill.path is not None:
-        return str(skill.path)
-    return ""
+def _layer_rank(skill: SkillSpec) -> int:
+    return _LAYER_PRECEDENCE.get(skill.layer, _UNKNOWN_LAYER_RANK)
 
 
 class SkillInjector:
@@ -44,12 +52,9 @@ class SkillInjector:
             ]
         )
         for s in visible:
-            lines.append('  <skill>')
+            lines.append("  <skill>")
             lines.append(f"    <name>{_escape_xml(s.name)}</name>")
             lines.append(f"    <description>{_escape_xml(s.description)}</description>")
-            location = _skill_location(s)
-            if location:
-                lines.append(f"    <location>{_escape_xml(location)}</location>")
             lines.append("  </skill>")
         lines.append("</available_skills>")
         return system_prompt + "\n".join(lines)
@@ -68,11 +73,8 @@ class SkillInjector:
         ]
         lines.extend(["", "<available_skills>"])
         for s in visible:
-            lines.append('  <skill>')
+            lines.append("  <skill>")
             lines.append(f"    <name>{_escape_xml(s.name)}</name>")
-            location = _skill_location(s)
-            if location:
-                lines.append(f"    <location>{_escape_xml(location)}</location>")
             lines.append("  </skill>")
         lines.append("</available_skills>")
         return system_prompt + "\n".join(lines)
@@ -82,25 +84,32 @@ class SkillInjector:
         system_prompt: str,
         skills: list[SkillSpec],
         max_chars: int = 30_000,
-    ) -> str:
-        """Auto-select full/compact mode based on token budget."""
+    ) -> tuple[str, list[str]]:
+        """Auto-select full/compact mode based on token budget.
+
+        Returns the prompt plus the names of any skills the budget forced out,
+        so callers can log and surface a silent capability loss.
+        """
         if not skills:
-            return system_prompt
+            return system_prompt, []
 
         full = self.inject_full(system_prompt, skills)
         if len(full) - len(system_prompt) <= max_chars:
-            return full
+            return full, []
 
         compact = self.inject_compact(system_prompt, skills)
         if len(compact) - len(system_prompt) <= max_chars:
-            return compact
+            return compact, []
 
-        # Budget exceeded even in compact — truncate skills
+        # Budget exceeded even in compact — truncate skills. Sort by layer
+        # precedence first (stable, so within-layer order is untouched) so the
+        # cut lands on bundled skills instead of whatever the operator installed.
         visible = [s for s in skills if not s.disable_model_invocation]
-        lo, hi = 0, len(visible)
+        ordered = sorted(visible, key=_layer_rank)
+        lo, hi = 0, len(ordered)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            test = self.inject_compact(system_prompt, visible[:mid])
+            test = self.inject_compact(system_prompt, ordered[:mid])
             if len(test) - len(system_prompt) <= max_chars:
                 lo = mid
             else:
@@ -108,4 +117,6 @@ class SkillInjector:
         # If the safety header itself exceeds an extremely small budget, keep
         # one compact skill entry rather than dropping the whole skills section.
         # Losing the guard makes skill names more likely to be mistaken for tools.
-        return self.inject_compact(system_prompt, visible[: max(lo, 1)])
+        kept = max(lo, 1)
+        dropped = [s.name for s in ordered[kept:]]
+        return self.inject_compact(system_prompt, ordered[:kept]), dropped
