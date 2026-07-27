@@ -216,6 +216,9 @@ class SkillLoader:
             snapshot_path or default_agentos_home() / "cache" / "skills_snapshot.json"
         )
         self._cached: list[SkillSpec] | None = None
+        #: Manifest the in-memory cache was built from. Compared on every
+        #: ``load_all()`` so a write nobody told us about still lands.
+        self._cached_manifest: dict[str, dict[str, float | int]] | None = None
 
     @property
     def workspace_dir(self) -> Path | None:
@@ -230,6 +233,7 @@ class SkillLoader:
     def invalidate_cache(self) -> None:
         """Clear cached skills so next load_all() re-scans from disk."""
         self._cached = None
+        self._cached_manifest = None
 
     def _get_layer_dirs(self) -> list[tuple[Path, SkillLayer]]:
         """Return the layer directories in low → high precedence order.
@@ -353,8 +357,14 @@ class SkillLoader:
         self._snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         self._snapshot_path.write_text(json.dumps(data), encoding="utf-8")
 
-    def load_snapshot(self) -> list[SkillSpec] | None:
-        """Load from snapshot if manifest matches. Returns None on miss."""
+    def load_snapshot(
+        self, manifest: dict[str, dict[str, float | int]] | None = None
+    ) -> list[SkillSpec] | None:
+        """Load from snapshot if manifest matches. Returns None on miss.
+
+        ``manifest`` lets a caller that has already stat-ed the layer dirs pass
+        the result in rather than pay for a second sweep.
+        """
         import json
 
         if not self._snapshot_path.exists():
@@ -367,7 +377,7 @@ class SkillLoader:
         if data.get("version") != _SNAPSHOT_SCHEMA_VERSION:
             return None
         saved_manifest = data.get("manifest", {})
-        current_manifest = self._build_manifest()
+        current_manifest = manifest if manifest is not None else self._build_manifest()
         if saved_manifest != current_manifest:
             return None
 
@@ -446,14 +456,24 @@ class SkillLoader:
         """Load all skills with layer precedence (high overrides low).
 
         Tries snapshot cache first for fast cold starts.
+
+        The in-memory cache is validated against the on-disk manifest rather
+        than trusted outright. ``invalidate_cache()`` is only reached through
+        AgentOS's own install/update/remove paths, but the skill directories are
+        not exclusively ours: ``agentos skills install`` runs in a separate
+        process, and ``.agents/skills`` is shared with every other agent on the
+        machine. A skill written by any of them used to stay invisible to a
+        running gateway until it restarted, with nothing said about it.
         """
-        if self._cached is not None:
+        manifest = self._build_manifest()
+        if self._cached is not None and self._cached_manifest == manifest:
             return list(self._cached)
 
         # Try snapshot cache
-        cached = self.load_snapshot()
+        cached = self.load_snapshot(manifest)
         if cached is not None:
             self._cached = cached
+            self._cached_manifest = manifest
             return list(cached)
 
         # Full scan: load in low→high order; higher layers override by name
@@ -477,6 +497,10 @@ class SkillLoader:
 
         skills = list(merged.values())
         self._cached = list(skills)
+        # Set before save_snapshot(), which calls back into load_all(): with the
+        # manifest already recorded that call is a cache hit rather than a
+        # second full scan.
+        self._cached_manifest = manifest
 
         # Save snapshot for next cold start
         try:

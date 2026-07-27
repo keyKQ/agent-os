@@ -92,6 +92,16 @@ It is shown as a detail on each card and it decides which skills are sacrificed
 first if the prompt budget is exceeded, but it does not tell you where a skill
 came from.
 
+The two `.agents/skills` layers are shared with other agents on the machine —
+Codex, Cursor, and anything else following that convention install there too.
+AgentOS treats them as ordinary layers: a skill another tool writes appears on
+the next turn, and one it removes stops being offered, without a restart and
+without going through `agentos skills`. The directories are also honoured when
+they do not exist yet, so the first cross-agent install on a fresh machine does
+not need one either. Note the precedence that follows from the order above: a
+skill in `.agents/skills` overrides a bundled or hub-installed skill of the same
+name.
+
 Provenance (`origin`, `license`, `upstream_url`) is separate from all four: it
 records where the *text* came from and under what licence. A skill can be
 AgentOS-original text published by a partner, or upstream text with no

@@ -182,6 +182,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   user's home directory in front of the model on every turn. Removing it, with
   the raised budget above, is what lets a stock install list every skill with
   its description.
+- A skill that appears in a skills directory while the gateway is running is
+  now picked up on the next turn instead of at the next restart. The cache was
+  only cleared through AgentOS's own install paths, but the directories are
+  shared: `agentos skills install` runs in a separate process, and
+  `~/.agents/skills` is written to by other agents on the same machine. A skill
+  from either was on disk, absent from `skills.list`, absent from the prompt,
+  and unmentioned in any log. The cache is now validated against the same
+  file manifest the on-disk snapshot already used, which costs one stat sweep —
+  measured at 0.6 ms for 65 skills — on each load.
+- `~/.agents/skills` and `<project>/.agents/skills` are honoured when they are
+  created after startup. Both resolved once at boot and a missing one collapsed
+  to "no such layer", so the first cross-agent install on a machine stayed
+  invisible until a restart. The managed directory was already exempt for this
+  exact reason; these two now match it.
 - The guidance above the skills list no longer argues against using it. It
   opened with "Skills are optional task playbooks" and told the model to load
   one "only when a listed entry clearly matches" — while the same block, in the

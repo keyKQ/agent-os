@@ -264,6 +264,14 @@ earlier: `extra` (config dirs) → `bundled` (shipped) → `managed`
 (`<workspace>/skills`). Layer is also the tiebreak when the prompt budget
 forces a cut: shipped skills go first, an operator's own skills go last.
 
+The `.agents/skills` layers are shared with other agents (Codex, Cursor, and
+anything else using that convention). Skills they add or remove take effect on
+the next turn — the loader re-checks the directories rather than trusting a
+cache — so do not tell an operator to restart the gateway to pick one up, and
+do not assume `agentos skills install` is the only way a skill got there. A
+`.agents/skills` skill also outranks a bundled or hub-installed one of the
+same name.
+
 **Acquisition — how it got there.** `shipped` (ships with the wheel),
 `hub` (fetched by `agentos skills install`, has a lockfile entry), or `local`
 (a directory someone put there). `agentos skills list --json` reports it under
