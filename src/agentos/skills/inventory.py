@@ -35,7 +35,13 @@ from agentos.skills.types import (
     SkillSpec,
 )
 
-__all__ = ["SkillRow", "build_skill_inventory"]
+__all__ = [
+    "SkillRow",
+    "acquisition_payload",
+    "availability_payload",
+    "build_skill_inventory",
+    "publisher_payload",
+]
 
 
 @dataclass(frozen=True)
@@ -102,6 +108,50 @@ def build_skill_inventory(
             )
         )
     return rows
+
+
+def publisher_payload(publisher: SkillPublisher | None) -> dict[str, Any]:
+    """Serialize an allowlisted publisher; all-empty when a skill has none.
+
+    Lives here rather than beside any one surface: the gateway, the CLI, and the
+    agent's own ``skill_list`` all emit these three blocks, and a second copy of
+    the key names is exactly how they drifted apart before. Always present, so a
+    consumer reads ``row["publisher"]["id"]`` without a guard and tests one
+    thing — an empty ``id`` means unbranded.
+    """
+    p = publisher or SkillPublisher()
+    return {"id": p.id, "name": p.name, "url": p.url, "logo": p.logo}
+
+
+def acquisition_payload(acquisition: SkillAcquisition | None) -> dict[str, Any]:
+    """Serialize how a skill was acquired and what an operator may do to it.
+
+    :attr:`SkillAcquisition.detail` is deliberately left off the wire: it names
+    filesystem paths, and this payload reaches the agent's ``skill_list`` as
+    well as the Web UI. A surface that wants to explain a withheld affordance
+    reads it off the row.
+    """
+    a = acquisition or SkillAcquisition()
+    return {
+        "kind": str(a.kind),
+        "source_id": a.source_id,
+        "identifier": a.identifier,
+        "version": a.version,
+        "installed_at": a.installed_at,
+        "source_trust": a.source_trust,
+        "scan_verdict": a.scan_verdict,
+        "removable": a.removable,
+        "updatable": a.updatable,
+    }
+
+
+def availability_payload(availability: SkillAvailability) -> dict[str, Any]:
+    """Serialize whether the agent is being offered a skill, and why not."""
+    return {
+        "offered": availability.offered,
+        "reason": availability.reason,
+        "detail": availability.detail,
+    }
 
 
 def _managed_dir(loader: SkillLoader, config: Any | None) -> Path | None:
