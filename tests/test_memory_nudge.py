@@ -154,17 +154,34 @@ def test_review_cannot_trigger_another_review():
     assert r._memory_nudge_counters == {}
 
 
-# -- self-directed writes reset the counter --------------------------------
+# -- self-directed writes hold the counter ---------------------------------
 
 
 @pytest.mark.parametrize("tool_name", ["memory", "memory_save"])
-def test_agent_writing_memory_itself_resets_the_counter(tool_name: str):
-    """An agent that curates unprompted does not need to be nudged."""
+def test_agent_writing_memory_itself_holds_the_counter(tool_name: str):
+    """A self-directed write delays the review; it must not cancel it.
+
+    Clearing the counter here meant a diligent model -- one that saves on
+    most turns -- never reached the interval, so the review never ran. A
+    per-turn save and the review's whole-conversation sweep are different
+    jobs, and only the latter consolidates.
+    """
     r = _Runner(MemoryNudgeConfig(interval=3))
     _note(r)
     _note(r)
     assert _note(r, turn_segments=[{"type": "tool_result", "name": tool_name}]) is False
-    # Counter restarted: the next fire is a full interval away.
+    # Counter held at 2, so the very next ordinary turn reaches the interval.
+    assert _note(r) is True
+
+
+@pytest.mark.parametrize("tool_name", ["memory", "memory_save"])
+def test_saving_every_turn_still_reaches_a_review(tool_name: str):
+    """The regression the benchmark caught: 0 reviews across 10 trials."""
+    r = _Runner(MemoryNudgeConfig(interval=3))
+    saves = [{"type": "tool_result", "name": tool_name}]
+    # Two saving turns advance nothing, but three ordinary turns still fire.
+    assert _note(r, turn_segments=saves) is False
+    assert _note(r, turn_segments=saves) is False
     assert [_note(r) for _ in range(3)] == [False, False, True]
 
 

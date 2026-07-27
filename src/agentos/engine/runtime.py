@@ -1908,7 +1908,11 @@ class TurnRunner:
 
         key = (agent_id, session_key)
         if self._turn_used_memory_tool(turn_segments):
-            self._memory_nudge_counters[key] = 0
+            # Hold the counter rather than clearing it. A self-directed write
+            # saves the one fact that was salient this turn; the review re-reads
+            # the whole conversation and consolidates, which is a different job.
+            # Clearing meant a diligent model -- one that saves on most turns --
+            # never reached the interval and the review never ran at all.
             return False
 
         self._evict_nudge_counters_if_needed()
