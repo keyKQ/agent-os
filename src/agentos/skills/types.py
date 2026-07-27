@@ -83,6 +83,65 @@ class SkillEnvVar:
 
 
 @dataclass
+class SkillConfigVar:
+    """A non-secret setting a skill needs — a path, a mode, a default.
+
+    Deliberately separate from :class:`SkillEnvVar`. Credentials belong in
+    ``~/.agentos/.env`` where they can be masked and audited; a wiki directory
+    or an output format is ordinary configuration and belongs in the TOML
+    config under ``skills.config.<key>``, where it is visible, diffable, and
+    safe to commit alongside the rest of a setup.
+
+    Declared as::
+
+        metadata:
+          agentos:
+            config:
+              - key: wiki.path
+                description: Path to the knowledge base directory
+                default: "~/wiki"
+    """
+
+    key: str
+    description: str = ""
+    default: Any = None
+    prompt: str = ""
+
+    @classmethod
+    def coerce(cls, raw: Any) -> SkillConfigVar | None:
+        """Return a :class:`SkillConfigVar` from a mapping, or ``None``.
+
+        An entry without a key or a description is skipped rather than
+        raising — a malformed manifest should cost its own setting, not the
+        whole skill.
+        """
+        if isinstance(raw, cls):
+            return raw
+        if not isinstance(raw, dict):
+            return None
+        key = str(raw.get("key", "")).strip()
+        description = str(raw.get("description", "") or "").strip()
+        if not key or not description:
+            return None
+        prompt = str(raw.get("prompt", "") or "").strip()
+        return cls(
+            key=key,
+            description=description,
+            default=raw.get("default"),
+            prompt=prompt or description,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the JSON-safe form used by the skill cache and RPC payloads."""
+        return {
+            "key": self.key,
+            "description": self.description,
+            "default": self.default,
+            "prompt": self.prompt,
+        }
+
+
+@dataclass
 class SkillRequires:
     """Binary/env/config requirements for a skill."""
 
@@ -134,6 +193,13 @@ class SkillPlatformMeta:
     # Advisory risk metadata. These are manifest fields, not runtime permissions.
     risk_level: str = ""
     capabilities: list[str] = field(default_factory=list)
+    #: Non-secret settings the skill reads from ``skills.config.*``.
+    config_vars: list[SkillConfigVar] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.config_vars = [
+            entry for entry in map(SkillConfigVar.coerce, self.config_vars) if entry is not None
+        ]
 
 
 @dataclass(frozen=True)

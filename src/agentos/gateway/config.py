@@ -144,6 +144,13 @@ class SkillsConfig(BaseSettings):
     filter_rrf_k: int = 60
     filter_embedding_model: str = "BAAI/bge-small-zh-v1.5"
 
+    # Settings that individual skills declare (metadata.agentos.config) and read
+    # by key. Free-form because the keys belong to the skills, not to AgentOS —
+    # validating them here would mean this file had to know about every skill
+    # anyone might install. Credentials do NOT go here: they belong in
+    # ~/.agentos/.env, where they can be masked, gated, and audited.
+    config: dict[str, Any] = Field(default_factory=dict)
+
 
 class ToolsConfig(BaseModel):
     """Top-level runtime tool policy configuration."""

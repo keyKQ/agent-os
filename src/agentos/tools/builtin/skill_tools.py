@@ -185,6 +185,29 @@ async def _run_install_argv(argv: list[str]) -> tuple[int, str, str, bool]:
     return proc.returncode or 0, _cap_output(stdout), _cap_output(stderr), False
 
 
+def _skill_config_block(skill: Any) -> str:
+    """Return the skill's configured settings as a trailing block, or ``""``.
+
+    Reads the gateway config the control tools already hold rather than
+    loading it again. Any failure yields an empty string: a missing config
+    block is a smaller problem than a skill that will not open.
+    """
+    try:
+        from agentos.skills.config_vars import render_skill_config_block
+        from agentos.tools.builtin.control import _gateway_config
+
+        if _gateway_config is None:
+            return ""
+        return render_skill_config_block(
+            skill,
+            _gateway_config,
+            config_path=str(getattr(_gateway_config, "config_path", "") or ""),
+        )
+    except Exception:  # pragma: no cover - never block reading a skill
+        logger.debug("skill_view.config_block_failed", exc_info=True)
+        return ""
+
+
 def create_skill_tools(loader: SkillLoader) -> None:
     """Register skill tools (list, view, create, edit, delete) with the global registry."""
     global _loader
@@ -276,7 +299,12 @@ def create_skill_tools(loader: SkillLoader) -> None:
                 return f"File not found in skill '{name}': {file_path}"
             return content
 
-        return skill.content or f"(Skill '{name}' has no body content)"
+        body = skill.content or f"(Skill '{name}' has no body content)"
+        # Append whatever the operator configured for this skill, so the agent
+        # starts from the values in effect rather than asking the user or
+        # going to read the config file itself. Skills that declare no
+        # settings pay nothing for this.
+        return body + _skill_config_block(skill)
 
     @tool(
         name="skill_search_community",
