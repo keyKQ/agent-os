@@ -36,7 +36,7 @@ function row(partial: Partial<EnvVarRow> & { name: string }): EnvVarRow {
 }
 
 const PAYLOAD: EnvListResponse = {
-  envFilePath: '/home/example/.agentos/.env',
+  envFilePath: '~/.agentos/.env',
   setCount: 1,
   totalCount: 4,
   shadowedCount: 0,
