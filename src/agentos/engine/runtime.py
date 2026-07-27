@@ -584,6 +584,33 @@ _MEMORY_REVIEW_PROMPT: Final[str] = (
     "If nothing is worth saving, reply exactly 'Nothing to save.' and stop."
 )
 
+# How many review writes to name in one log line. The point is to show the
+# user what landed, not to reproduce the store.
+_MEMORY_REVIEW_LOG_MAX_ENTRIES: Final[int] = 5
+_MEMORY_REVIEW_LOG_ENTRY_CHARS: Final[int] = 120
+
+
+def _summarize_memory_write(arguments: Any) -> str:
+    """Render one memory tool call as ``target/action: content``.
+
+    Batches collapse to their operation count: naming every op would push a
+    single log line past anything readable, and the count is enough to tell a
+    consolidation from a one-off save.
+    """
+    if not isinstance(arguments, dict):
+        return "write"
+    target = str(arguments.get("target") or "memory")
+    operations = arguments.get("operations")
+    if isinstance(operations, list) and operations:
+        actions = ",".join(sorted({str(op.get("action", "?")) for op in operations
+                                   if isinstance(op, dict)}))
+        return f"{target}/batch[{len(operations)} ops: {actions or '?'}]"
+    action = str(arguments.get("action") or "?")
+    content = str(arguments.get("content") or arguments.get("old_text") or "").strip()
+    if len(content) > _MEMORY_REVIEW_LOG_ENTRY_CHARS:
+        content = content[:_MEMORY_REVIEW_LOG_ENTRY_CHARS] + "…"
+    return f"{target}/{action}: {content}" if content else f"{target}/{action}"
+
 
 # Boot-path initialization of the safety baseline. All four submodules
 # are imported here so tool dispatch and ingress guards can consult them
@@ -1992,15 +2019,20 @@ class TurnRunner:
         timeout = float(getattr(nudge_cfg, "timeout_seconds", 90.0))
 
         async def _drive() -> None:
-            # run() is an async generator; the review has no consumer for its
-            # events, so drain it to completion and discard them.
+            # The review writes to memory on the user's behalf with nobody
+            # watching, so its outcome is recorded rather than discarded. A
+            # memory the user cannot see is one they cannot correct, and a
+            # silent review is indistinguishable from one that never ran --
+            # which is exactly how the counter bug below stayed hidden.
             tool_context = ToolContext(
                 agent_id=agent_id,
                 session_key=session_key,
                 workspace_dir=str(self._resolve_memory_source_dir(agent_id)),
                 source_kind="memory_nudge",
             )
-            async for _event in self.run(
+            writes: list[str] = []
+            failures: list[str] = []
+            async for event in self.run(
                 message=_MEMORY_REVIEW_PROMPT,
                 session_key=session_key,
                 tool_context=tool_context,
@@ -2012,7 +2044,26 @@ class TurnRunner:
                 max_iterations=int(getattr(nudge_cfg, "max_iterations", 6)),
                 input_provenance={"kind": "memory_nudge"},
             ):
-                pass
+                if (
+                    getattr(event, "kind", "") != "tool_result"
+                    or getattr(event, "tool_name", "") not in _MEMORY_WRITE_TOOL_NAMES
+                ):
+                    continue
+                summary = _summarize_memory_write(getattr(event, "arguments", None))
+                if getattr(event, "is_error", False):
+                    failures.append(summary)
+                else:
+                    writes.append(summary)
+
+            log.info(
+                "memory_nudge.review_done",
+                agent_id=agent_id,
+                session_key=session_key,
+                wrote=len(writes),
+                failed=len(failures),
+                entries=writes[:_MEMORY_REVIEW_LOG_MAX_ENTRIES],
+                errors=failures[:_MEMORY_REVIEW_LOG_MAX_ENTRIES],
+            )
 
         try:
             await asyncio.wait_for(_drive(), timeout=timeout)

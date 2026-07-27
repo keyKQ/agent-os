@@ -392,3 +392,62 @@ def test_review_prompt_offers_an_explicit_way_to_decline():
 
     assert "Nothing to save." in _MEMORY_REVIEW_PROMPT
     assert "memory tool" in _MEMORY_REVIEW_PROMPT
+
+
+# -- the review reports what it wrote --------------------------------------
+
+
+def test_review_records_its_writes_instead_of_discarding_them():
+    """A silent review is indistinguishable from one that never ran.
+
+    That is not hypothetical: the counter bug above went unnoticed precisely
+    because the review's outcome was drained and thrown away.
+    """
+    import inspect
+
+    src = inspect.getsource(TurnRunner._run_memory_nudge_review)
+    assert "memory_nudge.review_done" in src
+    assert "_MEMORY_WRITE_TOOL_NAMES" in src
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"target": "user", "action": "add", "content": "Prefers Go"}, "user/add: Prefers Go"),
+        ({"action": "add", "content": "no target"}, "memory/add: no target"),
+        ({"target": "memory", "action": "remove", "old_text": "stale"}, "memory/remove: stale"),
+        ({"target": "memory", "action": "add"}, "memory/add"),
+        (None, "write"),
+    ],
+)
+def test_write_summary_renders_target_action_and_content(arguments, expected):
+    from agentos.engine.runtime import _summarize_memory_write
+
+    assert _summarize_memory_write(arguments) == expected
+
+
+def test_write_summary_collapses_a_batch_to_its_operation_count():
+    """Naming every op would push one log line past anything readable."""
+    from agentos.engine.runtime import _summarize_memory_write
+
+    summary = _summarize_memory_write(
+        {
+            "target": "memory",
+            "operations": [
+                {"action": "remove", "old_text": "a"},
+                {"action": "remove", "old_text": "b"},
+                {"action": "add", "content": "merged"},
+            ],
+        }
+    )
+
+    assert summary == "memory/batch[3 ops: add,remove]"
+
+
+def test_write_summary_truncates_a_long_entry():
+    from agentos.engine.runtime import _summarize_memory_write
+
+    summary = _summarize_memory_write({"action": "add", "content": "x" * 400})
+
+    assert summary.endswith("…")
+    assert len(summary) < 200
