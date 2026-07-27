@@ -67,6 +67,39 @@ whenever the turn already used the `memory` tool, and this agent saves
 unprompted on nearly every turn. The review path is effectively dormant while
 the model is diligent, which means it is largely untested in practice.
 
+## After the fixes
+
+Same conditions, same corpora, same matcher, re-run against the three
+changes that followed from the numbers above.
+
+| | explicit | incidental |
+| --- | --- | --- |
+| capture | 92% → **96%** | 100% → **100%** |
+| recall | 84% → **92%** | 95% → **95%** |
+| noise per trial | 0.2 → **0.2** | 0.6 → **0.0** |
+| nudge reviews | 0 → **7** | 0 → **0** |
+
+**Fabrication is gone.** The incidental corpus wrote no invented profile
+entry in any trial, down from 3 of 5. Capture and recall held.
+
+**The review runs.** Seven reviews across five explicit trials, up from zero,
+each reporting what it wrote via `memory_nudge.review_done`.
+
+Two things this table does not show, both worth knowing:
+
+The incidental corpus still reports zero reviews, and that is the honest limit
+of the change rather than a measurement artifact. A self-directed write now
+holds the counter instead of clearing it, so a review is delayed rather than
+cancelled — but every turn in that corpus carries save-worthy content, so the
+agent saves on all of them and the counter never advances. An agent that saves
+on literally every turn still never gets a consolidation pass. Bounding the
+hold (force a review after, say, `2 × interval` held turns) would close it.
+
+The explicit corpus's residual 0.2 noise is the same matcher artifact called
+out above: the agent wrote `Deployments happen on Fridays only; owns the
+release checklist.`, which is correct, but the ownership matcher does not list
+`owns`.
+
 ## What this does not cover
 
 The numbers contradict the impression that memory "works poorly", so the felt
