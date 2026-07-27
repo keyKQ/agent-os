@@ -29,7 +29,7 @@ import {
   filterRegistry,
   filterSkills,
   firstUpdateResult,
-  groupSkillsByLayer,
+  groupSkills,
   initials,
   installAction,
   installSource,
@@ -38,13 +38,13 @@ import {
   layerLabel,
   registryEmptyMessage,
   registryKey,
-  robinhoodEmptyMessage,
-  robinhoodSkills,
+  partnerEmptyMessage,
   safeUrl,
   skillDotClass,
   skillDotTitle,
   skillStats,
   skillStatus,
+  skillsByPublisher,
   stillMissingCount,
   type DepsInstallResult,
   type RawSkill,
@@ -545,8 +545,8 @@ export function SkillsPage() {
   const allSkills = skillsQuery.data ?? []
   const stats = skillStats(allSkills)
   const filtered = filterSkills(allSkills, filterText, statusFilter)
-  const groups = groupSkillsByLayer(filtered)
-  const rhSkills = robinhoodSkills(allSkills)
+  const groups = groupSkills(filtered)
+  const rhSkills = skillsByPublisher(allSkills, 'robinhood')
 
   const runInstall = (item: RegistryItem, force: boolean) =>
     installMutation.mutate({
@@ -948,7 +948,7 @@ function InstalledPanel({
 }: {
   loading: boolean
   error: string
-  groups: ReturnType<typeof groupSkillsByLayer>
+  groups: ReturnType<typeof groupSkills>
   empty: boolean
   emptyMessage: string
   onOpen: (name: string) => void
@@ -974,12 +974,12 @@ function InstalledPanel({
       className="sk-panel"
     >
       {groups.map((g) => (
-        <details key={g.layer} className="sk-group" open>
+        <details key={g.key} className="sk-group" open>
           <summary className="sk-group__head">
             <ChevronDownIcon className="sk-group__caret" aria-hidden="true" />
             <span className="sk-group__label">{g.label}</span>
             <span className="sk-group__count">{g.skills.length}</span>
-            <span className="sk-group__meta">{layerHelp(g.layer)}</span>
+            <span className="sk-group__meta">{g.help}</span>
           </summary>
           <div className="sk-grid">
             <AnimatePresence initial={false}>
@@ -1119,7 +1119,9 @@ function RobinhoodPanel({
         ) : loading ? (
           <SkillsSkeleton label="Loading Robinhood skills" />
         ) : filtered.length === 0 ? (
-          <div className="sk-registry__hint">{robinhoodEmptyMessage(query, statusFilter)}</div>
+          <div className="sk-registry__hint">
+            {partnerEmptyMessage('Robinhood', query, statusFilter)}
+          </div>
         ) : (
           <div className="sk-grid sk-grid--registry">
             <AnimatePresence initial={false}>

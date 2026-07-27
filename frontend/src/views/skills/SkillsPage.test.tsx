@@ -50,6 +50,7 @@ const READY_MANAGED = {
   name: 'trader',
   description: 'Trades things',
   layer: 'managed',
+  acquisition: { kind: 'hub', source_id: 'clawhub', removable: true, updatable: true },
   status: 'ready',
   emoji: '📈',
 }
@@ -57,6 +58,7 @@ const NEEDS_BUNDLED = {
   name: 'weather',
   description: 'Weather lookups',
   layer: 'bundled',
+  acquisition: { kind: 'shipped' },
   status: 'needs_setup',
   missing_bins: ['curl'],
   install: [{ id: 'brew-curl', kind: 'brew', label: 'Install curl', bins: ['curl'] }],
@@ -109,10 +111,14 @@ const REQ_BUNDLED = {
   },
 }
 
+// Partner identity comes from the server-side publisher allowlist, never from
+// the `robinhood-` name prefix — the client no longer reads the name at all.
 const ROBINHOOD_READY = {
   name: 'robinhood-rwa-addresses',
   description: 'Look up tokenized-stock contract addresses.',
   layer: 'bundled',
+  acquisition: { kind: 'shipped' },
+  publisher: { id: 'robinhood', name: 'Robinhood', url: 'https://robinhood.com', logo: '' },
   status: 'ready',
 }
 
@@ -120,6 +126,8 @@ const ROBINHOOD_UNDECLARED = {
   name: 'robinhood-agentic-trading',
   description: 'Operate Robinhood Agentic Trading through the Robinhood Trading MCP.',
   layer: 'bundled',
+  acquisition: { kind: 'shipped' },
+  publisher: { id: 'robinhood', name: 'Robinhood', url: 'https://robinhood.com', logo: '' },
   status: 'not_declared',
 }
 
@@ -190,16 +198,16 @@ describe('SkillsPage', () => {
     vi.useRealTimers()
   })
 
-  it('calls skills.list after waitForConnection and renders installed cards grouped by layer', async () => {
+  it('calls skills.list after waitForConnection and groups installed cards by provenance', async () => {
     wireRpc()
     renderPage()
     await waitFor(() => expect(mockRpc.call).toHaveBeenCalledWith('skills.list', {}))
     expect(mockRpc.waitForConnection).toHaveBeenCalled()
     await waitFor(() => expect(screen.getByLabelText('Skill trader')).toBeInTheDocument())
     expect(screen.getByLabelText('Skill weather')).toBeInTheDocument()
-    // Layer groups (bundled before managed)
-    expect(screen.getByText('Bundled')).toBeInTheDocument()
-    expect(screen.getByText('Managed')).toBeInTheDocument()
+    // Provenance groups: shipped before hub (SKILL_GROUP_ORDER), not layers.
+    expect(screen.getByText('Shipped with AgentOS')).toBeInTheDocument()
+    expect(screen.getByText('Installed from a hub')).toBeInTheDocument()
   })
 
   it('renders the status metric pills from the payload', async () => {
