@@ -46,6 +46,16 @@ DEPRECATED_MEMORY_FIELDS: frozenset[str] = frozenset(
         # existing agentos.toml carrying [memory.dream] would fail validation
         # at boot without this. The whole sub-table is dropped and warned about.
         "memory.dream",
+        # Session flush was removed; MemoryConfig forbids extras, so an
+        # existing agentos.toml carrying these would fail validation at boot.
+        "memory.flush_timeout_seconds",
+        "memory.flush_background_timeout_seconds",
+        "memory.flush_backoff_initial_seconds",
+        "memory.flush_backoff_max_seconds",
+        "memory.flush_archive_max_bytes",
+        "memory.repair_enabled",
+        "memory.repair_interval_seconds",
+        "memory.repair_max_items_per_tick",
     }
 )
 

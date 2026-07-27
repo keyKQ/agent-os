@@ -251,15 +251,11 @@ def _cfg(
     budget: int = 20,
     *,
     flush_enabled: bool = False,
-    flush_timeout_seconds: float = 5.0,
-    flush_background_timeout_seconds: float = 60.0,
     flush_compaction_requires_safe_receipt: bool = False,
     flush_compaction_safety_mode: str | None = None,
 ) -> GatewayConfig:
     memory: dict[str, object] = {
         "flush_enabled": flush_enabled,
-        "flush_timeout_seconds": flush_timeout_seconds,
-        "flush_background_timeout_seconds": flush_background_timeout_seconds,
         "flush_compaction_requires_safe_receipt": (flush_compaction_requires_safe_receipt),
     }
     if flush_compaction_safety_mode is not None:
@@ -1008,8 +1004,6 @@ async def test_auto_summarize_compacts_while_slow_flush_runs_in_background() -> 
         ContextOverflowPolicy.AUTO_SUMMARIZE,
         budget=10,
         flush_enabled=True,
-        flush_timeout_seconds=0.001,
-        flush_background_timeout_seconds=42.0,
     )
     sm = _FakeSessionManager(_history(6, 40))
     flush_started = asyncio.Event()
@@ -1046,7 +1040,9 @@ async def test_auto_summarize_compacts_while_slow_flush_runs_in_background() -> 
     assert outcome.reason is None
     assert outcome.refusal is None
     assert sm.compact_calls == [("agent:main:s-slow-flush", 10, None)]
-    assert flush_service.execute.await_args.kwargs["timeout"] == 42.0
+    # The background flush carries the default background timeout; the
+    # per-call overrides went away with the flush config keys.
+    assert flush_service.execute.await_args.kwargs["timeout"] == 120.0
 
     flush_release.set()
     await asyncio.sleep(0)
