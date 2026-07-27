@@ -586,6 +586,11 @@ _MEMORY_REVIEW_PROMPT: Final[str] = (
 
 # How many review writes to name in one log line. The point is to show the
 # user what landed, not to reproduce the store.
+# How many intervals a run of self-directed writes may defer the review before
+# it runs anyway. Without a ceiling, an agent that saves on every turn is never
+# reviewed -- which is the state the nudge was found in.
+_NUDGE_MAX_DEFERRAL_INTERVALS: Final[int] = 2
+
 _MEMORY_REVIEW_LOG_MAX_ENTRIES: Final[int] = 5
 _MEMORY_REVIEW_LOG_ENTRY_CHARS: Final[int] = 120
 
@@ -1934,14 +1939,6 @@ class TurnRunner:
             return False
 
         key = (agent_id, session_key)
-        if self._turn_used_memory_tool(turn_segments):
-            # Hold the counter rather than clearing it. A self-directed write
-            # saves the one fact that was salient this turn; the review re-reads
-            # the whole conversation and consolidates, which is a different job.
-            # Clearing meant a diligent model -- one that saves on most turns --
-            # never reached the interval and the review never ran at all.
-            return False
-
         self._evict_nudge_counters_if_needed()
         interval = int(getattr(nudge_cfg, "interval", 0))
         prior = self._memory_nudge_counters.get(key)
@@ -1950,6 +1947,26 @@ class TurnRunner:
                 interval=interval, prior_user_turns=prior_user_turns
             )
         count = prior + 1
+
+        # Every user turn advances the counter, including one that wrote to
+        # memory itself. A self-directed write saves the fact that was salient
+        # in that turn; the review re-reads the whole conversation and
+        # consolidates, and only the second one prunes and merges.
+        #
+        # A write still defers the review, because running one immediately
+        # after the model curated is mostly wasted. But the deferral is
+        # bounded: clearing the counter outright meant a model that saves on
+        # most turns never reached the interval and was never reviewed at all,
+        # and an unbounded hold has the same end state for a model that saves
+        # on every turn. Past _NUDGE_MAX_DEFERRAL_INTERVALS the review runs
+        # regardless.
+        if (
+            self._turn_used_memory_tool(turn_segments)
+            and count < interval * _NUDGE_MAX_DEFERRAL_INTERVALS
+        ):
+            self._memory_nudge_counters[key] = count
+            return False
+
         if count < interval:
             self._memory_nudge_counters[key] = count
             return False
