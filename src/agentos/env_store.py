@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -231,6 +232,79 @@ def _write_lines(path: Path, lines: list[str]) -> None:
         pass
 
 
+def _apply_to_file(
+    path: Path,
+    updates: Mapping[str, str],
+    removals: Iterable[str] = (),
+    *,
+    enforce_denylist: bool = True,
+) -> set[str]:
+    """Apply *updates* and *removals* to the ``.env`` at *path* in one rewrite.
+
+    Returns the set of keys that already had a definition in the file, which is
+    what callers need to distinguish "created" from "updated"/"removed".
+
+    Existing definitions are replaced where they stand so surrounding comments
+    and ordering survive; duplicates of the same key collapse to one line; new
+    keys are appended in sorted order for a deterministic result.
+    """
+    for key in list(updates) + list(removals):
+        if enforce_denylist:
+            env_policy.assert_writable(key)
+        else:
+            env_policy.assert_valid_name(key)
+    serialized = {
+        key: f"{key}={_quote_value(env_policy.sanitize_value(key, value))}"
+        for key, value in updates.items()
+    }
+    drop = set(removals)
+
+    lines = _read_lines(path)
+    seen: set[str] = set()
+    kept: list[str] = []
+    for line in lines:
+        matched = next(
+            (key for key in (*serialized, *drop) if _line_defines_key(line, key)),
+            None,
+        )
+        if matched is None:
+            kept.append(line)
+            continue
+        already_seen = matched in seen
+        seen.add(matched)
+        if matched in drop or already_seen:
+            continue
+        kept.append(serialized[matched])
+
+    for key in sorted(set(serialized) - seen):
+        kept.append(serialized[key])
+
+    if lines != kept:
+        _write_lines(path, kept)
+    return seen
+
+
+def write_env_file_values(
+    path: Path,
+    values: Mapping[str, str],
+    *,
+    enforce_denylist: bool = True,
+) -> None:
+    """Write *values* into the ``.env`` at an arbitrary *path*.
+
+    For callers that target a file other than the running AgentOS home — the
+    OpenClaw and Hermes migrations, which write into the home they are building.
+    Ordinary surfaces want :func:`set_env_var` instead.
+
+    ``enforce_denylist=False`` exists for those migrations alone. Importing an
+    operator's own prior configuration is equivalent to them editing the file by
+    hand, and refusing e.g. their command allowlist would silently drop settings
+    they already had. Name and value validation still applies — that guards file
+    integrity, not privilege.
+    """
+    _apply_to_file(path, values, enforce_denylist=enforce_denylist)
+
+
 def set_env_var(key: str, value: str, *, apply_live: bool = True) -> EnvEntry:
     """Write ``key=value`` to the AgentOS ``.env`` and return the resulting state.
 
@@ -243,42 +317,21 @@ def set_env_var(key: str, value: str, *, apply_live: bool = True) -> EnvEntry:
     check. Components that read a credential once at boot (provider clients)
     still need a restart; callers decide how to surface that.
     """
-    env_policy.assert_writable(key)
-    clean = env_policy.sanitize_value(key, value)
-
-    path = env_file_path()
-    lines = _read_lines(path)
-    serialized = f"{key}={_quote_value(clean)}"
-
-    replaced = False
-    kept: list[str] = []
-    for line in lines:
-        if _line_defines_key(line, key):
-            # Collapse duplicates: the first definition becomes the new value,
-            # any later ones are dropped so the file has exactly one.
-            if not replaced:
-                kept.append(serialized)
-                replaced = True
-            continue
-        kept.append(line)
-    if not replaced:
-        kept.append(serialized)
-
-    _write_lines(path, kept)
-
+    existed = _apply_to_file(env_file_path(), {key: value})
     if apply_live:
-        os.environ[key] = clean
-
-    log.info("env.set", key=key, applied_live=apply_live, created=not replaced)
+        os.environ[key] = env_policy.sanitize_value(key, value)
+    log.info("env.set", key=key, applied_live=apply_live, created=key not in existed)
     return resolve_entry(key)
 
 
-def set_env_vars(mapping: dict[str, str], *, apply_live: bool = True) -> list[EnvEntry]:
-    """Write several variables, returning one :class:`EnvEntry` per key.
-
-    Applied in sorted order so a batch write produces a deterministic file.
-    """
-    return [set_env_var(k, mapping[k], apply_live=apply_live) for k in sorted(mapping)]
+def set_env_vars(mapping: Mapping[str, str], *, apply_live: bool = True) -> list[EnvEntry]:
+    """Write several variables in one rewrite, returning one entry per key."""
+    _apply_to_file(env_file_path(), mapping)
+    if apply_live:
+        for key, value in mapping.items():
+            os.environ[key] = env_policy.sanitize_value(key, value)
+    log.info("env.set_many", count=len(mapping), applied_live=apply_live)
+    return [resolve_entry(key) for key in sorted(mapping)]
 
 
 def unset_env_var(key: str, *, apply_live: bool = True) -> bool:
@@ -290,17 +343,9 @@ def unset_env_var(key: str, *, apply_live: bool = True) -> bool:
     but returns on the next start — :attr:`EnvEntry.source` is what tells the
     operator that is going to happen.
     """
-    env_policy.assert_writable(key)
-    path = env_file_path()
-    lines = _read_lines(path)
-    kept = [line for line in lines if not _line_defines_key(line, key)]
-    removed = len(kept) != len(lines)
-
-    if removed:
-        _write_lines(path, kept)
+    removed = key in _apply_to_file(env_file_path(), {}, [key])
     if apply_live:
         os.environ.pop(key, None)
-
     log.info("env.unset", key=key, removed=removed, applied_live=apply_live)
     return removed
 
