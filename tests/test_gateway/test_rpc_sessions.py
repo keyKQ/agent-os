@@ -288,7 +288,7 @@ class SlowCompactionSessionManager(FakeSessionManager):
 def make_ctx(session_manager=None, **kwargs) -> RpcContext:
     defaults = {
         "conn_id": "test-conn",
-        "config": GatewayConfig(memory={"flush_enabled": False}),
+        "config": GatewayConfig(),
     }
     defaults.update(kwargs)
     ctx = RpcContext(**defaults)
@@ -440,7 +440,7 @@ def _exact_pdf(size: int) -> bytes:
 
 
 def _ctx_config_with_media_root(tmp_path) -> GatewayConfig:
-    cfg = GatewayConfig(memory={"flush_enabled": False})
+    cfg = GatewayConfig()
     cfg.attachments.media_root = str(tmp_path)
     return cfg
 
@@ -2404,73 +2404,6 @@ class TestSessionsContextCompact:
         ]
 
     @pytest.mark.asyncio
-    async def test_context_compact_missing_flush_service_does_not_block_compaction(
-        self, dispatcher, session
-    ):
-        manager = FakeSessionManager([session])
-        manager.transcript = [SimpleNamespace(content="message to preserve")]
-        ctx = make_ctx(
-            session_manager=manager,
-            config=GatewayConfig(memory={"flush_enabled": True}),
-        )
-
-        res = await dispatcher.dispatch(
-            "r1", "sessions.contextCompact", {"key": session.session_key}, ctx
-        )
-
-        assert res.ok is True
-        assert len(manager.compact_calls) == 1
-        assert manager.compact_calls[0][:2] == (session.session_key, 100000)
-
-    @pytest.mark.asyncio
-    async def test_context_compact_protect_mode_reports_degraded_forensic(
-        self, dispatcher, session
-    ):
-        manager = FakeSessionManager([session])
-        manager.transcript = [SimpleNamespace(content="message to preserve")]
-        ctx = make_ctx(
-            session_manager=manager,
-            config=GatewayConfig(memory={"flush_enabled": True}),
-        )
-
-        res = await dispatcher.dispatch(
-            "r1", "sessions.contextCompact", {"key": session.session_key}, ctx
-        )
-
-        assert res.ok is True
-        assert len(manager.compact_calls) == 1
-        assert manager.compact_calls[0][:2] == (session.session_key, 100000)
-        assert manager.compact_kwargs[0]["flush_receipt_status"] == "degraded_forensic"
-        assert res.payload["flush_receipt_status"] == "degraded_forensic"
-
-    @pytest.mark.asyncio
-    async def test_context_compact_block_mode_reports_unsafe_and_still_compacts(
-        self, dispatcher, session
-    ):
-        manager = FakeSessionManager([session])
-        manager.transcript = [SimpleNamespace(id=1, content="message to preserve")]
-        manager._storage.memory_durable_receipts.append(
-            _checkpoint_receipt(session, turn_id="cmp-compact", entries=manager.transcript)
-        )
-        ctx = make_ctx(
-            session_manager=manager,
-            config=GatewayConfig(
-                memory={
-                    "flush_enabled": True,
-                    "flush_compaction_safety_mode": "block",
-                }
-            ),
-        )
-
-        res = await dispatcher.dispatch(
-            "r1", "sessions.contextCompact", {"key": session.session_key}, ctx
-        )
-
-        assert res.ok is True
-        assert res.payload["flush_receipt_status"] == "unsafe"
-        assert manager.compact_calls[0][:2] == (session.session_key, 100000)
-
-    @pytest.mark.asyncio
     async def test_context_compact_allowed_for_control_connection(self, dispatcher, session):
         ctx = make_ctx(
             session_manager=FakeSessionManager([session]),
@@ -2487,7 +2420,7 @@ class TestSessionsContextCompact:
         )
 
     @pytest.mark.asyncio
-    async def test_context_compact_passes_provider_config_without_flush_receipt(self, dispatcher):
+    async def test_context_compact_passes_provider_config(self, dispatcher):
         session = FakeSession(session_key="agent:main:abc123", model="session/model")
         manager = FakeSessionManager([session])
         selector = _FakeProviderSelector()

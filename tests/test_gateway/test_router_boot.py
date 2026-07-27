@@ -217,7 +217,6 @@ async def test_start_gateway_server_shares_diagnostics_state_between_app_and_tur
             model_catalog=None,
             memory_retrievers={},
             turn_capture_services={},
-            flush_service=None,
             cron_scheduler=None,
             task_runtime=None,
             agent_registry=None,
@@ -300,7 +299,6 @@ async def test_start_gateway_server_creates_default_subscription_manager(
             model_catalog=None,
             memory_retrievers={},
             turn_capture_services={},
-            flush_service=None,
             cron_scheduler=None,
             task_runtime=None,
             agent_registry=None,
@@ -390,7 +388,6 @@ async def test_start_gateway_server_schedules_router_preload_after_channels(
             model_catalog=None,
             memory_retrievers={},
             turn_capture_services={},
-            flush_service=None,
             cron_scheduler=None,
             task_runtime=None,
             agent_registry=None,
@@ -486,7 +483,6 @@ def test_start_gateway_server_passes_tls_files_to_uvicorn(
             model_catalog=None,
             memory_retrievers={},
             turn_capture_services={},
-            flush_service=None,
             cron_scheduler=None,
             task_runtime=None,
             agent_registry=None,
@@ -589,7 +585,6 @@ async def test_start_gateway_server_wires_cron_failure_dispatcher(
             model_catalog=None,
             memory_retrievers={},
             turn_capture_services={},
-            flush_service=None,
             cron_scheduler=cron_sched,
             task_runtime=None,
             agent_registry=None,
@@ -667,7 +662,6 @@ async def test_build_services_registers_session_search_tool(
         control_ui={"enabled": False},
         channels={"channels": []},
         mcp={"enabled": False},
-        memory={"flush_enabled": False},
     )
 
     services = await build_services(

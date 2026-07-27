@@ -44,10 +44,7 @@ from agentos.session.compaction_lifecycle import (
     compaction_lifecycle_payload,
     compaction_result_payload,
     durable_receipt_allows_destructive_compaction,
-    flush_receipt_status_for_compaction,
-    flush_receipt_to_dict,
     new_compaction_id,
-    pre_compaction_flush_enabled,
 )
 from agentos.session.keys import canonicalize_session_key, normalize_agent_id, parse_agent_id
 from agentos.session.terminal_reply import build_terminal_reply, sanitize_agent_error
@@ -1711,21 +1708,11 @@ async def _handle_sessions_reset(params: dict | None, ctx: RpcContext) -> dict[s
                 transcript=transcript,
                 new_session_id=updated.session_id,
             )
-            receipt = {
-                "mode": "skipped",
-                "flushed_paths": [],
-                "slug": None,
-                "message_count": 0,
-                "duration_ms": 0,
-                "raw_reason": None,
-                "error": None,
-            }
             return _reset_response(
                 key,
                 rotated,
                 previous_session_id,
                 updated.session_id,
-                receipt,
                 new_epoch,
             )
 
@@ -1783,7 +1770,6 @@ def _reset_response(
     rotated: bool,
     previous_session_id: str,
     session_id: str,
-    receipt: Any,
     epoch: int = 0,
 ) -> dict[str, Any]:
     return {
@@ -1793,7 +1779,6 @@ def _reset_response(
         "previous_session_id": previous_session_id,
         "session_id": session_id,
         "epoch": epoch,
-        "flush_receipt": flush_receipt_to_dict(receipt),
     }
 
 
@@ -1871,8 +1856,8 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
         )
 
     async def _run_locked() -> dict[str, Any]:
-        receipt = None
-        flush_receipt_status: str | None = None
+        # No flush runs any more, so compaction never waits on a receipt.
+        flush_receipt_status = "not_required"
         compaction_id = new_compaction_id()
         storage = get_session_storage(ctx.session_manager)
         session = None
@@ -1924,29 +1909,7 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
             status="started",
             **compaction_lifecycle_payload(compaction_id, COMPACTION_TRIGGERED_EVENT),
         )
-        transcript = []
-        flush_enabled = pre_compaction_flush_enabled(ctx.config)
         try:
-            if flush_enabled:
-                get_transcript = getattr(ctx.session_manager, "get_transcript", None)
-                if not callable(get_transcript):
-                    log.warning(
-                        "sessions.context_compact.flush_skipped",
-                        key=key,
-                        reason="transcript_reader_unavailable",
-                    )
-                    flush_enabled = False
-                else:
-                    transcript = await get_transcript(key)
-
-            if flush_enabled and transcript:
-                # Session flush was removed; there is no receipt to produce.
-                # The status still runs so compaction reports its policy.
-                flush_receipt_status = flush_receipt_status_for_compaction(
-                    None,
-                    ctx.config,
-                )
-
             compaction_config = build_compaction_config_from_provider(
                 _resolve_compaction_provider(ctx, session),
                 model_override=_effective_compaction_model(session),
@@ -1964,9 +1927,7 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
                 compact_kwargs: dict[str, Any] = {
                     "custom_instructions": custom_instructions,
                 }
-                if flush_receipt_status is not None and _accepts_keyword_arg(
-                    compact_with_result, "flush_receipt_status"
-                ):
+                if _accepts_keyword_arg(compact_with_result, "flush_receipt_status"):
                     compact_kwargs["flush_receipt_status"] = flush_receipt_status
                 result = await compact_with_result(
                     key,
@@ -2053,10 +2014,6 @@ async def _handle_sessions_context_compact(params: dict | None, ctx: RpcContext)
         if not removed_count:
             payload["skip_reason"] = skip_reason or "empty_summary"
             payload["reason"] = payload["skip_reason"]
-        if receipt is not None:
-            payload["flush_receipt"] = flush_receipt_to_dict(receipt)
-        if flush_receipt_status is not None:
-            payload["flush_receipt_status"] = flush_receipt_status
         final_event = (
             COMPACTION_PERSISTED_EVENT if removed_count > 0 else COMPACTION_TRIGGERED_EVENT
         )
@@ -2111,7 +2068,6 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
     lock = get_session_lock(turn_runner, key)
 
     async def _run_locked() -> dict[str, Any]:
-        receipt: dict[str, Any] | None = None
         storage = get_session_storage(ctx.session_manager)
         session = None
         if storage is not None:
@@ -2154,8 +2110,6 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
             "before_count": result["before_count"],
             "after_count": result["after_count"],
         }
-        if receipt is not None:
-            payload["flush_receipt"] = flush_receipt_to_dict(receipt)
         return payload
 
     if lock is None:

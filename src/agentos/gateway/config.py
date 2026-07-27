@@ -565,11 +565,6 @@ class MemoryConfig(BaseSettings):
     # when entry_ttl_days = 0.
     ttl_sweep_interval_minutes: float = Field(default=60.0, ge=0.0)
 
-    # Flush (pre-compaction memory save)
-    flush_enabled: bool = False
-    flush_compaction_requires_safe_receipt: bool = False
-    flush_compaction_safety_mode: Literal["protect", "best_effort", "block", "off"] = "protect"
-
     # Per-turn auto capture / recall
     auto_capture_enabled: bool = True
     capture_mode: Literal["turn_pair", "off"] = "turn_pair"
