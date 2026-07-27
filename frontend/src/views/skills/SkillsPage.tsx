@@ -512,10 +512,12 @@ export function SkillsPage() {
   const invalidateRegistry = () => queryClient.invalidateQueries({ queryKey: ['skills.search'] })
 
   // Flip the Installed chip on every cached catalog list before the refetch
-  // lands, so it never lags a network round trip behind the button.
+  // lands, so it never lags a network round trip behind the button. Lists that
+  // hold no data yet are left alone: writing `[]` into a query that is still
+  // in flight would resolve it to a "no results" state until the fetch lands.
   const markCached = (identifier: string, name: string, installed: boolean) =>
     queryClient.setQueriesData<RegistryItem[]>({ queryKey: ['skills.search'] }, (old) =>
-      markInstalled(old ?? [], identifier, name, installed),
+      old ? markInstalled(old, identifier, name, installed) : old,
     )
 
   const setBusy = (key: string, on: boolean) =>

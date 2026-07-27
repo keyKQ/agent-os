@@ -184,6 +184,10 @@ class SkillInstaller:
             LockEntry(
                 source=source_id,
                 identifier=identifier,
+                # The field has existed since the lockfile did and was never
+                # written, so every install reported an empty version — now
+                # that `acquisition.version` is on the wire, that is visible.
+                version=bundle_meta.version if bundle_meta else "",
                 installed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 path=str(install_dir),
                 sha256=sha,

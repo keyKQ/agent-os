@@ -648,12 +648,12 @@ export function safeUrl(url?: string): string {
  * than mutating, but preserves the legacy match semantics.
  *
  * Kept, not deleted: this is the optimistic half of the install/uninstall
- * round trip. It belongs in `installMutation.onSuccess` /
- * `uninstallMutation.onSuccess` in SkillsPage.tsx, applied over the cached
+ * round trip. It is applied from `installMutation.onSuccess` /
+ * `uninstallMutation.onSuccess` in SkillsPage.tsx over the cached
  * `['skills.search', …]` data before the invalidation refetch lands, so the
  * Installed chip flips on the same tick instead of after a network round trip.
- * (The uninstall path must also invalidate `['skills.search']`, which it
- * currently does not — the chip otherwise stays stale after a removal.)
+ * Both paths then invalidate `['skills.search']` so the server's own answer
+ * replaces the optimistic one.
  */
 export function markInstalled(
   list: RegistryItem[],

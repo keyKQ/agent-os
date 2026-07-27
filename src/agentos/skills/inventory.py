@@ -171,11 +171,17 @@ def _derive_publisher(spec: SkillSpec, entry: LockEntry | None) -> SkillPublishe
     the catalog row that installed it, which the lockfile carries forward. Either
     way the declaration is only a selector: the allowlist supplies every displayed
     field, so neither a manifest nor a hub can invent a brand.
+
+    ``entry.source`` is the fallback selector because that is exactly what
+    install time falls back to (``installer._publisher_slug``). Without it every
+    lockfile written before ``publisher_id`` existed — i.e. every partner skill
+    already installed on an upgrading machine — would lose its brand and drop
+    out of the Partners group until it was reinstalled.
     """
     if spec.publisher.id:
         return spec.publisher
-    if entry is not None and entry.publisher_id:
-        return resolve_publisher(entry.publisher_id)
+    if entry is not None:
+        return resolve_publisher(entry.publisher_id or entry.source)
     return SkillPublisher()
 
 

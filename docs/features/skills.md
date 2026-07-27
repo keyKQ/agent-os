@@ -228,9 +228,10 @@ it. Guessing from the layer or from "it says ready" is what makes this hard.
    ```
 
    The gateway also logs `skills_filter.budget_truncated` with the names it
-   dropped and the budget it hit. Truncation sacrifices `bundled` skills before
-   anything you installed, so the symptom is usually shipped skills quietly
-   disappearing while your own survive.
+   dropped and the budget it hit. Truncation goes lowest-precedence layer
+   first — `extra` directories, then `bundled` — so the symptom is usually
+   shipped skills quietly disappearing while what you installed into
+   `managed`, `personal`, `project`, or `workspace` survives.
 
 5. **`not_retrieved`.** Only reachable when `skills.filter_enabled = true`,
    which is off by default. Raise `skills.filter_top_k` or reword the request;

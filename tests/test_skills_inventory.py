@@ -220,6 +220,46 @@ def test_a_hub_cannot_mint_a_brand_either(tmp_path: Path) -> None:
     assert rows[0].publisher == SkillPublisher()
 
 
+def test_a_partner_installed_before_publisher_ids_existed_keeps_its_brand(tmp_path: Path) -> None:
+    """An upgrading machine must not silently lose the Partners grouping.
+
+    Every lockfile written before ``publisher_id`` existed has an empty one, so
+    a Bankr skill installed on the previous release would fall out of Partners
+    and into "Installed from a hub" until it was reinstalled — the exact split
+    heading this issue set out to remove. The source is the same selector
+    install time falls back to, so it resolves to the same allowlisted record.
+    """
+    managed = tmp_path / "managed"
+    install_dir = _write_skill(managed, "legacy-install")
+    lock = _lockfile(
+        tmp_path / "lock.json",
+        "legacy-install",
+        source="bankr",
+        identifier="id",
+        path=str(install_dir),
+    )
+
+    rows = build_skill_inventory(_loader(tmp_path, managed_dir=managed), lockfile_path=lock)
+
+    assert rows[0].publisher == BANKR
+
+
+def test_an_unrecognized_source_still_grants_no_brand(tmp_path: Path) -> None:
+    managed = tmp_path / "managed"
+    install_dir = _write_skill(managed, "community-install")
+    lock = _lockfile(
+        tmp_path / "lock.json",
+        "community-install",
+        source="clawhub",
+        identifier="id",
+        path=str(install_dir),
+    )
+
+    rows = build_skill_inventory(_loader(tmp_path, managed_dir=managed), lockfile_path=lock)
+
+    assert rows[0].publisher == SkillPublisher()
+
+
 def test_an_installed_skill_cannot_rebrand_itself_over_the_lockfile(tmp_path: Path) -> None:
     """The catalog row that installed it is the trusted source, not its own text."""
 
@@ -341,6 +381,23 @@ async def test_install_falls_back_to_the_source_when_no_provider_is_declared(
     entry = Lockfile.load(tmp_path / "lock.json").get("demo")
     assert entry is not None
     assert entry.publisher_id == "bankr"
+
+
+@pytest.mark.asyncio
+async def test_install_records_the_version_the_row_advertises(tmp_path: Path) -> None:
+    """``acquisition.version`` is on the wire, so it has to be written."""
+    meta = SkillMeta(name="demo", source_id="clawhub", version="2.1.0")
+    await _stub_installer(tmp_path, meta).install("demo", "clawhub")
+
+    entry = Lockfile.load(tmp_path / "lock.json").get("demo")
+    assert entry is not None
+    assert entry.version == "2.1.0"
+
+    rows = build_skill_inventory(
+        _loader(tmp_path, managed_dir=tmp_path / "managed"),
+        lockfile_path=tmp_path / "lock.json",
+    )
+    assert rows[0].acquisition.version == "2.1.0"
 
 
 @pytest.mark.asyncio

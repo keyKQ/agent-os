@@ -370,9 +370,10 @@ Full reference: `docs/http-api.md` (https://useagentos.dev/docs/http-api).
   - `prompt_budget` → the skills block is full. Raise
     `agentos config set skills.max_skills_prompt_chars <n>` (default 24000)
     and restart the gateway. The gateway also logs
-    `skills_filter.budget_truncated` with the dropped names. Truncation
-    sacrifices `bundled` skills first, so this shows up as shipped skills
-    disappearing while installed ones survive.
+    `skills_filter.budget_truncated` with the dropped names. Truncation goes
+    lowest-precedence layer first (`extra`, then `bundled`), so this shows up
+    as shipped skills disappearing while `managed`/`personal`/`project`/
+    `workspace` ones survive.
   - `not_retrieved` → only possible with `skills.filter_enabled = true`
     (off by default); raise `filter_top_k` or reword the request.
   - `tool_gate` / `fallback_superseded` → about the session's tool surface,

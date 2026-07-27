@@ -130,8 +130,9 @@ max_skills_prompt_chars = 24000
 
 The budget is spent in three stages. Under it, each skill is listed with its
 description. Over it, the block falls back to names only. Over it even then,
-skills are dropped, lowest-precedence layer first, so `bundled` skills are
-sacrificed before anything you installed. A drop is logged as
+skills are dropped, lowest-precedence layer first — `extra` (the directories
+you listed in `skills.extra_dirs`), then `bundled`, and only then `managed`,
+`personal`, `project`, `workspace`. A drop is logged as
 `skills_filter.budget_truncated` with the names, and the affected skills report
 a `prompt_budget` reason on the Skills screen.
 

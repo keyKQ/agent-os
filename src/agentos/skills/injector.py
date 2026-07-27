@@ -11,8 +11,9 @@ from agentos.skills.types import SkillLayer, SkillSpec
 #: what silently forced default installs into name-only mode.
 DEFAULT_MAX_SKILLS_PROMPT_CHARS = 24_000
 
-# Highest precedence first. When the budget forces a cut, shipped skills are
-# sacrificed before the ones an operator installed on purpose.
+# Highest precedence first — the same order that decides a name collision. When
+# the budget forces a cut it lands on the tail, so a skill in a writable skills
+# path outlives a shipped one, and `extra` (read-only config dirs) goes first.
 _LAYER_PRECEDENCE: dict[SkillLayer, int] = {
     SkillLayer.WORKSPACE: 0,
     SkillLayer.PROJECT: 1,

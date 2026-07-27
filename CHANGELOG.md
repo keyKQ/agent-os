@@ -177,7 +177,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   its description.
 - When the skills block does overflow its budget, the skills it drops are no
   longer chosen by load order, which always landed the cut on the skills an
-  operator had installed. Shipped skills are sacrificed first now. The drop is
+  operator had installed. The cut now follows layer precedence, so `extra` and
+  then `bundled` skills go before the ones in a writable skills path. The drop is
   also reported instead of being silent: a `skills_filter.budget_truncated`
   warning naming the dropped skills, and a `prompt_budget` reason on each
   affected skill.
