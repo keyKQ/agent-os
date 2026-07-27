@@ -182,6 +182,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   user's home directory in front of the model on every turn. Removing it, with
   the raised budget above, is what lets a stock install list every skill with
   its description.
+- The guidance above the skills list no longer argues against using it. It
+  opened with "Skills are optional task playbooks" and told the model to load
+  one "only when a listed entry clearly matches" — while the same block, in the
+  compact mode a stock install always fell into, listed nothing but names. A
+  bare name matches nothing clearly, so the instruction could not be followed
+  and the honest reading was "skip it". The two failure modes are not
+  symmetric: loading a skill that turned out to be unnecessary costs a little
+  context, and skipping one that carried the right endpoints, commands, or
+  conventions produces a confidently wrong answer. The block now says so, asks
+  the model to load on partial relevance, and — when only names are listed —
+  states plainly that a name is not enough to rule a skill out.
 - When the skills block does overflow its budget, the skills it drops are no
   longer chosen by load order, which always landed the cut on the skills an
   operator had installed. The cut now follows layer precedence, so `extra` and

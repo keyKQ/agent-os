@@ -74,17 +74,21 @@ def test_compact_mode_takes_over_when_descriptions_do_not_fit() -> None:
 
 
 def test_truncation_sacrifices_the_lowest_precedence_layers_first() -> None:
-    skills = [
-        *(_skill(f"bundled-{i}") for i in range(20)),
-        *(_skill(f"managed-{i}", layer=SkillLayer.MANAGED) for i in range(3)),
+    keep = [
         _skill("workspace-0", layer=SkillLayer.WORKSPACE),
+        *(_skill(f"managed-{i}", layer=SkillLayer.MANAGED) for i in range(3)),
     ]
+    skills = [*(_skill(f"bundled-{i}") for i in range(20)), *keep]
+    injector = SkillInjector()
+    # Budget derived from a real render, not a magic number: the block's guidance
+    # text is prose and does change, and a hardcoded budget silently turns this
+    # into a different test (or a passing one that proves less) when it does.
+    budget = len(injector.inject_compact("", keep))
 
-    prompt, dropped = SkillInjector().inject_skills("", skills, max_chars=600)
+    prompt, dropped = injector.inject_skills("", skills, max_chars=budget)
 
-    assert "<name>workspace-0</name>" in prompt
-    for i in range(3):
-        assert f"<name>managed-{i}</name>" in prompt
+    for spec in keep:
+        assert f"<name>{spec.name}</name>" in prompt
     assert dropped
     assert all(name.startswith("bundled-") for name in dropped)
 
@@ -98,6 +102,9 @@ def test_dropped_names_match_what_is_missing_from_the_prompt() -> None:
     prompt, dropped = SkillInjector().inject_skills("", skills, max_chars=700)
 
     missing = {s.name for s in skills if f"<name>{s.name}</name>" not in prompt}
+    # Without this the assertion below passes vacuously (empty == empty) the day
+    # a wider budget stops truncation firing at all.
+    assert dropped
     assert set(dropped) == missing
     assert len(dropped) == len(set(dropped))
 

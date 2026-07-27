@@ -44,17 +44,25 @@ class SkillInjector:
 
         lines = [
             "\n\n## Skills",
-            "Skills are optional task playbooks. Use them only when a listed entry "
-            "clearly matches the user's current request.",
+            "Skills are task playbooks written for this install. They carry the "
+            "endpoints, commands, conventions, and known pitfalls that a "
+            "general-purpose approach misses.",
             "Skill names are identifiers for `skill_view`; they are not callable tools.",
-            "Review <available_skills> before answering.",
-            'When one entry is clearly relevant, call skill_view(name="<skill_name>") '
-            "to load that skill's instructions, then use only the tools available "
-            "in this session.",
+            "Read <available_skills> before answering. When an entry relates to the "
+            'request — even partially — call skill_view(name="<skill_name>") to load '
+            "its instructions and follow them, then use only the tools available in "
+            "this session.",
+            # Bias deliberately toward loading. The two failure modes are not
+            # symmetric: loading a skill you did not need wastes a little context,
+            # while skipping one that encoded the right steps produces a confidently
+            # wrong answer. A skill also encodes how the user wants the task done
+            # here, which is not something the model can infer from the request.
+            "Lean toward loading. Load a skill even for a task you already know how "
+            "to do — it defines how that task should be done in this install.",
         ]
         lines.extend(
             [
-                "When no entry is relevant, answer without loading a skill.",
+                "Answer without a skill only when no entry relates to the request.",
                 "",
                 "<available_skills>",
             ]
@@ -74,10 +82,16 @@ class SkillInjector:
             return system_prompt
 
         lines = [
-            "\n\nSkills are optional task playbooks for specific request types.",
+            "\n\nSkills are task playbooks written for this install. Only their names "
+            "are listed below — each one's description and instructions live inside it.",
             "Skill names are identifiers for `skill_view`; they are not callable tools.",
-            'Call skill_view(name="<skill_name>") only when the current request '
-            "matches a listed entry.",
+            # Compact mode strips the descriptions, so the model has nothing to judge
+            # relevance against but a name. Telling it to load "only on a clear match"
+            # would then be an instruction it cannot follow: no name clearly matches
+            # anything. Ask it to open plausible entries instead of guessing.
+            "A name alone is not enough to rule a skill out, so call skill_view(name="
+            '"<skill_name>") on any entry that plausibly relates to the request before '
+            "concluding it does not apply.",
         ]
         lines.extend(["", "<available_skills>"])
         for s in visible:
