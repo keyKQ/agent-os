@@ -277,9 +277,11 @@ while `updatable` stays true, because an update re-fetches by identifier.
 **Publisher — whose name is on it.** `agentos skills list --json` reports
 `publisher` as `{id, name, url, logo}`, empty strings when unbranded.
 The id is *allowlisted server-side*: a `SKILL.md` or a hub catalog can only
-select from the recognized set, never describe a publisher of its own. Treat
-a non-empty `publisher.id` as the only signal of a partner skill; never infer
-one from a name or a homepage URL.
+select from the recognized set, never describe a publisher of its own. Only a
+`bundled` manifest may select an id for itself; an installed skill is branded
+by the hub catalog row it came from, so a directory added by hand is always
+unbranded. Treat a non-empty `publisher.id` as the only signal of a partner
+skill; never infer one from a name or a homepage URL.
 
 Provenance (`origin`, `license`, `upstream_url`) is a fourth, independent
 fact — where the text came from and under what licence. A skill can be

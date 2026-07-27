@@ -255,7 +255,9 @@ heading whether they shipped with AgentOS or you installed them from that
 partner's hub. Partner identity comes from an allowlist inside AgentOS: a skill
 manifest can only select a recognized publisher by id, so a third-party skill
 cannot borrow a partner's name, link, or logo by writing them into its own
-frontmatter.
+frontmatter. Only a skill that ships with the release may select an id at all —
+an installed one is branded by the hub catalog row it came from — so dropping a
+directory into a skills path cannot put a card in the Partners group.
 
 The storage layer (`bundled`, `managed`, `personal`, …) is still shown, as a
 chip on each card, because it decides which skill wins a name collision. It no

@@ -220,7 +220,9 @@ def test_a_hub_cannot_mint_a_brand_either(tmp_path: Path) -> None:
     assert rows[0].publisher == SkillPublisher()
 
 
-def test_a_declared_publisher_wins_over_the_lockfile(tmp_path: Path) -> None:
+def test_an_installed_skill_cannot_rebrand_itself_over_the_lockfile(tmp_path: Path) -> None:
+    """The catalog row that installed it is the trusted source, not its own text."""
+
     managed = tmp_path / "managed"
     install_dir = _write_skill(managed, "declared", "publisher:\n  id: robinhood\n")
     lock = _lockfile(
@@ -232,6 +234,19 @@ def test_a_declared_publisher_wins_over_the_lockfile(tmp_path: Path) -> None:
     )
 
     rows = build_skill_inventory(_loader(tmp_path, managed_dir=managed), lockfile_path=lock)
+
+    assert rows[0].spec.publisher == SkillPublisher()
+    assert rows[0].publisher == BANKR
+
+
+def test_a_bundled_skill_keeps_the_brand_it_declares(tmp_path: Path) -> None:
+    bundled = tmp_path / "bundled"
+    _write_skill(bundled, "shipped-partner", "publisher:\n  id: robinhood\n")
+
+    rows = build_skill_inventory(
+        _loader(tmp_path, bundled_dir=bundled),
+        lockfile_path=tmp_path / "lock.json",
+    )
 
     assert rows[0].publisher == ROBINHOOD
 

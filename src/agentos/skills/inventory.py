@@ -163,12 +163,14 @@ def _managed_dir(loader: SkillLoader, config: Any | None) -> Path | None:
 
 
 def _derive_publisher(spec: SkillSpec, entry: LockEntry | None) -> SkillPublisher:
-    """Return the brand for a row: declared in frontmatter, else from the hub.
+    """Return the brand for a row: declared by a bundled manifest, else the hub's.
 
-    A hub install has no ``publisher:`` block of its own — the catalog row that
-    installed it is the only thing that knew the brand — so the lockfile carries
-    the slug forward. Either way it is a selector: the allowlist supplies every
-    displayed field, so neither a manifest nor a hub can invent a brand.
+    Only a bundled ``SKILL.md`` may name its own publisher (see
+    :mod:`agentos.skills.publishers`), so ``spec.publisher`` is already empty for
+    anything an operator or a hub put on disk. A hub install gets its brand from
+    the catalog row that installed it, which the lockfile carries forward. Either
+    way the declaration is only a selector: the allowlist supplies every displayed
+    field, so neither a manifest nor a hub can invent a brand.
     """
     if spec.publisher.id:
         return spec.publisher

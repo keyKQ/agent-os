@@ -65,9 +65,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   partner's hub. Publishers are allowlisted **inside AgentOS**: a `SKILL.md` or
   a hub catalog can only *select* a recognized publisher by id, never describe
   one. A third-party skill that writes a partner's name, URL, and logo into its
-  own frontmatter renders as an ordinary unbranded skill. Publisher is
-  independent of provenance — one says whose name is on a skill, the other
-  where the text came from and under what licence.
+  own frontmatter renders as an ordinary unbranded skill. Selecting an id is
+  restricted too: only a skill shipping inside the release may name its own
+  publisher, and an installed one is branded by the hub catalog row it came
+  from, so a directory dropped into a skills path can never appear as a
+  partner. Publisher is independent of provenance — one says whose name is on a
+  skill, the other where the text came from and under what licence.
 - `agentos skills list --json` gained `publisher` and `acquisition`, built by
   the same code the gateway and the Web UI use. It deliberately has no
   `availability` key: that depends on a chat session's tool surface, which a

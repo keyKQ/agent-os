@@ -10,6 +10,7 @@ import structlog
 from agentos.engine.pipeline import TurnContext
 from agentos.skills.availability import gate_skills, plan_injection, retrieval_availability
 from agentos.skills.eligibility import EligibilityContext
+from agentos.skills.injector import DEFAULT_MAX_SKILLS_PROMPT_CHARS
 from agentos.skills.retrieval import HybridRetriever, Strategy
 
 log = structlog.get_logger(__name__)
@@ -96,7 +97,7 @@ async def filter_skills(ctx: TurnContext) -> TurnContext:
 
     skills_cfg = getattr(ctx.config, "skills", None) if ctx.config else None
     filter_enabled = getattr(skills_cfg, "filter_enabled", False) if skills_cfg else False
-    max_chars = getattr(skills_cfg, "max_skills_prompt_chars", 8000)
+    max_chars = getattr(skills_cfg, "max_skills_prompt_chars", DEFAULT_MAX_SKILLS_PROMPT_CHARS)
     injection_mode = getattr(skills_cfg, "injection_mode", "system")
     semantic_message = getattr(ctx, "semantic_message", None)
     if semantic_message is None:

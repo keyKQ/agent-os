@@ -73,9 +73,16 @@ because an update re-fetches by identifier into the current managed directory.
 **Publisher** is allowlisted inside AgentOS. A skill manifest can only *select*
 a recognized publisher by id; it can never *describe* one. A third-party skill
 that writes a partner's name, URL, and logo into its own frontmatter renders as
-an ordinary unbranded skill, because none of those fields are read. This is why
-a partner's skills sit under one heading whether they shipped with AgentOS or
-you installed them from that partner's hub.
+an ordinary unbranded skill, because none of those fields are read.
+
+Selecting an id is also restricted by where the skill lives. Only a `bundled`
+manifest — one that ships inside the release — may name its own publisher; a
+directory you (or anything else) drop into a writable skills path gets no brand
+from its own frontmatter, so a look-alike cannot sit in the Partners group. An
+installed partner skill is branded by the hub catalog row that installed it,
+recorded in the lockfile, not by its own text. This is why a partner's skills
+sit under one heading whether they shipped with AgentOS or you installed them
+from that partner's hub.
 
 **Layer** is only about file location and name-collision precedence (later
 overrides earlier): `extra` (config dirs) → `bundled` (shipped) → `managed`

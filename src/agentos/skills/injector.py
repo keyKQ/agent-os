@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from agentos.skills.types import SkillLayer, SkillSpec
 
+#: Character budget for the injected skills block when nothing configures one.
+#: Kept here rather than at each call site: the same number is the default for
+#: ``skills.max_skills_prompt_chars`` and the fallback the turn pipeline uses
+#: when a turn arrives without a skills config, and those two drifting apart is
+#: what silently forced default installs into name-only mode.
+DEFAULT_MAX_SKILLS_PROMPT_CHARS = 24_000
+
 # Highest precedence first. When the budget forces a cut, shipped skills are
 # sacrificed before the ones an operator installed on purpose.
 _LAYER_PRECEDENCE: dict[SkillLayer, int] = {
@@ -83,7 +90,7 @@ class SkillInjector:
         self,
         system_prompt: str,
         skills: list[SkillSpec],
-        max_chars: int = 30_000,
+        max_chars: int = DEFAULT_MAX_SKILLS_PROMPT_CHARS,
     ) -> tuple[str, list[str]]:
         """Auto-select full/compact mode based on token budget.
 

@@ -10,7 +10,7 @@ import structlog
 import yaml
 
 from agentos.paths import default_agentos_home
-from agentos.skills.publishers import resolve_publisher
+from agentos.skills.publishers import resolve_declared_publisher
 from agentos.skills.types import (
     SkillInstallSpec,
     SkillLayer,
@@ -171,14 +171,15 @@ def _resolve_provenance(frontmatter: dict) -> SkillProvenance:
     )
 
 
-def _resolve_skill_publisher(frontmatter: dict) -> SkillPublisher:
+def _resolve_skill_publisher(frontmatter: dict, layer: SkillLayer) -> SkillPublisher:
     """Extract the publisher a top-level ``publisher:`` block selects.
 
-    The frontmatter only picks an id; :func:`resolve_publisher` supplies the
-    displayed fields from the allowlist, so a skill cannot claim a brand that
-    is not its own. No block at all means no publisher.
+    The frontmatter only picks an id; the allowlist supplies the displayed
+    fields, and only a bundled manifest may pick one at all, so a directory
+    dropped into a writable skills path cannot claim a partner's brand. No block
+    at all means no publisher.
     """
-    return resolve_publisher(frontmatter.get("publisher"))
+    return resolve_declared_publisher(frontmatter.get("publisher"), layer)
 
 
 def _snapshot_provenance(raw: object) -> SkillProvenance:
@@ -414,11 +415,12 @@ class SkillLoader:
                     config_vars=raw_meta.get("config_vars", []),
                 )
 
+            layer = SkillLayer(s.get("layer", "bundled"))
             skills.append(
                 SkillSpec(
                     name=s["name"],
                     description=s.get("description", ""),
-                    layer=SkillLayer(s.get("layer", "bundled")),
+                    layer=layer,
                     always=s.get("always", False),
                     triggers=s.get("triggers", []),
                     content=s.get("content", ""),
@@ -431,9 +433,9 @@ class SkillLoader:
                     metadata=meta,
                     provenance=_snapshot_provenance(s.get("provenance")),
                     # Re-resolved rather than trusted: the cache is a writable
-                    # file on disk, so it gets the same allowlist check the
-                    # manifest got.
-                    publisher=resolve_publisher(s.get("publisher")),
+                    # file on disk, so it gets the same allowlist *and* layer
+                    # check the manifest got.
+                    publisher=resolve_declared_publisher(s.get("publisher"), layer),
                     requires_tools=s.get("requires_tools", []),
                     fallback_for_toolsets=s.get("fallback_for_toolsets", []),
                 )
@@ -535,7 +537,7 @@ class SkillLoader:
             # Platform metadata fields
             metadata = _resolve_metadata(frontmatter)
             provenance = _resolve_provenance(frontmatter)
-            publisher = _resolve_skill_publisher(frontmatter)
+            publisher = _resolve_skill_publisher(frontmatter, layer)
             # metadata.always overrides top-level always if set
             if metadata and metadata.always is not None:
                 always = metadata.always

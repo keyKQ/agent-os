@@ -72,19 +72,81 @@ def test_declared_brand_fields_are_ignored_in_favour_of_the_allowlist() -> None:
 
 
 def test_third_party_skill_cannot_load_a_partner_brand_it_wrote_itself(tmp_path: Path) -> None:
-    root = tmp_path / "skills"
+    """A directory dropped into a writable skills path gets no brand at all."""
+
+    managed = tmp_path / "managed"
     _write_skill(
-        root,
+        managed,
         "totally-legit-trading",
         'publisher:\n  id: robinhood\n  name: "Not Robinhood"\n  url: https://example.com\n',
     )
 
-    loader = SkillLoader(bundled_dir=root, snapshot_path=tmp_path / "snapshot.json")
+    loader = SkillLoader(
+        bundled_dir=tmp_path / "bundled",
+        managed_dir=managed,
+        snapshot_path=tmp_path / "snapshot.json",
+    )
     skill = loader.get_by_name("totally-legit-trading")
 
     assert skill is not None
-    assert skill.publisher == ROBINHOOD
+    assert skill.publisher == SkillPublisher()
     assert "example.com" not in (skill.publisher.url + skill.publisher.logo)
+
+
+def test_only_a_bundled_manifest_may_select_its_own_publisher(tmp_path: Path) -> None:
+    """The allowlist stops forged *fields*; the layer stops forged *ids*."""
+
+    bundled = tmp_path / "bundled"
+    managed = tmp_path / "managed"
+    personal = tmp_path / "personal"
+    _write_skill(bundled, "shipped-partner", "publisher:\n  id: robinhood\n")
+    _write_skill(managed, "managed-lookalike", "publisher:\n  id: robinhood\n")
+    _write_skill(personal, "personal-lookalike", "publisher:\n  id: robinhood\n")
+
+    loader = SkillLoader(
+        bundled_dir=bundled,
+        managed_dir=managed,
+        personal_agents_dir=personal,
+        snapshot_path=tmp_path / "snapshot.json",
+    )
+    skills = {s.name: s for s in loader.load_all()}
+
+    assert skills["shipped-partner"].publisher == ROBINHOOD
+    assert skills["managed-lookalike"].publisher == SkillPublisher()
+    assert skills["personal-lookalike"].publisher == SkillPublisher()
+
+
+def test_the_layer_gate_survives_the_snapshot_cache(tmp_path: Path) -> None:
+    """The cache stores the layer, so a restored row gets the same answer."""
+
+    bundled = tmp_path / "bundled"
+    managed = tmp_path / "managed"
+    _write_skill(bundled, "shipped-partner", "publisher:\n  id: robinhood\n")
+    _write_skill(managed, "managed-lookalike", "publisher:\n  id: robinhood\n")
+    snapshot = tmp_path / "snapshot.json"
+
+    def load() -> dict[str, SkillPublisher]:
+        loader = SkillLoader(bundled_dir=bundled, managed_dir=managed, snapshot_path=snapshot)
+        return {s.name: s.publisher for s in loader.load_all()}
+
+    load()
+    SkillLoader(bundled_dir=bundled, managed_dir=managed, snapshot_path=snapshot).save_snapshot()
+
+    # A snapshot written before the layer gate existed still carries the brand.
+    data = json.loads(snapshot.read_text(encoding="utf-8"))
+    for entry in data["skills"]:
+        entry["publisher"] = {
+            "id": "robinhood",
+            "name": "Robinhood",
+            "url": "https://robinhood.com",
+            "logo": "",
+        }
+    snapshot.write_text(json.dumps(data), encoding="utf-8")
+
+    restored = load()
+
+    assert restored["shipped-partner"] == ROBINHOOD
+    assert restored["managed-lookalike"] == SkillPublisher()
 
 
 def test_a_tampered_snapshot_cannot_inject_a_brand(tmp_path: Path) -> None:
