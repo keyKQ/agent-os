@@ -44,6 +44,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   imported credentials world-readable on a typical box. It now writes `0600`,
   like every other `.env` AgentOS creates.
 
+### Upgrade notes
+
+- Two `.env` lines that AgentOS previously ignored now take effect: a
+  bash-style `export KEY=value`, and the first entry in a file saved with a
+  byte-order mark. Both were parsed into unusable keys before (literally
+  `export KEY`, and `\ufeffKEY`), so the variable was not set. If your `.env`
+  has either, expect that variable to start being applied — which is what the
+  line was written to do. Values exported in your shell still win over the
+  file, so nothing that was already working changes.
+- CLI logs now go to stderr instead of stdout. Anything capturing a command's
+  stdout to collect log output needs `2>` instead; in exchange, `--json`
+  output is parseable on an install that has a populated `.env`.
+- The skill snapshot cache is invalidated once on first run, so the first
+  command after upgrading rescans skills from disk.
+
 ### Fixed
 
 - A `.env` value with significant leading or trailing whitespace was written

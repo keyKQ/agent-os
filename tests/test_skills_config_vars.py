@@ -219,3 +219,25 @@ class TestConfigModel:
 
     def test_defaults_to_empty(self) -> None:
         assert GatewayConfig().skills.config == {}
+
+
+class TestUpgradeSafety:
+    def test_an_install_using_no_skill_config_writes_no_new_section(self) -> None:
+        """Upgrading must not change a config file that does not use the feature.
+
+        Every nested config model forbids unknown keys, so an empty
+        ``[skills.config]`` written on upgrade would be rejected by any older
+        AgentOS the operator rolls back to — for a feature they never used.
+        """
+        written = GatewayConfig().to_toml_dict()
+        assert "config" not in (written.get("skills") or {})
+
+    def test_a_configured_value_is_still_written(self) -> None:
+        config = GatewayConfig(skills={"config": {"wiki": {"path": "/srv/wiki"}}})
+        written = config.to_toml_dict()
+        assert written["skills"]["config"] == {"wiki": {"path": "/srv/wiki"}}
+
+    def test_round_trips_through_the_toml_form(self) -> None:
+        config = GatewayConfig(skills={"config": {"wiki": {"path": "/srv/wiki"}}})
+        restored = GatewayConfig(**config.to_toml_dict())
+        assert restored.skills.config == {"wiki": {"path": "/srv/wiki"}}

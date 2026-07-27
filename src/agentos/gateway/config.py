@@ -1951,6 +1951,13 @@ class GatewayConfig(BaseSettings):
         data: dict[str, Any] = self.model_dump(exclude_none=True, exclude_defaults=False)
         if not data.get("agents"):
             data.pop("agents", None)
+        skills = data.get("skills")
+        if isinstance(skills, dict) and not skills.get("config"):
+            # Only skills declare keys here, so an install that uses none should
+            # write a [skills] section identical to the one it had before this
+            # field existed — an empty table would otherwise be rejected by any
+            # older AgentOS the operator rolls back to.
+            skills.pop("config", None)
         llm = data.get("llm")
         if isinstance(llm, dict):
             if not llm.get("api_key_env"):
