@@ -1,9 +1,11 @@
 import './env.css'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence } from 'motion/react'
 import {
   AlertTriangleIcon,
   CheckIcon,
+  ChevronRightIcon,
   EyeIcon,
   LockIcon,
   PlusIcon,
@@ -12,12 +14,15 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
+import { ModalShell } from '@/components/ModalShell'
 import { Button } from '@/components/ui/button'
 import {
   ENV_QUERY_KEY,
   filterVars,
   groupByCategory,
   isShadowed,
+  shortPath,
+  splitGroupRows,
   sourceLabel,
   summarize,
   validateNewName,
@@ -50,6 +55,15 @@ export function EnvPage() {
   const [newName, setNewName] = useState('')
   const [newValue, setNewValue] = useState('')
   const [newError, setNewError] = useState<string | null>(null)
+  // Confirmations use the app's own modal rather than window.confirm: a
+  // native dialog cannot be themed, cannot be reached by a test or a screen
+  // reader on the same terms as the rest of the surface, and blocks the whole
+  // page while it is open.
+  const [confirming, setConfirming] = useState<{ kind: 'reveal' | 'unset'; name: string } | null>(
+    null,
+  )
+  // Categories whose quiet tail the operator has asked to see.
+  const [expandedTails, setExpandedTails] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     document.title = 'Environment - AgentOS Control'
@@ -67,6 +81,14 @@ export function EnvPage() {
     [rows, filter, query],
   )
   const summary = useMemo(() => summarize(listQuery.data), [listQuery.data])
+  function toggleTail(category: string) {
+    setExpandedTails((current) => {
+      const next = new Set(current)
+      if (next.has(category)) next.delete(category)
+      else next.add(category)
+      return next
+    })
+  }
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ENV_QUERY_KEY })
@@ -138,6 +160,20 @@ export function EnvPage() {
     setNewValue('')
   }
 
+  const confirmCopy = confirming
+    ? confirming.kind === 'reveal'
+      ? {
+          title: `Show ${confirming.name}?`,
+          body: 'The real value appears on screen and hides again after 30 seconds.',
+          action: 'Show value',
+        }
+      : {
+          title: `Remove ${confirming.name}?`,
+          body: 'It is deleted from the AgentOS .env and from the running gateway.',
+          action: 'Remove',
+        }
+    : null
+
   if (listQuery.isLoading) {
     return (
       <section className="env-stage" aria-busy="true" aria-label="Loading environment variables">
@@ -172,9 +208,9 @@ export function EnvPage() {
         <div className="env-stage__title-block">
           <div className="t-label">Configuration</div>
           <h1 className="t-display">Environment</h1>
-          <p>
-            {summary.setCount} of {summary.totalCount} variables set ·{' '}
-            <code>{listQuery.data?.envFilePath}</code>
+          <p className="env-stage__subtitle">
+            Credentials and settings the gateway, its providers, and your skills read from the
+            environment.
           </p>
         </div>
         <div className="env-stage__actions">
@@ -193,6 +229,30 @@ export function EnvPage() {
           </Button>
         </div>
       </header>
+
+      <div className="env-meta">
+        <dl className="env-stats">
+          <div className="env-stat">
+            <dt>Set</dt>
+            <dd>
+              {summary.setCount}
+              <span>/{summary.totalCount}</span>
+            </dd>
+          </div>
+          <div className={summary.missingCount ? 'env-stat is-warn' : 'env-stat'}>
+            <dt>Missing</dt>
+            <dd>{summary.missingCount}</dd>
+          </div>
+          <div className={summary.shadowedCount ? 'env-stat is-warn' : 'env-stat'}>
+            <dt>Shadowed</dt>
+            <dd>{summary.shadowedCount}</dd>
+          </div>
+        </dl>
+        <p className="env-meta__path">
+          <span className="t-label">File</span>
+          <code title={listQuery.data?.envFilePath}>{shortPath(listQuery.data?.envFilePath)}</code>
+        </p>
+      </div>
 
       {summary.shadowedCount > 0 ? (
         <div className="env-warning" role="status">
@@ -273,153 +333,196 @@ export function EnvPage() {
       {groups.length === 0 ? (
         <p className="env-empty">No variables match this filter.</p>
       ) : (
-        groups.map((group) => (
-          <section key={group.category} className="env-group" aria-label={group.label}>
-            <header className="env-group__header">
-              <h2>{group.label}</h2>
-              <span>
-                {group.setCount}/{group.rows.length} set
-              </span>
-            </header>
-            <ul className="env-list">
-              {group.rows.map((row) => (
-                <li key={row.name} className="env-row">
-                  <div className="env-row__main">
-                    <div className="env-row__name">
-                      <code>{row.name}</code>
-                      {row.writable ? null : (
-                        <span
-                          className="env-row__lock"
-                          title="Blocked by AgentOS security policy — edit ~/.agentos/.env directly if you genuinely need it."
-                        >
-                          <LockIcon aria-label="Not writable through AgentOS" />
+        groups.map((group) => {
+          const { primary, rest } = splitGroupRows(group)
+          const tailOpen = expandedTails.has(group.category)
+          const visible = tailOpen ? [...primary, ...rest] : primary
+          return (
+            <section key={group.category} className="env-group" aria-label={group.label}>
+              <h2 className="env-group__header">
+                <span className="env-group__label">{group.label}</span>
+                <span className="env-group__count">
+                  {group.setCount}/{group.rows.length} set
+                </span>
+              </h2>
+              <ul className="env-list">
+                {visible.map((row) => (
+                  <li key={row.name} className="env-row">
+                    <div className="env-row__main">
+                      <div className="env-row__name">
+                        <code>{row.name}</code>
+                        {row.writable ? null : (
+                          <span
+                            className="env-row__lock"
+                            title="Blocked by AgentOS security policy — edit ~/.agentos/.env directly if you genuinely need it."
+                          >
+                            <LockIcon aria-label="Not writable through AgentOS" />
+                          </span>
+                        )}
+                        <span className={row.isSet ? 'env-badge is-set' : 'env-badge'}>
+                          {row.isSet ? 'set' : row.missing ? 'missing' : 'unset'}
                         </span>
-                      )}
-                      <span className={row.isSet ? 'env-badge is-set' : 'env-badge'}>
-                        {row.isSet ? 'set' : row.missing ? 'missing' : 'unset'}
-                      </span>
-                      {row.isSet ? (
-                        <span className="env-row__source">{sourceLabel(row.source)}</span>
+                        {row.isSet ? (
+                          <span className="env-row__source">{sourceLabel(row.source)}</span>
+                        ) : null}
+                      </div>
+                      {row.description ? <p className="env-row__desc">{row.description}</p> : null}
+                      {row.owner ? <p className="env-row__owner">Needed by {row.owner}</p> : null}
+                      {isShadowed(row) ? (
+                        <p className="env-row__shadow">
+                          Shadowed by the process environment — changes here take effect only after
+                          the export is removed and the gateway restarts.
+                        </p>
+                      ) : null}
+                      {row.url ? (
+                        <a
+                          className="env-row__link"
+                          href={row.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          Where to get this
+                        </a>
                       ) : null}
                     </div>
-                    {row.description ? <p className="env-row__desc">{row.description}</p> : null}
-                    {row.owner ? <p className="env-row__owner">Needed by {row.owner}</p> : null}
-                    {isShadowed(row) ? (
-                      <p className="env-row__shadow">
-                        Shadowed by the process environment — changes here take effect only after
-                        the export is removed and the gateway restarts.
-                      </p>
-                    ) : null}
-                    {row.url ? (
-                      <a
-                        className="env-row__link"
-                        href={row.url}
-                        target="_blank"
-                        rel="noreferrer noopener"
+
+                    <div className="env-row__value">
+                      {revealed[row.name] ? (
+                        <code className="env-row__revealed">{revealed[row.name]}</code>
+                      ) : (
+                        <code>{row.masked ?? '—'}</code>
+                      )}
+                    </div>
+
+                    <div className="env-row__actions">
+                      {row.writable ? (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={busy === row.name}
+                            onClick={() => {
+                              setEditing(editing === row.name ? null : row.name)
+                              setDraft('')
+                            }}
+                            aria-label={row.isSet ? `Edit ${row.name}` : `Set ${row.name}`}
+                          >
+                            {row.isSet ? 'Edit' : 'Set'}
+                          </Button>
+                          {row.isSet && row.secret ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={busy === row.name}
+                              onClick={() => setConfirming({ kind: 'reveal', name: row.name })}
+                            >
+                              <EyeIcon />
+                              <span className="sr-only">Reveal {row.name}</span>
+                            </Button>
+                          ) : null}
+                          {row.isSet ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              disabled={busy === row.name}
+                              onClick={() => setConfirming({ kind: 'unset', name: row.name })}
+                            >
+                              <Trash2Icon />
+                              <span className="sr-only">Remove {row.name}</span>
+                            </Button>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+
+                    {editing === row.name ? (
+                      <form
+                        className="env-row__form"
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          void save(row.name, draft)
+                        }}
                       >
-                        Where to get this
-                      </a>
-                    ) : null}
-                  </div>
-
-                  <div className="env-row__value">
-                    {revealed[row.name] ? (
-                      <code className="env-row__revealed">{revealed[row.name]}</code>
-                    ) : (
-                      <code>{row.masked ?? '—'}</code>
-                    )}
-                  </div>
-
-                  <div className="env-row__actions">
-                    {row.writable ? (
-                      <>
+                        <input
+                          type={row.secret ? 'password' : 'text'}
+                          value={draft}
+                          onChange={(event) => setDraft(event.target.value)}
+                          aria-label={`Value for ${row.name}`}
+                          autoFocus
+                        />
+                        <Button type="submit" size="sm" disabled={busy === row.name}>
+                          <CheckIcon />
+                          Save
+                        </Button>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          disabled={busy === row.name}
-                          onClick={() => {
-                            setEditing(editing === row.name ? null : row.name)
-                            setDraft('')
-                          }}
+                          onClick={() => setEditing(null)}
                         >
-                          {row.isSet ? 'Edit' : `Set ${row.name}`}
+                          Cancel
                         </Button>
-                        {row.isSet && row.secret ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy === row.name}
-                            onClick={() => {
-                              if (
-                                window.confirm(
-                                  `Show the real value of ${row.name} on screen? It will hide again after 30 seconds.`,
-                                )
-                              ) {
-                                void reveal(row.name)
-                              }
-                            }}
-                          >
-                            <EyeIcon />
-                            <span className="sr-only">Reveal {row.name}</span>
-                          </Button>
-                        ) : null}
-                        {row.isSet ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy === row.name}
-                            onClick={() => {
-                              if (window.confirm(`Remove ${row.name} from the AgentOS .env?`)) {
-                                void remove(row.name)
-                              }
-                            }}
-                          >
-                            <Trash2Icon />
-                            <span className="sr-only">Remove {row.name}</span>
-                          </Button>
-                        ) : null}
-                      </>
+                      </form>
                     ) : null}
-                  </div>
-
-                  {editing === row.name ? (
-                    <form
-                      className="env-row__form"
-                      onSubmit={(event) => {
-                        event.preventDefault()
-                        void save(row.name, draft)
-                      }}
-                    >
-                      <input
-                        type={row.secret ? 'password' : 'text'}
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        aria-label={`Value for ${row.name}`}
-                        autoFocus
-                      />
-                      <Button type="submit" size="sm" disabled={busy === row.name}>
-                        <CheckIcon />
-                        Save
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditing(null)}
-                      >
-                        Cancel
-                      </Button>
-                    </form>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
+                  </li>
+                ))}
+              </ul>
+              {rest.length > 0 ? (
+                <button
+                  type="button"
+                  className="env-group__more"
+                  aria-expanded={tailOpen}
+                  onClick={() => toggleTail(group.category)}
+                >
+                  <ChevronRightIcon
+                    className={tailOpen ? 'env-group__chevron is-open' : 'env-group__chevron'}
+                    aria-hidden="true"
+                  />
+                  {tailOpen ? `Hide ${rest.length} unset` : `Show ${rest.length} unset`}
+                </button>
+              ) : null}
+            </section>
+          )
+        })
       )}
+      {/* AnimatePresence is required, not decorative: ModalShell enters via
+          motion variants, and without a presence context the overlay stays at
+          its `initial` opacity of 0 — mounted, focus-trapping, and invisible.
+          jsdom reports reduced-motion, so unit tests take ModalShell's
+          no-variant branch and cannot catch this. */}
+      <AnimatePresence>
+        {confirming && confirmCopy ? (
+          <ModalShell
+            role="alertdialog"
+            labelledBy="env-confirm-title"
+            onClose={() => setConfirming(null)}
+            overlayClassName="env-modal__overlay"
+            className="env-modal panel"
+          >
+            <h2 id="env-confirm-title">{confirmCopy.title}</h2>
+            <p>{confirmCopy.body}</p>
+            <div className="env-modal__actions">
+              <Button
+                type="button"
+                onClick={() => {
+                  const target = confirming
+                  setConfirming(null)
+                  if (target.kind === 'reveal') void reveal(target.name)
+                  else void remove(target.name)
+                }}
+              >
+                {confirmCopy.action}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setConfirming(null)}>
+                Cancel
+              </Button>
+            </div>
+          </ModalShell>
+        ) : null}
+      </AnimatePresence>
     </section>
   )
 }

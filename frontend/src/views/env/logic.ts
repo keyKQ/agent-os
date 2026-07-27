@@ -125,6 +125,27 @@ export function groupByCategory(rows: EnvVarRow[]): EnvGroup[] {
     }))
 }
 
+/**
+ * Split a group into the rows that want attention and the quiet tail.
+ *
+ * AgentOS declares ~22 LLM provider keys and an install uses one of them. Left
+ * flat, the 21 empty rows bury the handful that are configured or missing, and
+ * the page reads as a wall of "unset". Folding the tail keeps the group — and
+ * its counts — visible while showing only what the operator can act on.
+ *
+ * "Wants attention" is: already set (you may want to rotate or remove it), or
+ * required and missing (something needs it).
+ */
+export function splitGroupRows(group: EnvGroup): { primary: EnvVarRow[]; rest: EnvVarRow[] } {
+  const primary: EnvVarRow[] = []
+  const rest: EnvVarRow[] = []
+  for (const row of group.rows) {
+    if (row.isSet || row.missing) primary.push(row)
+    else rest.push(row)
+  }
+  return { primary, rest }
+}
+
 export interface EnvSummary {
   setCount: number
   totalCount: number
@@ -158,4 +179,21 @@ export function validateNewName(name: string, known: EnvVarRow[]): string | null
     return 'This name cannot be written through AgentOS.'
   }
   return null
+}
+
+/**
+ * Shorten an absolute .env path for display.
+ *
+ * The gateway reports a full path, which on a real install is long enough to
+ * push the rest of the strip off-screen. CSS truncation is the wrong tool
+ * here: ellipsis eats the tail, which is the part that identifies the file,
+ * and the `direction: rtl` trick used to keep the tail visibly relocates the
+ * leading slash. Trimming to the last two segments keeps the identifying part
+ * intact and leaves the full path for the title attribute.
+ */
+export function shortPath(path: string | undefined): string {
+  if (!path) return ''
+  const segments = path.split('/').filter(Boolean)
+  if (segments.length <= 2) return path
+  return `…/${segments.slice(-2).join('/')}`
 }

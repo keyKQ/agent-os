@@ -5,6 +5,8 @@ import {
   isShadowed,
   isValidEnvName,
   sourceLabel,
+  shortPath,
+  splitGroupRows,
   summarize,
   validateNewName,
   type EnvVarRow,
@@ -150,5 +152,45 @@ describe('validateNewName', () => {
 
   it('accepts a valid new name', () => {
     expect(validateNewName('MY_TOKEN', [])).toBeNull()
+  })
+})
+
+describe('splitGroupRows', () => {
+  it('keeps set and required-missing rows visible, folds the quiet tail', () => {
+    // ~22 provider keys are declared and an install uses one; flat, the 21
+    // empty rows bury the ones the operator can act on.
+    const [group] = groupByCategory([
+      row({ name: 'CONFIGURED', category: 'provider', isSet: true }),
+      row({ name: 'NEEDED', category: 'provider', required: true, missing: true }),
+      row({ name: 'IDLE_ONE', category: 'provider' }),
+      row({ name: 'IDLE_TWO', category: 'provider' }),
+    ])
+    const { primary, rest } = splitGroupRows(group!)
+    expect(primary.map((r) => r.name)).toEqual(['CONFIGURED', 'NEEDED'])
+    expect(rest.map((r) => r.name)).toEqual(['IDLE_ONE', 'IDLE_TWO'])
+  })
+
+  it('folds everything when nothing is set or needed', () => {
+    const [group] = groupByCategory([
+      row({ name: 'A', category: 'search' }),
+      row({ name: 'B', category: 'search' }),
+    ])
+    const { primary, rest } = splitGroupRows(group!)
+    expect(primary).toEqual([])
+    expect(rest).toHaveLength(2)
+  })
+})
+
+describe('shortPath', () => {
+  it('keeps the identifying tail and marks the elision', () => {
+    expect(shortPath('/very/long/path/to/state/.env')).toBe('…/state/.env')
+  })
+
+  it('leaves an already-short path alone', () => {
+    expect(shortPath('/tmp/.env')).toBe('/tmp/.env')
+  })
+
+  it('handles an absent path', () => {
+    expect(shortPath(undefined)).toBe('')
   })
 })

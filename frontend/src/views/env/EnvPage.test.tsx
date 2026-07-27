@@ -164,19 +164,21 @@ describe('EnvPage', () => {
     expect(mockRpc.call).not.toHaveBeenCalledWith('env.set', expect.anything())
   })
 
-  it('requires confirmation before revealing a value', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('asks in-app before revealing, and cancelling calls nothing', async () => {
+    // An in-app dialog rather than window.confirm: a native one cannot be
+    // themed, blocks the page, and is unreachable to the same tests and
+    // assistive tech as the rest of the surface.
     renderPage()
     await screen.findByText('OPENAI_API_KEY')
 
     fireEvent.click(screen.getByRole('button', { name: /Reveal OPENAI_API_KEY/ }))
-    expect(confirmSpy).toHaveBeenCalled()
+    expect(await screen.findByRole('alertdialog')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
+
     expect(mockRpc.call).not.toHaveBeenCalledWith('env.reveal', expect.anything())
-    confirmSpy.mockRestore()
   })
 
   it('reveals only after the operator agrees', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
     mockRpc.call.mockImplementation((method: string) => {
       if (method === 'env.list') return Promise.resolve(PAYLOAD)
       if (method === 'env.reveal') return Promise.resolve({ value: SECRET })
@@ -186,8 +188,20 @@ describe('EnvPage', () => {
     await screen.findByText('OPENAI_API_KEY')
 
     fireEvent.click(screen.getByRole('button', { name: /Reveal OPENAI_API_KEY/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Show value/ }))
     expect(await screen.findByText(SECRET)).toBeTruthy()
-    confirmSpy.mockRestore()
+  })
+
+  it('asks in-app before removing a variable', async () => {
+    renderPage()
+    await screen.findByText('OPENAI_API_KEY')
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove OPENAI_API_KEY/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Remove$/ }))
+
+    await waitFor(() => {
+      expect(mockRpc.call).toHaveBeenCalledWith('env.unset', { name: 'OPENAI_API_KEY' })
+    })
   })
 
   it('surfaces a load failure with a retry instead of a blank page', async () => {
@@ -196,5 +210,65 @@ describe('EnvPage', () => {
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(screen.getByText('gateway is down')).toBeTruthy()
     expect(screen.getByRole('button', { name: /Retry/ })).toBeTruthy()
+  })
+
+  it('folds the rows that need nothing, and shows them on demand', async () => {
+    // 22 unset provider rows would otherwise bury the two that need attention.
+    mockRpc.call.mockImplementation((method: string) => {
+      if (method === 'env.list')
+        return Promise.resolve({
+          ...PAYLOAD,
+          vars: [
+            row({ name: 'IDLE_ONE', category: 'search' }),
+            row({ name: 'IDLE_TWO', category: 'search' }),
+            row({ name: 'NEEDED_NOW', category: 'search', required: true, missing: true }),
+          ],
+        })
+      return Promise.resolve({})
+    })
+    renderPage()
+
+    // What needs attention is visible immediately...
+    expect(await screen.findByText('NEEDED_NOW')).toBeTruthy()
+    // ...the quiet tail is folded, but its size is stated.
+    expect(screen.queryByText('IDLE_ONE')).toBeNull()
+
+    const more = screen.getByRole('button', { name: /Show 2 unset/ })
+    fireEvent.click(more)
+    expect(screen.getByText('IDLE_ONE')).toBeTruthy()
+  })
+
+  it('still states the full group counts while the tail is folded', async () => {
+    mockRpc.call.mockImplementation((method: string) => {
+      if (method === 'env.list')
+        return Promise.resolve({
+          ...PAYLOAD,
+          vars: [
+            row({ name: 'SET_ONE', category: 'search', isSet: true }),
+            row({ name: 'IDLE_ONE', category: 'search' }),
+          ],
+        })
+      return Promise.resolve({})
+    })
+    renderPage()
+    await screen.findByText('SET_ONE')
+    expect(screen.getByText('1/2 set')).toBeTruthy()
+  })
+
+  it('states counts outside the title block', async () => {
+    renderPage()
+    await screen.findByText('OPENAI_API_KEY')
+    // The heading says what the page is; the strip says where it stands.
+    // Scoped to the <dl> because "Set" is also a filter and a row action.
+    const terms = screen.getAllByRole('term').map((el) => el.textContent)
+    expect(terms).toEqual(['Set', 'Missing', 'Shadowed'])
+  })
+
+  it('does not repeat the variable name in every button label', async () => {
+    renderPage()
+    await screen.findByText('BASE_RPC_URL')
+    // Visible label is short; the accessible name still carries the variable.
+    const action = screen.getByRole('button', { name: 'Set BASE_RPC_URL' })
+    expect(action.textContent).toBe('Set')
   })
 })
