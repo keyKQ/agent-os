@@ -295,7 +295,11 @@ class SkillLoader:
                         "requires_any_bins": s.metadata.requires.any_bins
                         if s.metadata and s.metadata.requires
                         else [],
-                        "requires_env": s.metadata.requires.env
+                        # Serialized as dicts, not names: the cache has to carry
+                        # the description and source URL a manifest declared, or
+                        # a cache hit would silently downgrade what surfaces can
+                        # tell the operator about a missing variable.
+                        "requires_env": [e.to_dict() for e in s.metadata.requires.env]
                         if s.metadata and s.metadata.requires
                         else [],
                         "install": [

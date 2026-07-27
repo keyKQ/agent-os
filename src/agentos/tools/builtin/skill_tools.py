@@ -222,8 +222,15 @@ def create_skill_tools(loader: SkillLoader) -> None:
                     lines.append(f"      [unavailable] Missing: {', '.join(missing)}")
                 for hint in report.install_hints:
                     lines.append(f"      Install: {hint.command}")
-                for e in report.missing_env:
-                    lines.append(f"      Hint: Set environment variable {e}")
+                for declared in report.missing_env_detail:
+                    # Name what the variable is for and where to get it when
+                    # the manifest says, and point at the tool that can
+                    # actually set it — a hint with no corresponding action
+                    # just hands the work back to the user.
+                    detail = f" — {declared.description}" if declared.description else ""
+                    source = f" (get one at {declared.url})" if declared.url else ""
+                    lines.append(f"      Needs {declared.name}{detail}{source}")
+                    lines.append(f'      Fix: env_set(name="{declared.name}", value=...)')
         return "\n".join(lines)
 
     @tool(
