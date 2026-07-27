@@ -1,0 +1,195 @@
+"""One inventory builder for every "what skills does this install have" surface.
+
+``skills.list``, ``skills.status``, ``skills.get``, the ``skill_list`` tool, and
+``agentos skills list`` each used to assemble their own answer, which is why they
+disagreed: only one of them read the lockfile, so a hub-installed skill looked
+like an ordinary local directory everywhere else. This module derives the whole
+row once — eligibility, acquisition, publisher — and every surface renders the
+same facts.
+
+Nothing here is cached. Acquisition depends on the lockfile, which changes
+without any ``SKILL.md`` mtime changing, so the skill snapshot deliberately does
+not carry it; see :class:`~agentos.skills.types.SkillAcquisition`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from agentos.skills.availability import SkillAvailability, gate_skills
+from agentos.skills.eligibility import (
+    EligibilityContext,
+    EligibilityReport,
+    diagnose_eligibility,
+)
+from agentos.skills.hub.lockfile import LockEntry, Lockfile, default_lockfile_path
+from agentos.skills.loader import SkillLoader
+from agentos.skills.publishers import resolve_publisher
+from agentos.skills.types import (
+    AcquisitionKind,
+    SkillAcquisition,
+    SkillLayer,
+    SkillPublisher,
+    SkillSpec,
+)
+
+__all__ = ["SkillRow", "build_skill_inventory"]
+
+
+@dataclass(frozen=True)
+class SkillRow:
+    """A loaded skill plus everything a surface needs to render it."""
+
+    spec: SkillSpec
+    eligibility: EligibilityReport
+    acquisition: SkillAcquisition
+    publisher: SkillPublisher
+    #: Whether the agent would be offered this skill, from
+    #: :func:`~agentos.skills.availability.gate_skills`. ``None`` when the
+    #: caller supplied no tool set: two of the gates read one, and guessing an
+    #: empty set would report every tool-gated skill as unavailable.
+    availability: SkillAvailability | None = None
+
+
+def build_skill_inventory(
+    loader: SkillLoader,
+    *,
+    config: Any | None = None,
+    lockfile_path: Path | None = None,
+    available_tools: set[str] | None = None,
+) -> list[SkillRow]:
+    """Return one row per loaded skill, in loader precedence order.
+
+    Args:
+        loader: Supplies the skills and the managed directory the acquisition
+            guard checks recorded install paths against.
+        config: Optional gateway config, consulted only for
+            ``skills.managed_dir`` when the loader carries no managed directory.
+        lockfile_path: Override for the shared lockfile; defaults to
+            :func:`~agentos.skills.hub.lockfile.default_lockfile_path`.
+        available_tools: Tool names this session can offer. Supplying it fills
+            :attr:`SkillRow.availability`; omitting it leaves that ``None``,
+            because the tool-gate and fallback gates cannot be answered
+            without one.
+    """
+    skills = loader.load_all()
+    lock_path = lockfile_path if lockfile_path is not None else default_lockfile_path()
+    lockfile = Lockfile.load(lock_path)
+    managed_dir = _managed_dir(loader, config)
+    # One context for the whole sweep — it caches binary lookups across skills —
+    # but built here rather than at import time, so a credential added since the
+    # process started is seen on the next call.
+    elig_ctx = EligibilityContext.auto()
+    # The turn pipeline runs the same gate, so a row and the prompt agree on
+    # which skills the agent is being offered. The budget and retrieval gates
+    # are turn-specific and deliberately not run here.
+    availability = (
+        gate_skills(skills, available_tools, elig_ctx)[1] if available_tools is not None else {}
+    )
+
+    rows: list[SkillRow] = []
+    for spec in skills:
+        entry = lockfile.get(spec.name)
+        rows.append(
+            SkillRow(
+                spec=spec,
+                eligibility=diagnose_eligibility(spec, elig_ctx),
+                acquisition=_derive_acquisition(spec, entry, managed_dir),
+                publisher=_derive_publisher(spec, entry),
+                availability=availability.get(spec.name),
+            )
+        )
+    return rows
+
+
+def _managed_dir(loader: SkillLoader, config: Any | None) -> Path | None:
+    """Return the directory ``skills.uninstall`` would actually delete from."""
+    if loader.managed_dir is not None:
+        return loader.managed_dir
+    configured = getattr(getattr(config, "skills", None), "managed_dir", None)
+    return Path(configured).expanduser() if configured else None
+
+
+def _derive_publisher(spec: SkillSpec, entry: LockEntry | None) -> SkillPublisher:
+    """Return the brand for a row: declared in frontmatter, else from the hub.
+
+    A hub install has no ``publisher:`` block of its own — the catalog row that
+    installed it is the only thing that knew the brand — so the lockfile carries
+    the slug forward. Either way it is a selector: the allowlist supplies every
+    displayed field, so neither a manifest nor a hub can invent a brand.
+    """
+    if spec.publisher.id:
+        return spec.publisher
+    if entry is not None and entry.publisher_id:
+        return resolve_publisher(entry.publisher_id)
+    return SkillPublisher()
+
+
+def _derive_acquisition(
+    spec: SkillSpec,
+    entry: LockEntry | None,
+    managed_dir: Path | None,
+) -> SkillAcquisition:
+    """Classify how a skill got here, and what an operator may do to it.
+
+    The lockfile wins over the layer: a hub install stays a hub install even
+    when an operator has pointed ``skills.managed_dir`` somewhere else and the
+    loader now reads it from a different layer.
+    """
+    if entry is None:
+        shipped = spec.layer == SkillLayer.BUNDLED
+        return SkillAcquisition(kind=AcquisitionKind.SHIPPED if shipped else AcquisitionKind.LOCAL)
+
+    removable, detail = _removability(spec.name, entry, managed_dir)
+    return SkillAcquisition(
+        kind=AcquisitionKind.HUB,
+        source_id=entry.source,
+        identifier=entry.identifier,
+        version=entry.version,
+        installed_at=entry.installed_at,
+        source_trust=entry.source_trust,
+        scan_verdict=entry.scan_verdict,
+        removable=removable,
+        # An update re-fetches by identifier and writes into the *current*
+        # managed dir, so it still works when the recorded path has diverged.
+        updatable=bool(entry.identifier),
+        detail=detail,
+    )
+
+
+def _removability(name: str, entry: LockEntry, managed_dir: Path | None) -> tuple[bool, str]:
+    """Return whether ``skills.uninstall`` can act, and why not when it cannot.
+
+    ``SkillInstaller.uninstall`` deletes ``<managed_dir>/<name>`` and nothing
+    else. The lockfile path, however, is resolved from the state root while the
+    managed directory is config-overridable, so the two can point at different
+    places — and then an Uninstall button removes the lockfile entry while
+    leaving the files on disk. Report the mismatch instead of offering an
+    action that will half-succeed.
+    """
+    if managed_dir is None:
+        return False, "No managed skills directory is configured, so this cannot be uninstalled."
+
+    target = managed_dir / name
+    recorded = Path(entry.path).expanduser() if entry.path else target
+    if not _same_path(recorded, target):
+        return False, (
+            f"Recorded at {recorded}, which is outside the configured managed "
+            f"skills directory ({managed_dir}). Uninstalling would drop the lockfile "
+            "entry without removing those files."
+        )
+    if not target.exists():
+        return False, (
+            f"Nothing left at {target} — the directory was removed outside AgentOS. "
+            "The lockfile entry is stale."
+        )
+    return True, ""
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve() == right.resolve()
+    except OSError:  # pragma: no cover - resolve() only raises on exotic filesystems
+        return False

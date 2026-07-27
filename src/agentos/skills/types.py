@@ -233,6 +233,54 @@ class SkillPublisher:
     logo: str = ""
 
 
+class AcquisitionKind(StrEnum):
+    """How an installed skill came to exist on this machine."""
+
+    #: In-tree, ships with the wheel.
+    SHIPPED = "shipped"
+    #: Fetched by :class:`~agentos.skills.hub.installer.SkillInstaller`; has a
+    #: lockfile entry.
+    HUB = "hub"
+    #: An operator-owned directory.
+    LOCAL = "local"
+
+
+@dataclass(frozen=True)
+class SkillAcquisition:
+    """Where an install came from, as opposed to where its files sit.
+
+    :class:`SkillLayer` answers "which directory did the loader read this from",
+    which is a precedence question. Acquisition answers "did an operator install
+    this, and can they act on it" — the question every Installed-tab affordance
+    actually asks. The two agree for most skills and diverge for the ones that
+    matter: a hub install dropped into a custom managed directory is still a hub
+    install, and a hand-copied directory inside the managed dir is not.
+
+    Deliberately **not** a field on :class:`SkillSpec` and **not** serialized
+    into the skill snapshot: it is derived from the lockfile, which changes
+    without any ``SKILL.md`` mtime changing, so caching it would make the
+    snapshot go stale in a way the manifest check cannot detect.
+    """
+
+    kind: AcquisitionKind = AcquisitionKind.LOCAL
+    #: Hub source that served it — ``clawhub`` | ``bankr`` | ``github`` | ``""``.
+    source_id: str = ""
+    #: Lockfile identifier — the join key back to a catalog row.
+    identifier: str = ""
+    version: str = ""
+    installed_at: str = ""
+    source_trust: str = ""
+    scan_verdict: str = ""
+    #: ``skills.uninstall`` can act on it.
+    removable: bool = False
+    #: ``skills.update`` can act on it.
+    updatable: bool = False
+    #: Human-readable explanation when an affordance is withheld, e.g. the
+    #: recorded install path no longer lives under the configured managed
+    #: directory. Empty when there is nothing to explain.
+    detail: str = ""
+
+
 @dataclass
 class SkillSpec:
     """Parsed skill metadata and content."""
