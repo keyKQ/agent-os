@@ -22,6 +22,7 @@ from agentos.cli.cron_cmd import cron_app  # noqa: E402
 from agentos.cli.diagnostics_cmd import diagnostics_app  # noqa: E402
 from agentos.cli.dist_cmd import app as dist_app  # noqa: E402
 from agentos.cli.doctor_cmd import doctor_command  # noqa: E402
+from agentos.cli.env_cmd import env_app  # noqa: E402
 from agentos.cli.init_cmd import init_command  # noqa: E402
 from agentos.cli.mcp_server_cmd import app as mcp_server_app  # noqa: E402
 from agentos.cli.migrate_cmd import migrate_app  # noqa: E402
@@ -49,6 +50,7 @@ app.add_typer(agents_app, name="agents")
 app.add_typer(config_app, name="config")
 app.add_typer(cost_app, name="cost")
 app.add_typer(diagnostics_app, name="diagnostics")
+app.add_typer(env_app, name="env")
 app.add_typer(cron_app, name="cron")
 app.add_typer(dist_app, name="dist")
 app.add_typer(mcp_server_app, name="mcp-server")

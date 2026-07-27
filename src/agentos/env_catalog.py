@@ -117,7 +117,13 @@ def _provider_specs() -> list[EnvVarSpec]:
                     secret=True,
                     category=category,
                     owner=str(getattr(spec, "provider_id", "") or ""),
-                    required=bool(getattr(spec, "requires_api_key", False)),
+                    # Never required at the catalog level. A provider's
+                    # ``requires_api_key`` means "this provider needs a key if
+                    # you use it", and AgentOS talks to one provider at a time —
+                    # flagging all forty as missing would drown the one that
+                    # actually matters. Whether the *configured* provider has
+                    # its key is what onboarding status already reports.
+                    required=False,
                 )
             )
     return entries

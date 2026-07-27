@@ -12,9 +12,9 @@ import os
 from pathlib import Path
 
 import pytest
-import structlog.testing
 
 from agentos import env_store
+from agentos.gateway import rpc_env
 from agentos.gateway.access import CONTROL_ONLY, ConnectionSurface
 from agentos.gateway.auth import AccessContext
 from agentos.gateway.rpc import RpcContext, get_dispatcher
@@ -201,13 +201,28 @@ class TestReveal:
         assert "Too many reveal requests" in blocked.error.message
 
     @pytest.mark.asyncio
-    async def test_audit_line_records_the_name_and_never_the_value(self) -> None:
-        env_store.set_env_var("OPENAI_API_KEY", SECRET)
-        with structlog.testing.capture_logs() as captured:
-            await call("env.reveal", {"name": "OPENAI_API_KEY"})
+    async def test_audit_line_records_the_name_and_never_the_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Recording against the module's logger rather than structlog's global
+        # capture: whether capture_logs() sees anything depends on how
+        # structlog happens to be configured by whatever ran earlier in the
+        # session, and this assertion is too important to be flaky.
+        emitted: list[tuple[str, dict]] = []
 
-        audit = next(e for e in captured if e.get("event") == "env.revealed")
-        assert audit["key"] == "OPENAI_API_KEY"
+        class Recorder:
+            def info(self, event: str, **kwargs: object) -> None:
+                emitted.append((event, dict(kwargs)))
+
+            def warning(self, event: str, **kwargs: object) -> None:
+                emitted.append((event, dict(kwargs)))
+
+        monkeypatch.setattr(rpc_env, "log", Recorder())
+        env_store.set_env_var("OPENAI_API_KEY", SECRET)
+        await call("env.reveal", {"name": "OPENAI_API_KEY"})
+
+        event, fields = next(e for e in emitted if e[0] == "env.revealed")
+        assert fields["key"] == "OPENAI_API_KEY"
         # The log exists so someone can tell which secrets were read — not to
         # make a second copy of them.
-        assert SECRET not in json.dumps(captured)
+        assert SECRET not in json.dumps(emitted)
