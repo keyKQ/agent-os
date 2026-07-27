@@ -191,3 +191,37 @@ class TestGatewayPreferred:
         # The gateway owns the write; the CLI must not also write the file.
         assert not env_store.env_file_path().exists()
         assert "next time" not in result.output
+
+
+class TestMachineReadableOutput:
+    def test_json_stdout_is_not_polluted_by_startup_logs(
+        self, env_home: Path, tmp_path: Path
+    ) -> None:
+        """``agentos <cmd> --json | jq`` must work on an install that has a .env.
+
+        The CLI loads .env files before anything else, and those loads log. With
+        structlog's unconfigured default that output goes to stdout, so every
+        --json payload arrived with log lines in front of it the moment a user
+        had a populated .env — working in a clean environment and failing on a
+        real one.
+        """
+        import json as json_module
+        import subprocess
+        import sys
+
+        (env_home / ".env").write_text("SOME_TOKEN=value\n", encoding="utf-8")
+
+        env = dict(os.environ)
+        env["AGENTOS_STATE_DIR"] = str(env_home)
+        env["AGENTOS_LOG_LEVEL"] = "debug"
+        result = subprocess.run(
+            [sys.executable, "-m", "agentos.cli.main", "env", "list", "--json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=tmp_path,
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = json_module.loads(result.stdout)
+        assert payload["totalCount"] >= 1
