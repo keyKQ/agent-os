@@ -59,18 +59,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The skill snapshot cache is invalidated once on first run, so the first
   command after upgrading rescans skills from disk.
 
-### Fixed
-
-- A `.env` value with significant leading or trailing whitespace was written
-  unquoted and then silently trimmed when read back. The OpenClaw migration
-  carries a command allowlist across, and its entries are prefix patterns:
-  `"^pytest "` with the trailing space matches that command, while `"^pytest"`
-  without it matches anything starting with those six characters. Migrating an
-  allowlist and quietly widening it is the wrong direction.
-- `.env` parsing now recognises the bash-compatible `export KEY=value` form.
-  A hand-written `export GITHUB_TOKEN=…` was previously invisible to AgentOS,
-  and a save would have appended a second, competing definition.
-
 ### Removed
 
 - The session-flush subsystem is gone. It wrote a "flush receipt" before
@@ -95,6 +83,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- A `.env` value with significant leading or trailing whitespace was written
+  unquoted and then silently trimmed when read back. The OpenClaw migration
+  carries a command allowlist across, and its entries are prefix patterns:
+  `"^pytest "` with the trailing space matches that command, while `"^pytest"`
+  without it matches anything starting with those six characters. Migrating an
+  allowlist and quietly widening it is the wrong direction.
+- `.env` parsing now recognises the bash-compatible `export KEY=value` form.
+  A hand-written `export GITHUB_TOKEN=…` was previously invisible to AgentOS,
+  and a save would have appended a second, competing definition.
 - `/reset` in the standalone chat TUI works again on sessions with a non-empty
   transcript. It had been gated on a flush service that is never constructed,
   so it aborted every time; `/compact` printed a matching false warning.
