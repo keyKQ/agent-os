@@ -94,7 +94,7 @@ export function EnvPage() {
     await queryClient.invalidateQueries({ queryKey: ENV_QUERY_KEY })
   }
 
-  async function save(name: string, value: string) {
+  async function save(name: string, value: string): Promise<boolean> {
     setBusy(name)
     try {
       const result = await rpc.call<EnvVarRow>('env.set', { name, value })
@@ -106,8 +106,13 @@ export function EnvPage() {
       } else {
         toast.success(`${name} saved.`)
       }
+      return true
     } catch (error) {
+      // The server is the authority on names and values; show what it said
+      // rather than closing the form and losing what was typed.
+      setNewError(errorMessage(error))
       toast.error(errorMessage(error))
+      return false
     } finally {
       setBusy(null)
     }
@@ -147,6 +152,18 @@ export function EnvPage() {
     }
   }
 
+  function openAdd() {
+    setNewName('')
+    setNewValue('')
+    setNewError(null)
+    setAdding(true)
+  }
+
+  function closeAdd() {
+    setAdding(false)
+    setNewError(null)
+  }
+
   async function addVariable() {
     const problem = validateNewName(newName, rows)
     if (problem) {
@@ -154,10 +171,9 @@ export function EnvPage() {
       return
     }
     setNewError(null)
-    await save(newName.trim(), newValue)
-    setAdding(false)
-    setNewName('')
-    setNewValue('')
+    // Only dismiss once the write lands, so a rejected name keeps its context.
+    const saved = await save(newName.trim(), newValue)
+    if (saved) closeAdd()
   }
 
   const confirmCopy = confirming
@@ -223,7 +239,7 @@ export function EnvPage() {
             <RefreshCwIcon className={listQuery.isFetching ? 'env-spin' : undefined} />
             Refresh
           </Button>
-          <Button type="button" onClick={() => setAdding((v) => !v)}>
+          <Button type="button" onClick={openAdd}>
             <PlusIcon />
             Add variable
           </Button>
@@ -270,41 +286,6 @@ export function EnvPage() {
             </p>
           </div>
         </div>
-      ) : null}
-
-      {adding ? (
-        <form
-          className="env-add"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void addVariable()
-          }}
-        >
-          <label>
-            Name
-            <input
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-              placeholder="MY_SERVICE_TOKEN"
-              aria-label="New variable name"
-            />
-          </label>
-          <label>
-            Value
-            <input
-              type="password"
-              value={newValue}
-              onChange={(event) => setNewValue(event.target.value)}
-              aria-label="New variable value"
-            />
-          </label>
-          <Button type="submit">Save</Button>
-          {newError ? (
-            <p className="env-add__error" role="alert">
-              {newError}
-            </p>
-          ) : null}
-        </form>
       ) : null}
 
       <div className="env-toolbar">
@@ -488,6 +469,64 @@ export function EnvPage() {
           )
         })
       )}
+      <AnimatePresence>
+        {adding ? (
+          <ModalShell
+            role="dialog"
+            labelledBy="env-add-title"
+            onClose={closeAdd}
+            overlayClassName="env-modal__overlay"
+            className="env-modal panel"
+          >
+            <h2 id="env-add-title">Add a variable</h2>
+            <p>
+              Stored in the AgentOS <code>.env</code> and applied to the running gateway.
+            </p>
+            <form
+              className="env-add"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void addVariable()
+              }}
+            >
+              <label>
+                Name
+                <input
+                  value={newName}
+                  onChange={(event) => setNewName(event.target.value)}
+                  placeholder="MY_SERVICE_TOKEN"
+                  aria-label="New variable name"
+                  aria-invalid={newError ? true : undefined}
+                  aria-describedby={newError ? 'env-add-error' : undefined}
+                />
+              </label>
+              <label>
+                Value
+                <input
+                  type="password"
+                  value={newValue}
+                  onChange={(event) => setNewValue(event.target.value)}
+                  aria-label="New variable value"
+                />
+              </label>
+              {newError ? (
+                <p id="env-add-error" className="env-add__error" role="alert">
+                  {newError}
+                </p>
+              ) : null}
+              <div className="env-modal__actions">
+                <Button type="submit" disabled={busy === newName.trim()}>
+                  Save
+                </Button>
+                <Button type="button" variant="outline" onClick={closeAdd}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          </ModalShell>
+        ) : null}
+      </AnimatePresence>
+
       {/* AnimatePresence is required, not decorative: ModalShell enters via
           motion variants, and without a presence context the overlay stays at
           its `initial` opacity of 0 — mounted, focus-trapping, and invisible.

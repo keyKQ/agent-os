@@ -271,4 +271,50 @@ describe('EnvPage', () => {
     const action = screen.getByRole('button', { name: 'Set BASE_RPC_URL' })
     expect(action.textContent).toBe('Set')
   })
+
+  it('opens Add variable as a dialog', async () => {
+    renderPage()
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Add variable/ }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('Add a variable')
+  })
+
+  it('keeps the dialog open and shows what the server said when a write is refused', async () => {
+    // Closing on failure would discard the name and value the operator typed.
+    mockRpc.call.mockImplementation((method: string) => {
+      if (method === 'env.list') return Promise.resolve(PAYLOAD)
+      return Promise.reject(new Error('cannot be written through AgentOS'))
+    })
+    renderPage()
+    await screen.findByText('OPENAI_API_KEY')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add variable/ }))
+    fireEvent.change(await screen.findByLabelText('New variable name'), {
+      target: { value: 'LD_PRELOAD' },
+    })
+    fireEvent.change(screen.getByLabelText('New variable value'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/cannot be written through AgentOS/)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByLabelText('New variable name')).toHaveValue('LD_PRELOAD')
+  })
+
+  it('closes on cancel and reopens blank', async () => {
+    renderPage()
+    await screen.findByText('OPENAI_API_KEY')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add variable/ }))
+    fireEvent.change(await screen.findByLabelText('New variable name'), {
+      target: { value: 'LEFTOVER' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    fireEvent.click(screen.getByRole('button', { name: /Add variable/ }))
+    expect(await screen.findByLabelText('New variable name')).toHaveValue('')
+  })
 })

@@ -87,9 +87,14 @@ describe('Environment header parity with sibling views', () => {
   })
 
   it('does not re-declare the shared header geometry locally', () => {
-    // Local copies would fight the shared rules instead of inheriting them.
+    // A local copy of the header box would fight the shared rules.
     expect(css).not.toMatch(/\.env-stage__header\s*\{/)
-    expect(css).not.toMatch(/\.env-stage__actions\s*\{/)
+  })
+
+  it('declares its own actions row, as every sibling view does', () => {
+    // control-surface only tunes this responsively; the base flex row is
+    // per-view. Dropping it leaves the header buttons flush against each other.
+    expect(css).toMatch(/\.env-stage__actions \{[\s\S]*?display: flex;[\s\S]*?gap:/)
   })
 
   it('uses the same subtitle measure as the Skills stage', () => {
