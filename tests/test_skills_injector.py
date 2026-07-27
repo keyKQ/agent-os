@@ -24,7 +24,7 @@ def _skill(
     disable_model_invocation: bool = False,
 ) -> SkillSpec:
     """A spec carrying the on-disk fields the injector used to leak."""
-    base_dir = f"/home/example/.agentos/skills/{name}"
+    base_dir = f"/opt/example/agentos/skills/{name}"
     return SkillSpec(
         name=name,
         description=description,
@@ -49,7 +49,7 @@ def test_neither_mode_emits_a_skill_location() -> None:
     for prompt in (full, compact):
         assert "<location>" not in prompt
         assert "SKILL.md" not in prompt
-        assert "/home/example" not in prompt
+        assert "/opt/example" not in prompt
 
 
 def test_full_mode_is_used_when_it_fits_the_budget() -> None:
