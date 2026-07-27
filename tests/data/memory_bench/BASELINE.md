@@ -69,36 +69,43 @@ the model is diligent, which means it is largely untested in practice.
 
 ## After the fixes
 
-Same conditions, same corpora, same matcher, re-run against the three
-changes that followed from the numbers above.
+Same corpora, five trials each, re-run against the three changes that followed
+from the numbers above.
 
 | | explicit | incidental |
 | --- | --- | --- |
-| capture | 92% → **96%** | 100% → **100%** |
-| recall | 84% → **92%** | 95% → **95%** |
+| capture | 92% → **92%** | 100% → **100%** |
+| recall | 84% → **84%** | 95% → **90%** |
 | noise per trial | 0.2 → **0.2** | 0.6 → **0.0** |
-| nudge reviews | 0 → **7** | 0 → **0** |
+| nudge reviews | 0 → **12** | 0 → **10** |
 
-**Fabrication is gone.** The incidental corpus wrote no invented profile
-entry in any trial, down from 3 of 5. Capture and recall held.
+**Read the first two rows as "unchanged", not as a result.** Retention was
+already good and these fixes did not target it; the movement inside each row is
+run-to-run variance on a stochastic model. An earlier pass appeared to show
+92% → 96% capture and 84% → 92% recall, and that improvement did not survive
+a matcher correction and a re-run. It was never real.
 
-**The review runs.** Seven reviews across five explicit trials, up from zero,
-each reporting what it wrote via `memory_nudge.review_done`.
+The two rows that did move are the ones the fixes aimed at, and neither depends
+on the matcher:
 
-Two things this table does not show, both worth knowing:
+**Fabrication is gone.** No invented profile entry in any incidental trial,
+down from 3 of 5. A fabricated `Timezone:` line matches no planted fact under
+any matching rule, so its disappearance is not a scoring artifact.
 
-The incidental corpus still reports zero reviews, and that is the honest limit
-of the change rather than a measurement artifact. A self-directed write now
-holds the counter instead of clearing it, so a review is delayed rather than
-cancelled — but every turn in that corpus carries save-worthy content, so the
-agent saves on all of them and the counter never advances. An agent that saves
-on literally every turn still never gets a consolidation pass. Bounding the
-hold (force a review after, say, `2 × interval` held turns) would close it.
+**The review runs.** Twelve and ten reviews where there were none, each
+reporting what it wrote via `memory_nudge.review_done`. Review counts come
+straight off the log stream and are matcher-independent.
 
-The explicit corpus's residual 0.2 noise is the same matcher artifact called
-out above: the agent wrote `Deployments happen on Fridays only; owns the
-release checklist.`, which is correct, but the ownership matcher does not list
-`owns`.
+The explicit corpus's residual 0.2 noise is the known matcher artifact: the
+agent split a two-part fact across entries, which is arguably correct.
+
+### A caveat on comparing these columns
+
+The before column was measured with substring matching, the after column with
+the corrected word-start matching this benchmark now uses. On these corpora the
+two agree — `test_matches` covers the cases where they diverge — but the
+comparison is not perfectly like-for-like, and the honest reading is the one
+above: retention unchanged, fabrication eliminated, review restored.
 
 ## What this does not cover
 
@@ -115,8 +122,12 @@ thing.
 
 ## Known limitation
 
-Matching is substring-based, so a few matchers are loose: `go` also matches
-"going"/"Django", and `no ` matches almost any sentence. Word-boundary
-matching would tighten `role`, `testing`, and `brevity`. The rates above are
-therefore a mild over-estimate, and the same matcher must be used on both
-sides of any before/after comparison.
+Matching is keyword-based. An alternative must begin at a word boundary but
+may carry a suffix, so `mock` matches "mocks" and `go` does not match
+"Django" — see `tests/test_scripts/test_memory_bench_matcher.py`, which pins
+both directions after each was wrong once.
+
+What that still cannot see is meaning. An entry that captures a fact in words
+the corpus did not anticipate scores as a miss, so every rate here is a floor
+rather than an estimate. Use the same matcher on both sides of any before/after
+comparison; if the matcher changes, re-run both sides.
