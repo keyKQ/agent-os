@@ -212,6 +212,27 @@ class SkillProvenance:
     maintained_by: str = "AgentOS"
 
 
+@dataclass(frozen=True)
+class SkillPublisher:
+    """Who stands behind a skill, for the surfaces that show a brand.
+
+    Deliberately separate from :class:`SkillProvenance`. Provenance answers
+    "where did this text come from and under what licence"; a publisher answers
+    "whose name is on it". A skill can be AgentOS-original text published by a
+    partner, or upstream text with no publisher at all.
+
+    Only ids on the server-side allowlist in :mod:`agentos.skills.publishers`
+    resolve to a populated record — see that module for why.
+    """
+
+    #: Stable slug, e.g. ``robinhood``, ``bankr``.
+    id: str = ""
+    name: str = ""
+    url: str = ""
+    #: ``https`` URL, or ``""`` to fall back to initials / a bundled mark.
+    logo: str = ""
+
+
 @dataclass
 class SkillSpec:
     """Parsed skill metadata and content."""
@@ -227,6 +248,7 @@ class SkillSpec:
     # Platform metadata
     metadata: SkillPlatformMeta | None = None
     provenance: SkillProvenance = field(default_factory=SkillProvenance)
+    publisher: SkillPublisher = field(default_factory=SkillPublisher)
     user_invocable: bool = True
     disable_model_invocation: bool = False
     homepage: str = ""

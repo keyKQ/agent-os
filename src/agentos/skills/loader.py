@@ -10,11 +10,13 @@ import structlog
 import yaml
 
 from agentos.paths import default_agentos_home
+from agentos.skills.publishers import resolve_publisher
 from agentos.skills.types import (
     SkillInstallSpec,
     SkillLayer,
     SkillPlatformMeta,
     SkillProvenance,
+    SkillPublisher,
     SkillRequires,
     SkillSpec,
 )
@@ -29,7 +31,10 @@ MAX_SKILLS_PER_SOURCE = 200  # per layer cap
 # 9: requires_env carries declared descriptions/URLs instead of bare names,
 #    and config_vars was added. A version-8 snapshot would parse without error
 #    and silently strip both.
-_SNAPSHOT_SCHEMA_VERSION = 9
+# 10: publisher was added. A version-9 snapshot parses cleanly and would restore
+#    every skill without a publisher, so partner skills would silently lose
+#    their brand grouping until something else invalidated the cache.
+_SNAPSHOT_SCHEMA_VERSION = 10
 
 
 def _string_list(value: object) -> list[str]:
@@ -166,6 +171,16 @@ def _resolve_provenance(frontmatter: dict) -> SkillProvenance:
     )
 
 
+def _resolve_skill_publisher(frontmatter: dict) -> SkillPublisher:
+    """Extract the publisher a top-level ``publisher:`` block selects.
+
+    The frontmatter only picks an id; :func:`resolve_publisher` supplies the
+    displayed fields from the allowlist, so a skill cannot claim a brand that
+    is not its own. No block at all means no publisher.
+    """
+    return resolve_publisher(frontmatter.get("publisher"))
+
+
 def _snapshot_provenance(raw: object) -> SkillProvenance:
     if not isinstance(raw, dict):
         return SkillProvenance()
@@ -175,17 +190,6 @@ def _snapshot_provenance(raw: object) -> SkillProvenance:
         upstream_url=str(raw.get("upstream_url") or ""),
         maintained_by=str(raw.get("maintained_by") or "AgentOS"),
     )
-
-
-# Layer ordering: low precedence → high precedence
-_LAYER_ORDER = [
-    SkillLayer.EXTRA,
-    SkillLayer.BUNDLED,
-    SkillLayer.MANAGED,
-    SkillLayer.PERSONAL,
-    SkillLayer.PROJECT,
-    SkillLayer.WORKSPACE,
-]
 
 
 class SkillLoader:
@@ -227,6 +231,11 @@ class SkillLoader:
         self._cached = None
 
     def _get_layer_dirs(self) -> list[tuple[Path, SkillLayer]]:
+        """Return the layer directories in low → high precedence order.
+
+        This order is the precedence: ``load_all()`` walks it and lets each
+        later layer overwrite a same-named skill from an earlier one.
+        """
         layer_dirs: list[tuple[Path, SkillLayer]] = []
         for d in self._extra_dirs:
             layer_dirs.append((d, SkillLayer.EXTRA))
@@ -285,6 +294,12 @@ class SkillLoader:
                         "license": s.provenance.license,
                         "upstream_url": s.provenance.upstream_url,
                         "maintained_by": s.provenance.maintained_by,
+                    },
+                    "publisher": {
+                        "id": s.publisher.id,
+                        "name": s.publisher.name,
+                        "url": s.publisher.url,
+                        "logo": s.publisher.logo,
                     },
                     "metadata": {
                         "os": s.metadata.os if s.metadata else [],
@@ -415,6 +430,10 @@ class SkillLoader:
                     homepage=s.get("homepage", ""),
                     metadata=meta,
                     provenance=_snapshot_provenance(s.get("provenance")),
+                    # Re-resolved rather than trusted: the cache is a writable
+                    # file on disk, so it gets the same allowlist check the
+                    # manifest got.
+                    publisher=resolve_publisher(s.get("publisher")),
                     requires_tools=s.get("requires_tools", []),
                     fallback_for_toolsets=s.get("fallback_for_toolsets", []),
                 )
@@ -516,6 +535,7 @@ class SkillLoader:
             # Platform metadata fields
             metadata = _resolve_metadata(frontmatter)
             provenance = _resolve_provenance(frontmatter)
+            publisher = _resolve_skill_publisher(frontmatter)
             # metadata.always overrides top-level always if set
             if metadata and metadata.always is not None:
                 always = metadata.always
@@ -547,6 +567,7 @@ class SkillLoader:
                 path=skill_dir,
                 metadata=metadata,
                 provenance=provenance,
+                publisher=publisher,
                 user_invocable=user_invocable,
                 disable_model_invocation=disable_model_invocation,
                 homepage=homepage,
