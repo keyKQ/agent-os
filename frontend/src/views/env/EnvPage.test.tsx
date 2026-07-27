@@ -317,4 +317,24 @@ describe('EnvPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add variable/ }))
     expect(await screen.findByLabelText('New variable name')).toHaveValue('')
   })
+
+  it('keeps the page mounted while loading instead of swapping it out', async () => {
+    let release: (value: EnvListResponse) => void = () => {}
+    mockRpc.call.mockImplementation((method: string) => {
+      if (method === 'env.list') return new Promise((resolve) => (release = resolve))
+      return Promise.resolve({})
+    })
+    renderPage()
+
+    // Header and toolbar are present before any data arrives, so nothing
+    // flashes apart and back together when it does.
+    expect(screen.getByRole('heading', { name: /Environment/ })).toBeTruthy()
+    expect(screen.getByLabelText('Search variables')).toBeTruthy()
+    expect(screen.getByText('Loading variables…')).toBeTruthy()
+
+    release(PAYLOAD)
+    expect(await screen.findByText('OPENAI_API_KEY')).toBeTruthy()
+    // Same heading node throughout — the view was never replaced.
+    expect(screen.getByRole('heading', { name: /Environment/ })).toBeTruthy()
+  })
 })

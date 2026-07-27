@@ -190,16 +190,6 @@ export function EnvPage() {
         }
     : null
 
-  if (listQuery.isLoading) {
-    return (
-      <section className="env-stage" aria-busy="true" aria-label="Loading environment variables">
-        <div className="env-skeleton env-skeleton--header" />
-        <div className="env-skeleton env-skeleton--row" />
-        <div className="env-skeleton env-skeleton--row" />
-      </section>
-    )
-  }
-
   if (listQuery.isError) {
     return (
       <section className="env-stage">
@@ -219,7 +209,7 @@ export function EnvPage() {
   }
 
   return (
-    <section className="env-stage">
+    <section className="env-stage" aria-busy={listQuery.isLoading || undefined}>
       <header className="env-stage__header">
         <div className="env-stage__title-block">
           <div className="t-label">Configuration</div>
@@ -312,7 +302,9 @@ export function EnvPage() {
       </div>
 
       {groups.length === 0 ? (
-        <p className="env-empty">No variables match this filter.</p>
+        <p className="env-empty">
+          {listQuery.isLoading ? 'Loading variables…' : 'No variables match this filter.'}
+        </p>
       ) : (
         groups.map((group) => {
           const { primary, rest } = splitGroupRows(group)

@@ -31,6 +31,14 @@ describe('Environment screen CSS contract', () => {
     expect(controlCss).not.toMatch(/\.env-row|\.env-filter(?:s|\s|\.)|\.env-badge/)
   })
 
+  it('has no skeleton placeholders', () => {
+    // The page keeps its header, counts, and toolbar mounted while loading;
+    // swapping the whole view for grey slabs made it flash apart and back
+    // together on every visit.
+    expect(css).not.toMatch(/skeleton/i)
+    expect(page).not.toMatch(/skeleton/i)
+  })
+
   it('stops the refresh spinner for reduced motion', () => {
     expect(css).toMatch(
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.env-spin \{[\s\S]*?animation: none;/,
