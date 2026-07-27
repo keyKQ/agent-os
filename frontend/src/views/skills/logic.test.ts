@@ -26,6 +26,8 @@ import {
   skillAvailabilityTone,
   skillDotClass,
   skillDotTitle,
+  skillCanRemove,
+  skillCanUpdate,
   skillGroupKey,
   skillPublisherId,
   skillRank,
@@ -274,6 +276,38 @@ describe('skillPublisherId / isPartnerSkill / skillsByPublisher', () => {
     expect(skillsByPublisher(list, 'bankr').map((s) => s.name)).toEqual(['bankr-swap'])
     // An empty id never selects the unbranded rows.
     expect(skillsByPublisher(list, '')).toEqual([])
+  })
+})
+
+describe('skillCanUpdate / skillCanRemove', () => {
+  it('reads the affordance off acquisition, not the layer', () => {
+    const movedHubInstall = acquired('hub', { layer: 'workspace' })
+    movedHubInstall.acquisition!.updatable = true
+    movedHubInstall.acquisition!.removable = true
+    expect(skillCanUpdate(movedHubInstall)).toBe(true)
+    expect(skillCanRemove(movedHubInstall)).toBe(true)
+
+    // A hand-copied directory sitting in the managed dir was never removable.
+    const handCopied = acquired('local', { layer: 'managed' })
+    expect(skillCanUpdate(handCopied)).toBe(false)
+    expect(skillCanRemove(handCopied)).toBe(false)
+  })
+
+  it('a hub install whose files moved is updatable but not removable', () => {
+    const diverged = acquired('hub')
+    diverged.acquisition!.updatable = true
+    diverged.acquisition!.removable = false
+    expect(skillCanUpdate(diverged)).toBe(true)
+    expect(skillCanRemove(diverged)).toBe(false)
+  })
+
+  it('falls back to layer when a pre-#130 gateway sends no acquisition', () => {
+    // Reading the flags directly would be `undefined === true` -> false, which
+    // hides both buttons on a stale bundle instead of degrading to the old gate.
+    expect(skillCanUpdate(skill({ layer: 'managed' }))).toBe(true)
+    expect(skillCanRemove(skill({ layer: 'managed' }))).toBe(true)
+    expect(skillCanUpdate(skill({ layer: 'bundled' }))).toBe(false)
+    expect(skillCanRemove(skill({ layer: 'bundled' }))).toBe(false)
   })
 })
 

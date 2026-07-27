@@ -18,13 +18,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agentos.skills.availability import SkillAvailability, gate_skills
+from agentos.skills.availability import SkillAvailability, gate_skills, plan_injection
 from agentos.skills.eligibility import (
     EligibilityContext,
     EligibilityReport,
     diagnose_eligibility,
 )
 from agentos.skills.hub.lockfile import LockEntry, Lockfile, default_lockfile_path
+from agentos.skills.injector import DEFAULT_MAX_SKILLS_PROMPT_CHARS
 from agentos.skills.loader import SkillLoader
 from agentos.skills.publishers import resolve_publisher
 from agentos.skills.types import (
@@ -71,8 +72,9 @@ def build_skill_inventory(
     Args:
         loader: Supplies the skills and the managed directory the acquisition
             guard checks recorded install paths against.
-        config: Optional gateway config, consulted only for
-            ``skills.managed_dir`` when the loader carries no managed directory.
+        config: Optional gateway config, consulted for ``skills.managed_dir``
+            when the loader carries no managed directory, and for the prompt
+            budget the availability answer is measured against.
         lockfile_path: Override for the shared lockfile; defaults to
             :func:`~agentos.skills.hub.lockfile.default_lockfile_path`.
         available_tools: Tool names this session can offer. Supplying it fills
@@ -88,12 +90,25 @@ def build_skill_inventory(
     # but built here rather than at import time, so a credential added since the
     # process started is seen on the next call.
     elig_ctx = EligibilityContext.auto()
-    # The turn pipeline runs the same gate, so a row and the prompt agree on
-    # which skills the agent is being offered. The budget and retrieval gates
-    # are turn-specific and deliberately not run here.
-    availability = (
-        gate_skills(skills, available_tools, elig_ctx)[1] if available_tools is not None else {}
-    )
+    # The turn pipeline runs the same gates, so a row and the prompt agree on
+    # which skills the agent is being offered.
+    availability: dict[str, SkillAvailability] = {}
+    if available_tools is not None:
+        gated, availability = gate_skills(skills, available_tools, elig_ctx)
+        # The budget gate is *not* turn-specific: it depends only on the gated
+        # set and the configured budget, both of which are known here. Running
+        # it is what lets a row say "installed and ready, but the skills block
+        # is full" instead of claiming the agent has a skill it is never
+        # offered — the half of the answer a Skills page could not give before.
+        # Retrieval is the one genuinely per-turn gate and stays out: it ranks
+        # against the user's message, so there is no query to answer it with.
+        skills_cfg = getattr(config, "skills", None) if config is not None else None
+        plan = plan_injection(
+            gated,
+            getattr(skills_cfg, "max_skills_prompt_chars", DEFAULT_MAX_SKILLS_PROMPT_CHARS),
+            getattr(skills_cfg, "injection_mode", "system"),
+        )
+        availability = {**availability, **plan.availability}
 
     rows: list[SkillRow] = []
     for spec in skills:
@@ -177,10 +192,15 @@ def _derive_publisher(spec: SkillSpec, entry: LockEntry | None) -> SkillPublishe
     lockfile written before ``publisher_id`` existed — i.e. every partner skill
     already installed on an upgrading machine — would lose its brand and drop
     out of the Partners group until it was reinstalled.
+
+    A shipped skill never consults the lockfile: nothing can be installed into
+    the packaged bundled directory, so an entry under that name belongs to a
+    different, since-removed install and must not lend its brand across the
+    collision. See :func:`_derive_acquisition`, which drops the same entry.
     """
     if spec.publisher.id:
         return spec.publisher
-    if entry is not None:
+    if entry is not None and spec.layer != SkillLayer.BUNDLED:
         return resolve_publisher(entry.publisher_id or entry.source)
     return SkillPublisher()
 
@@ -195,8 +215,15 @@ def _derive_acquisition(
     The lockfile wins over the layer: a hub install stays a hub install even
     when an operator has pointed ``skills.managed_dir`` somewhere else and the
     loader now reads it from a different layer.
+
+    The one exception is ``BUNDLED``. That directory is ``skills/bundled`` inside
+    the installed package (:func:`~agentos.skills.paths.default_bundled_skills_dir`)
+    and is not configurable, so nothing can ever be installed into it. A lockfile
+    entry whose name matches a shipped skill is therefore a collision with some
+    *other*, since-removed install — honoring it would show a shipped skill as
+    hub-acquired, with a source label and a Remove button that cannot apply.
     """
-    if entry is None:
+    if entry is None or spec.layer == SkillLayer.BUNDLED:
         shipped = spec.layer == SkillLayer.BUNDLED
         return SkillAcquisition(kind=AcquisitionKind.SHIPPED if shipped else AcquisitionKind.LOCAL)
 

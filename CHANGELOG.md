@@ -49,6 +49,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   explanation is one sentence naming what to do, and it never contains a
   filesystem path. Ready and offered were previously the same green dot, which
   is why a perfectly installed skill could sit there being silently withheld.
+  Five of the six answer from the installed set alone, so the Skills page shows
+  them before you send anything; only the relevance-filtering one needs a
+  message to rank against and stays in the decision log.
+- With `[tools] enabled = false`, skills that require a tool are now reported as
+  withheld rather than available. The Skills page previously answered against
+  everything the install could offer while chat answered against a turn with no
+  tools at all — the same skill, two answers.
 - How a skill was acquired — `shipped` with AgentOS, installed from a `hub`, or
   a `local` directory you added — is now a fact AgentOS records and reports,
   alongside the source, identifier, version, and install time for hub installs.

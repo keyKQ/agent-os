@@ -45,6 +45,8 @@ import {
   skillAvailabilityLabel,
   skillAvailabilityTitle,
   skillAvailabilityTone,
+  skillCanRemove,
+  skillCanUpdate,
   skillDotClass,
   skillDotTitle,
   skillStats,
@@ -1540,11 +1542,8 @@ function SkillDialog({
 }) {
   const titleId = useId()
   const status = skillStatus(skill)
-  // What an operator may do comes off the payload, not off the layer: a hub
-  // install stays removable when `skills.managed_dir` moves, and a hand-copied
-  // directory inside the managed dir was never removable in the first place.
-  const canUpdate = skill.acquisition?.updatable === true
-  const canRemove = skill.acquisition?.removable === true
+  const canUpdate = skillCanUpdate(skill)
+  const canRemove = skillCanRemove(skill)
   const removeBlocked = skill.acquisition?.kind === 'hub' && !canRemove
   const availabilityDetail =
     skillAvailabilityTone(skill) === 'not-offered' ? skillAvailabilityTitle(skill) : ''

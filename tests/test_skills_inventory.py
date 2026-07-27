@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agentos.skills.availability import REASON_TOOL_GATE
+from agentos.skills.availability import REASON_PROMPT_BUDGET, REASON_TOOL_GATE
 from agentos.skills.hub.installer import SkillInstaller
 from agentos.skills.hub.lockfile import LockEntry, Lockfile
 from agentos.skills.hub.source import SkillBundle, SkillMeta
@@ -498,3 +498,81 @@ def test_managed_dir_falls_back_to_config_when_the_loader_has_none(tmp_path: Pat
     )
 
     assert rows[0].acquisition.removable is True
+
+
+def test_a_stale_lockfile_entry_cannot_make_a_shipped_skill_look_installed(
+    tmp_path: Path,
+) -> None:
+    """A bundled skill is never a hub install, whatever the lockfile says.
+
+    The bundled directory lives inside the installed package and is not
+    configurable, so nothing can be installed into it. An entry whose name
+    collides with a shipped skill is a leftover from a different, since-removed
+    install; honoring it would render a shipped skill with a source label and a
+    Remove button that cannot apply.
+    """
+    bundled = tmp_path / "bundled"
+    _write_skill(bundled, "collides")
+    lock = _lockfile(
+        tmp_path / "lock.json",
+        "collides",
+        identifier="id",
+        path=str(tmp_path / "managed" / "collides"),
+        publisher_id="bankr",
+    )
+
+    rows = build_skill_inventory(
+        _loader(tmp_path, bundled_dir=bundled, managed_dir=tmp_path / "managed"),
+        lockfile_path=lock,
+        available_tools=set(),
+    )
+
+    acquisition = _row(rows, "collides").acquisition
+    assert acquisition.kind is AcquisitionKind.SHIPPED
+    assert acquisition.removable is False
+    assert acquisition.source_id == ""
+    # And the stale entry must not lend it a partner's brand either.
+    assert _row(rows, "collides").publisher == SkillPublisher()
+
+
+def test_a_row_reports_the_budget_that_will_drop_it(tmp_path: Path) -> None:
+    """`prompt_budget` has to be answerable without a turn.
+
+    It depends only on the installed set and the configured budget, both known
+    here — so the Skills page can say "installed, ready, but the block is full"
+    instead of implying the agent has a skill it is never offered.
+    """
+    workspace = tmp_path / "workspace"
+    for i in range(6):
+        _write_skill(workspace, f"skill-{i:02d}")
+    loader = _loader(tmp_path, workspace_dir=workspace)
+    lock = tmp_path / "lock.json"
+
+    class _Skills:
+        max_skills_prompt_chars = 120
+        injection_mode = "system"
+
+    class _Config:
+        skills = _Skills()
+
+    rows = build_skill_inventory(
+        loader, config=_Config(), lockfile_path=lock, available_tools=set()
+    )
+
+    dropped = [r for r in rows if r.availability and r.availability.reason == REASON_PROMPT_BUDGET]
+    assert dropped, "a 120-char budget cannot fit six skills"
+    assert all(r.eligibility.eligible for r in dropped), "dropped for budget, not for eligibility"
+    assert all("120" in (r.availability.detail if r.availability else "") for r in dropped)
+
+    # A budget with room reports every skill as offered.
+    class _RoomySkills:
+        max_skills_prompt_chars = 30_000
+        injection_mode = "system"
+
+    class _RoomyConfig:
+        skills = _RoomySkills()
+
+    rows = build_skill_inventory(
+        loader, config=_RoomyConfig(), lockfile_path=lock, available_tools=set()
+    )
+    assert all(r.availability is not None and r.availability.offered for r in rows)

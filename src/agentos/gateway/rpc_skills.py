@@ -71,7 +71,15 @@ def _available_tool_names(ctx: RpcContext) -> set[str]:
     A per-turn profile can still narrow this, so the answer is "what this
     install can offer the agent", which is the question an Installed row asks —
     not "what that one turn saw".
+
+    The exception is ``tools.enabled = false``, which narrows every turn to no
+    tools at all. Reporting the full registry there would show a
+    ``requires_tools`` skill as available on the Skills page while chat withholds
+    it — the disagreement this whole change exists to remove.
     """
+    tools_cfg = getattr(getattr(ctx, "config", None), "tools", None)
+    if tools_cfg is not None and not getattr(tools_cfg, "enabled", True):
+        return set()
     registry = getattr(ctx, "tool_registry", None) or get_default_registry()
     return set(registry.list_names())
 
@@ -81,7 +89,11 @@ def _inventory(ctx: RpcContext) -> list[SkillRow]:
     loader = _get_loader(ctx)
     if loader is None:
         return []
-    return build_skill_inventory(loader, available_tools=_available_tool_names(ctx))
+    return build_skill_inventory(
+        loader,
+        config=getattr(ctx, "config", None),
+        available_tools=_available_tool_names(ctx),
+    )
 
 
 def _status_from_report(report: EligibilityReport) -> str:

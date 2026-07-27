@@ -242,3 +242,52 @@ def test_a_bundled_skill_is_never_removable() -> None:
         assert {row["publisher"]["name"] for row in rows if row["publisher"]["id"]} == {"Robinhood"}
 
     asyncio.run(run())
+
+
+def test_disabling_tools_is_reflected_on_the_skills_page(hub_install: SkillLoader) -> None:
+    """With ``[tools] enabled = false`` the page must not claim a tool-gated skill works.
+
+    The turn narrows to no tools at all, so a ``requires_tools`` skill is
+    withheld from the agent. Answering the row against the full process registry
+    would show it as offered — the Skills-page-versus-chat disagreement this
+    change exists to remove.
+    """
+    skill_dir = hub_install.managed_dir / "needs-a-tool" if hub_install.managed_dir else None
+    assert skill_dir is not None
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: needs-a-tool\n"
+        "description: Needs a tool.\n"
+        "metadata:\n"
+        "  agentos:\n"
+        "    requires_tools: [web_search]\n"
+        "---\n"
+        "Body.\n",
+        encoding="utf-8",
+    )
+    hub_install.invalidate_cache()
+
+    class _Tools:
+        enabled = False
+
+    class _Config:
+        tools = _Tools()
+
+    async def run() -> None:
+        enabled_ctx = RpcContext(conn_id="test", skill_loader=hub_install)
+        disabled_ctx = RpcContext(conn_id="test", skill_loader=hub_install, config=_Config())
+
+        enabled = _row(
+            (await rpc_skills._handle_skills_list(None, enabled_ctx))["skills"], "needs-a-tool"
+        )
+        disabled = _row(
+            (await rpc_skills._handle_skills_list(None, disabled_ctx))["skills"], "needs-a-tool"
+        )
+
+        assert enabled["availability"]["offered"] is True
+        assert disabled["availability"]["offered"] is False
+        assert disabled["availability"]["reason"] == "tool_gate"
+        assert disabled["availability"]["detail"]
+
+    asyncio.run(run())

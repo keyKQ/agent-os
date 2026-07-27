@@ -303,6 +303,10 @@ with `reason` one of:
 | `not_retrieved` | `skills.filter_enabled` is on and this message did not match |
 | `prompt_budget` | it is ready, but the skills block hit `max_skills_prompt_chars` |
 
+All of these reach a `skills.list` row except `not_retrieved`, which ranks
+against one message's wording and so only exists inside a turn. Do not tell an
+operator to look for it on the Skills page — read it from the decision log.
+
 `agentos skills list --json` omits `availability` entirely: a CLI process has
 no chat session and no tool surface, so it cannot answer. An absent key means
 "not computed", never "not offered".

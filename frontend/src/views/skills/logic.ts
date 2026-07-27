@@ -291,6 +291,28 @@ export function skillGroupKey(skill: RawSkill): SkillGroupKey {
   return 'local'
 }
 
+/**
+ * Whether an operator may update / remove a skill.
+ *
+ * What an operator may do comes off `acquisition`, not off the layer: a hub
+ * install stays removable when `skills.managed_dir` moves, and a hand-copied
+ * directory inside the managed dir was never removable in the first place.
+ *
+ * A row from a pre-#130 gateway carries no `acquisition` at all. Reading the
+ * flags directly would then be `undefined === true` → `false`, silently hiding
+ * both buttons rather than degrading — so fall back to the layer test these
+ * buttons used before, exactly as `skillGroupKey` does.
+ */
+export function skillCanUpdate(skill: RawSkill): boolean {
+  if (skill.acquisition) return skill.acquisition.updatable === true
+  return skill.layer === 'managed'
+}
+
+export function skillCanRemove(skill: RawSkill): boolean {
+  if (skill.acquisition) return skill.acquisition.removable === true
+  return skill.layer === 'managed'
+}
+
 export interface SkillGroup {
   key: SkillGroupKey
   label: string

@@ -115,6 +115,13 @@ own skill listing prints a `[not offered]` line with the same explanation:
 | `not_retrieved` | relevance filtering is on and this message did not match | raise `skills.filter_top_k`, or reword |
 | `prompt_budget` | ready, but the skills block is full | raise `skills.max_skills_prompt_chars` |
 
+Every reason above appears in a `skills.list` row except `not_retrieved`.
+Retrieval ranks skills against the wording of one message, so there is no query
+to answer it with outside a turn — it reaches the decision log, never the Skills
+page. The other six, `prompt_budget` included, are answerable from the installed
+set plus the configured budget, so the page can show them before you send
+anything.
+
 `agentos skills list --json` does not carry `availability`. A CLI process has
 no chat session and no tool surface, so it cannot answer honestly; an absent
 key means "not computed", never "not offered".
