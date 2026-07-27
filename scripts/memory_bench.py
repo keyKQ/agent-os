@@ -41,6 +41,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import shutil
 import statistics
 import sys
@@ -131,9 +132,23 @@ def _matches(text: str, expect_any: list[list[str]]) -> bool:
 
     Groups are ANDed, alternatives inside a group are ORed, so a fact with two
     parts ("Fridays", "I own it") only counts when both parts survive.
+
+    An alternative must begin at a word boundary but may carry a suffix, so
+    `mock` matches "mocks" and `friday` matches "Fridays" while `go` no longer
+    matches "Django".
+
+    Both halves of that are load-bearing and each was wrong once. Plain
+    substring matching scored `go` against "Django" and `no ` against almost
+    any sentence, inflating every rate it touched. Anchoring both ends instead
+    swung it the other way: an entry reading "never suggest mocks in tests"
+    stopped matching `mock` and a correctly-captured fact scored zero, which
+    read as a 40-point regression that had not happened.
     """
     low = text.lower()
-    return all(any(alt.lower() in low for alt in group) for group in expect_any)
+    return all(
+        any(re.search(rf"(?<!\w){re.escape(alt.lower())}", low) for alt in group)
+        for group in expect_any
+    )
 
 
 def _entries(text: str) -> list[str]:
