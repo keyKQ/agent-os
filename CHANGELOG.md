@@ -182,6 +182,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   user's home directory in front of the model on every turn. Removing it, with
   the raised budget above, is what lets a stock install list every skill with
   its description.
+- Upgrading lifts an existing `skills.max_skills_prompt_chars = 8000` to the new
+  default. The key is materialised into every saved `config.toml`, so raising the
+  default alone would have reached new installs only, and 8000 is exactly the
+  value that cannot fit the shipped skills' descriptions. The rewrite runs with
+  the config migrations on the next gateway start, takes the usual timestamped
+  backup, and touches only that exact old default — a budget someone chose is
+  left alone.
 - A skill that appears in a skills directory while the gateway is running is
   now picked up on the next turn instead of at the next restart. The cache was
   only cleared through AgentOS's own install paths, but the directories are
