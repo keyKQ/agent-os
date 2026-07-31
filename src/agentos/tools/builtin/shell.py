@@ -226,6 +226,17 @@ _NETWORK_EGRESS_TOKENS: tuple[str, ...] = (
     "invoke-webrequest",
     "invoke-restmethod",
     "start-bitstransfer",
+    # Interpreters. A one-liner can open a socket without naming any of the
+    # binaries above, and the destination may come from a variable rather than
+    # a URL literal the scan would otherwise see.
+    "python",
+    "python3",
+    "node",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+    "php",
 )
 
 

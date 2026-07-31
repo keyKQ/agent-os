@@ -34,7 +34,6 @@ def _validate_http_url(url: str) -> None:
     assert_not_metadata_endpoint(url)
 
 
-_SENSITIVE_HTTP_METHODS = {"POST", "PUT", "PATCH"}
 _TEXT_BODY_LIMIT = 10_000
 _BINARY_BODY_LIMIT = 1_000_000
 _FETCH_DIR_NAME = ".fetch"
@@ -198,10 +197,12 @@ async def http_request(
     if marker is not None:
         return _sensitive_body_block("http_request", marker)
     method_upper = method.upper()
-    if method_upper in _SENSITIVE_HTTP_METHODS:
-        marker = _sensitive_body_marker(body)
-        if marker is not None:
-            return _sensitive_body_block("http_request", marker)
+    # Scan whatever body is present rather than only the methods that
+    # conventionally carry one: DELETE and even GET accept a body, and an
+    # exfiltration path is not going to pick a method out of politeness.
+    marker = _sensitive_body_marker(body)
+    if marker is not None:
+        return _sensitive_body_block("http_request", marker)
 
     try:
         import httpx

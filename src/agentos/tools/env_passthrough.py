@@ -43,12 +43,13 @@ frontmatter was reviewed as ours (the same trust split
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
-from contextvars import ContextVar
 
 import structlog
 
 from agentos import env_policy
+from agentos.tools.types import current_tool_context
 
 log = structlog.get_logger(__name__)
 
@@ -60,19 +61,46 @@ __all__ = [
     "register_env_passthrough",
 ]
 
-#: Session-scoped so a skill loaded in one gateway session cannot widen the
-#: environment of another. A plain module global bleeds across concurrent
-#: sessions in the same process.
-_allowed_var: ContextVar[set[str]] = ContextVar("agentos_env_passthrough")
+#: Keyed by session so a skill loaded in one gateway session cannot widen the
+#: environment of another.
+#:
+#: Deliberately *not* a ContextVar. Every tool call runs in its own asyncio
+#: task (``engine/agent.py`` creates one per call), and a task gets a **copy**
+#: of the context — so a ``ContextVar.set()`` inside the ``skill_view`` call is
+#: invisible to the ``execute_code`` call that follows it. A registration that
+#: never reaches the tool it exists to serve is worse than none: the skill
+#: looks configured and fails at run time with a missing variable.
+_registry: OrderedDict[str, set[str]] = OrderedDict()
+
+#: Bound on remembered sessions. A long-lived gateway would otherwise grow one
+#: entry per session forever; the oldest is dropped, which at worst costs a
+#: re-view of the skill in a session nobody has touched in a long time.
+_MAX_SESSIONS = 256
+
+#: Bucket for entry points that carry no session key — a one-shot CLI run,
+#: where there is only one session in the process anyway.
+_DEFAULT_SESSION = "\x00default"
 
 
-def _allowed() -> set[str]:
-    try:
-        return _allowed_var.get()
-    except LookupError:
-        value: set[str] = set()
-        _allowed_var.set(value)
-        return value
+def _session_key() -> str:
+    ctx = current_tool_context.get()
+    key = getattr(ctx, "session_key", None) if ctx is not None else None
+    return key or _DEFAULT_SESSION
+
+
+def _allowed(*, create: bool = True) -> set[str]:
+    key = _session_key()
+    existing = _registry.get(key)
+    if existing is not None:
+        _registry.move_to_end(key)
+        return existing
+    if not create:
+        return set()
+    value: set[str] = set()
+    _registry[key] = value
+    while len(_registry) > _MAX_SESSIONS:
+        _registry.popitem(last=False)
+    return value
 
 
 #: Names AgentOS reads to decide how much the agent may do, or where its state
@@ -148,6 +176,11 @@ def agentos_managed_credentials() -> frozenset[str]:
 
         log.warning("env_passthrough.catalog_unavailable_failing_closed", exc_info=True)
         names.update(key for key in os.environ if env_policy.is_secret_name(key))
+        # Not cached. This branch is a degraded guess taken from whatever the
+        # environment happened to hold at one moment; caching it would freeze
+        # a transient import failure into the answer for the rest of the
+        # process, and miss every variable set afterwards.
+        return frozenset(names)
 
     _managed_cache = frozenset(names)
     return _managed_cache
@@ -193,12 +226,15 @@ def register_env_passthrough(names: Iterable[str], *, trusted: bool = False) -> 
 
 def is_env_passthrough(name: str) -> bool:
     """Return whether *name* was allowed through for this session."""
-    return name in _allowed()
+    return name in _allowed(create=False)
 
 
-def clear_env_passthrough() -> None:
-    """Forget every registration. Called when a session resets."""
-    _allowed().clear()
+def clear_env_passthrough(*, all_sessions: bool = False) -> None:
+    """Forget registrations for this session, or for every session."""
+    if all_sessions:
+        _registry.clear()
+        return
+    _registry.pop(_session_key(), None)
 
 
 def stripped_from_subprocess_env() -> frozenset[str]:

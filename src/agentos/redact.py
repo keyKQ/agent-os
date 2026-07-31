@@ -41,6 +41,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from collections.abc import Iterable, Mapping
 
 __all__ = [
     "is_env_dump_command",
@@ -207,6 +208,20 @@ _REFERENCE_VALUE_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+#: A filesystem path or URL assigned to a credential-named key says *where* the
+#: credential lives, which is the same kind of pointer as ``$VAR``.
+#: ``GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/creds.json`` and
+#: ``api_key_file=./certs/server.pem`` are configuration, not leaks.
+_LOCATION_VALUE_RE = re.compile(
+    r"""^(?:
+        [~.]{0,2}/          # /abs, ./rel, ../rel, ~/home
+      | [A-Za-z]:[\\/]      # C:\ or C:/
+      | \\\\                # \\unc\share
+      | [a-z][a-z0-9+.\-]*://
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
 #: Below this length a value carries too little entropy to be worth blocking,
 #: and short placeholders ("KEY", "abc") are common in documentation.
 _MIN_SECRET_VALUE_LEN = 12
@@ -217,7 +232,11 @@ def _is_reference_value(value: str) -> bool:
     stripped = value.strip().strip("\"'")
     if not stripped:
         return True
-    return bool(_REFERENCE_VALUE_RE.match(stripped))
+    if _REFERENCE_VALUE_RE.match(stripped):
+        return True
+    # A path or URL is a location, unless it carries userinfo — in
+    # ``https://user:token@host`` the credential is right there in the value.
+    return bool(_LOCATION_VALUE_RE.match(stripped)) and "@" not in stripped
 
 
 def _is_secret_literal_value(value: str) -> bool:
@@ -330,7 +349,32 @@ def credential_text_marker(text: str | None) -> str | None:
     return None
 
 
-def secret_header_marker(headers: dict[str, str] | None) -> str | None:
+def _iter_header_values(headers: object) -> list[str]:
+    """Return header values from whatever shape the caller passed.
+
+    A mapping is the documented form, but a list of ``(name, value)`` pairs is
+    equally valid to the HTTP client underneath. Assuming the mapping raised
+    ``AttributeError`` on the pair form — a guard that crashes instead of
+    inspecting is a guard that stopped reading its input.
+    """
+    if isinstance(headers, Mapping):
+        return [value for value in headers.values() if isinstance(value, str)]
+    if isinstance(headers, str | bytes):
+        return []
+    if isinstance(headers, Iterable):
+        values: list[str] = []
+        for item in headers:
+            if isinstance(item, str | bytes):
+                continue
+            if isinstance(item, Iterable):
+                parts = list(item)
+                if len(parts) == 2 and isinstance(parts[1], str):
+                    values.append(parts[1])
+        return values
+    return []
+
+
+def secret_header_marker(headers: object) -> str | None:
     """Return a marker when a header **value** carries credential material.
 
     Header *names* are not evidence. ``Authorization`` and ``x-api-key`` are how
@@ -340,9 +384,7 @@ def secret_header_marker(headers: dict[str, str] | None) -> str | None:
     """
     if not headers:
         return None
-    for value in headers.values():
-        if not isinstance(value, str):
-            continue
+    for value in _iter_header_values(headers):
         marker = secret_literal_marker(value)
         if marker is not None:
             return marker

@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from agentos.tools import env_passthrough
+from agentos.tools.types import ToolContext, current_tool_context
 
 
 @pytest.fixture(autouse=True)
 def _isolate_registry() -> None:
-    env_passthrough.clear_env_passthrough()
+    env_passthrough.clear_env_passthrough(all_sessions=True)
     env_passthrough.reset_managed_credentials_cache()
     yield
-    env_passthrough.clear_env_passthrough()
+    env_passthrough.clear_env_passthrough(all_sessions=True)
     env_passthrough.reset_managed_credentials_cache()
 
 
@@ -98,6 +101,79 @@ class TestRegistration:
         assert "TAVILY_API_KEY" in managed  # search
         assert "ELEVENLABS_API_KEY" in managed  # audio
         assert "GITHUB_TOKEN" not in managed  # the user's own
+
+
+class TestRegistrationSurvivesTheToolBoundary:
+    """A registration is only useful if the *next* tool call can see it.
+
+    Every tool call runs in its own asyncio task, and a task gets a copy of the
+    context — so anything stored per-context in the ``skill_view`` call is
+    invisible to the ``execute_code`` call that follows. Registering in one
+    task and reading in the same task, as a naive test does, hides that
+    completely.
+    """
+
+    @staticmethod
+    def _in_session(session_key: str, fn):
+        async def run():
+            current_tool_context.set(ToolContext(session_key=session_key))
+            return fn()
+
+        return run
+
+    def test_a_later_tool_call_sees_it(self) -> None:
+        async def scenario() -> tuple[bool, bool]:
+            registered = await asyncio.create_task(
+                self._in_session(
+                    "s1", lambda: env_passthrough.register_env_passthrough(["CAP_API_KEY"]) == []
+                )()
+            )
+            seen = await asyncio.create_task(
+                self._in_session("s1", lambda: env_passthrough.is_env_passthrough("CAP_API_KEY"))()
+            )
+            return registered, seen
+
+        registered, seen = asyncio.run(scenario())
+        assert registered
+        assert seen, "a skill's declaration must survive to the tool it exists to serve"
+
+    def test_another_session_does_not_see_it(self) -> None:
+        async def scenario() -> bool:
+            await asyncio.create_task(
+                self._in_session(
+                    "s1", lambda: env_passthrough.register_env_passthrough(["CAP_API_KEY"])
+                )()
+            )
+            return await asyncio.create_task(
+                self._in_session("s2", lambda: env_passthrough.is_env_passthrough("CAP_API_KEY"))()
+            )
+
+        assert asyncio.run(scenario()) is False
+
+    def test_old_sessions_are_evicted_rather_than_accumulating(self) -> None:
+        async def scenario() -> tuple[bool, bool]:
+            for index in range(env_passthrough._MAX_SESSIONS + 5):
+                await asyncio.create_task(
+                    self._in_session(
+                        f"s{index}",
+                        lambda: env_passthrough.register_env_passthrough(["CAP_API_KEY"]),
+                    )()
+                )
+            oldest = await asyncio.create_task(
+                self._in_session("s0", lambda: env_passthrough.is_env_passthrough("CAP_API_KEY"))()
+            )
+            newest = await asyncio.create_task(
+                self._in_session(
+                    f"s{env_passthrough._MAX_SESSIONS + 4}",
+                    lambda: env_passthrough.is_env_passthrough("CAP_API_KEY"),
+                )()
+            )
+            return oldest, newest
+
+        oldest, newest = asyncio.run(scenario())
+        assert newest
+        assert not oldest
+        assert len(env_passthrough._registry) <= env_passthrough._MAX_SESSIONS
 
 
 def test_sandboxed_code_sees_registered_names(monkeypatch: pytest.MonkeyPatch) -> None:
