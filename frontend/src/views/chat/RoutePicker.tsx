@@ -138,8 +138,7 @@ export function RoutePicker({ route }: RoutePickerProps) {
     if (!needle) return all
     return all.filter(
       (row) =>
-        row.primary.toLowerCase().includes(needle) ||
-        row.secondary.toLowerCase().includes(needle),
+        row.primary.toLowerCase().includes(needle) || row.secondary.toLowerCase().includes(needle),
     )
   }, [route.tiers, route.models, query])
 

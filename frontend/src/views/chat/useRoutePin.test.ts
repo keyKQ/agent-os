@@ -105,9 +105,7 @@ describe('useRoutePin', () => {
     await waitFor(() => expect(result.current.models).toHaveLength(2))
 
     rerender({ key: 'agent:main:two' })
-    await waitFor(() =>
-      expect(calls.filter((c) => c.method === 'router.hold.get')).toHaveLength(2),
-    )
+    await waitFor(() => expect(calls.filter((c) => c.method === 'router.hold.get')).toHaveLength(2))
 
     expect(calls.filter((c) => c.method === 'models.list')).toHaveLength(1)
   })
@@ -144,9 +142,7 @@ describe('useRoutePin', () => {
     const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
     await waitFor(() => expect(result.current.enabled).toBe(true))
 
-    act(() =>
-      emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }),
-    )
+    act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
 
     expect(result.current.imageOverride).toBe(true)
   })

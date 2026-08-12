@@ -229,9 +229,7 @@ export function useRoutePin(
         .then((res: unknown) => {
           const model = (res as { model?: string })?.model
           setHold((prev) =>
-            prev.session === forSession
-              ? { ...prev, pinned: target, pinnedModel: null }
-              : prev,
+            prev.session === forSession ? { ...prev, pinned: target, pinnedModel: null } : prev,
           )
           toast.info(t('chat.routePinned', { target: target + (model ? ' → ' + model : '') }))
         })
@@ -257,9 +255,7 @@ export function useRoutePin(
         .call('router.hold.set', { key: forSession, model: target })
         .then(() => {
           setHold((prev) =>
-            prev.session === forSession
-              ? { ...prev, pinned: null, pinnedModel: target }
-              : prev,
+            prev.session === forSession ? { ...prev, pinned: null, pinnedModel: target } : prev,
           )
           toast.info(t('chat.routePinned', { target }))
         })
