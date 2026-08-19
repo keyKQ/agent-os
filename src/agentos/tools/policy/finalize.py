@@ -29,6 +29,7 @@ from agentos.result_budget import (
     ToolRunBudgetExceededError,
     resolve_budget_class,
 )
+from agentos.ask_user import ask_user_payload_terminates_turn
 from agentos.router_control import router_control_payload_terminates_turn
 from agentos.tool_boundary import ToolCall, ToolResult
 from agentos.tools.envelope import build_tool_failure_envelope, is_denial_payload
@@ -263,5 +264,12 @@ async def finalize(
         terminates_turn=(
             call.tool_name == "router_control"
             and router_control_payload_terminates_turn(content)
+        )
+        or (
+            # ask_user follows an end-turn-and-resume contract: presenting
+            # the question ends the turn; the answer is the next user message.
+            call.tool_name == "ask_user"
+            and not is_error
+            and ask_user_payload_terminates_turn(content)
         ),
     )
