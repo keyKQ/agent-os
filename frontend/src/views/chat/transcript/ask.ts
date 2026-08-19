@@ -120,6 +120,36 @@ export function composeAskAnswer(
   return lines.join('\n')
 }
 
+/**
+ * Mark ask cards that already have a user message after them as answered and
+ * disable their controls. History reconstruction rebuilds bubbles from
+ * persisted segments, so a card that was answered in a previous turn would
+ * otherwise come back active.
+ */
+export function lockAnsweredAskCards(container: HTMLElement): void {
+  container
+    .querySelectorAll<HTMLElement>('.chat-ask-card:not(.chat-ask-card--answered)')
+    .forEach((card) => {
+      const row = card.closest<HTMLElement>('.msg')
+      if (!row) return
+      let el = row.nextElementSibling
+      while (el) {
+        const isUserRow =
+          el.classList.contains('user') || el.getAttribute('data-history-role') === 'user'
+        if (isUserRow) {
+          card.classList.add('chat-ask-card--answered')
+          card
+            .querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')
+            .forEach((c) => {
+              c.disabled = true
+            })
+          return
+        }
+        el = el.nextElementSibling
+      }
+    })
+}
+
 /* ── Imperative DOM builder (composed by the tool renderer) ─────────────── */
 
 export function buildAskCardDOM(

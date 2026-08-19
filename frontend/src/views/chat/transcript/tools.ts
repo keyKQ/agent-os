@@ -831,6 +831,23 @@ export function createToolRenderer(deps: ToolRendererDeps) {
               }
             }
           }
+
+          // ask_user: rebuild the interactive question card. The post-stream
+          // history resync replaces the live bubble with this reconstruction,
+          // so without this branch the card only exists for the seconds
+          // between the tool result and the resync. Cards answered in earlier
+          // turns are locked afterwards by lockAnsweredAskCards (history.ts).
+          if (resultToolName === 'ask_user' && !isError) {
+            const questions = parseAskQuestions({
+              tool_name: 'ask_user',
+              result: content,
+            } as StreamEventPayload)
+            if (questions && !body.querySelector(`[data-ask-for="${toolId}"]`)) {
+              const askCard = buildAskCardDOM(questions, deps.sendUserAnswer)
+              if (toolId) askCard.setAttribute('data-ask-for', toolId)
+              body.appendChild(askCard)
+            }
+          }
         }
       }
     } catch {
