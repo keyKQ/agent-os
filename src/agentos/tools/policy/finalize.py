@@ -18,6 +18,7 @@ from typing import Any
 
 import structlog
 
+from agentos.ask_user import ask_user_payload_terminates_turn
 from agentos.execution_status import (
     derive_is_error,
     execution_status_for_tool_result,
@@ -29,7 +30,6 @@ from agentos.result_budget import (
     ToolRunBudgetExceededError,
     resolve_budget_class,
 )
-from agentos.ask_user import ask_user_payload_terminates_turn
 from agentos.router_control import router_control_payload_terminates_turn
 from agentos.tool_boundary import ToolCall, ToolResult
 from agentos.tools.envelope import build_tool_failure_envelope, is_denial_payload
