@@ -380,3 +380,49 @@ def test_direct_url_payload_swallows_malformed_json(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(importlib.metadata, "distribution", lambda dist: _Dist())
     assert im._direct_url_payload("use-agent-os") is None
+
+
+# --- desktop app bundle ----------------------------------------------------
+#
+# The desktop shell's bundled runtime is a genuine site-packages tree, so every
+# path-based rule above classifies it as pip. These cover the env-var marker the
+# shell sets to say otherwise, and the upgrade plan that follows from it.
+
+
+def test_desktop_marker_wins_over_the_site_packages_path() -> None:
+    assert (
+        im.detect_install_method(
+            executable="/Applications/AgentOS.app/Contents/Resources/resources/runtime/"
+            "python/bin/python3.12",
+            package_dir=Path(
+                "/Applications/AgentOS.app/Contents/Resources/resources/runtime/python/"
+                "lib/python3.12/site-packages/agentos"
+            ),
+            env={im.DESKTOP_MARKER_ENV: "desktop"},
+        )
+        == InstallMethod.DESKTOP
+    )
+
+
+def test_desktop_marker_does_not_mask_an_editable_checkout_for_other_values() -> None:
+    # Only the exact marker is honoured; anything else falls through to the
+    # normal path-based classification rather than silently disabling upgrades.
+    assert (
+        im.detect_install_method(
+            executable="/home/u/venv/bin/python",
+            package_dir=Path("/home/u/venv/lib/python3.12/site-packages/agentos"),
+            env={im.DESKTOP_MARKER_ENV: "Desktop App"},
+        )
+        == InstallMethod.PIP
+    )
+
+
+def test_desktop_upgrade_plan_points_at_the_app_not_pip() -> None:
+    plan = im.build_upgrade_plan(method=InstallMethod.DESKTOP, env={})
+
+    assert plan.method is InstallMethod.DESKTOP
+    assert not plan.delegated
+    # Replacing packages inside a signed app bundle is never the right advice.
+    assert "pip" not in plan.manual_hint
+    assert "Check for Updates" in plan.manual_hint
+    assert plan.command == []

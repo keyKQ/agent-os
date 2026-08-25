@@ -51,7 +51,17 @@ class InstallMethod(StrEnum):
     PIPX = "pipx"
     PIP = "pip"
     EDITABLE = "editable"
+    DESKTOP = "desktop"
     UNKNOWN = "unknown"
+
+
+# Set by the desktop app's supervisor on every gateway it spawns. The bundled
+# runtime is a real site-packages tree inside a (often read-only, always
+# code-signed) application bundle, so every path-based classification below
+# would call it a pip install and hand the operator a ``pip install --upgrade``
+# that either fails on permissions or breaks the app's signature. The shell
+# knows what it is, so it says so rather than leaving it to be inferred.
+DESKTOP_MARKER_ENV = "AGENTOS_INSTALL_METHOD"
 
 
 @dataclass(frozen=True)
@@ -212,6 +222,13 @@ def detect_install_method(
     exe = raw_exe.resolve()
     pkg_dir = package_dir if package_dir is not None else _package_location()
 
+    # The desktop shell declares itself before anything is inferred: its
+    # bundled runtime is indistinguishable from a pip install by path alone.
+    # Only the exact value is honoured, so a stray or misspelled export falls
+    # through to detection rather than silently disabling upgrades.
+    if environ.get(DESKTOP_MARKER_ENV, "").strip() == InstallMethod.DESKTOP:
+        return InstallMethod.DESKTOP
+
     # Editable / source checkout first: it can otherwise masquerade as pip.
     if _looks_editable(pkg_dir):
         return InstallMethod.EDITABLE
@@ -358,6 +375,22 @@ def build_upgrade_plan(
             tool=None,
             command=["pipx", *pipx_argv],
             manual_hint=pipx_hint,
+        )
+
+    if resolved_method is InstallMethod.DESKTOP:
+        # The runtime lives inside the application bundle. Replacing packages
+        # in place would break the bundle's code signature on macOS and be
+        # reverted by the next app update anyway, so the only correct upgrade
+        # is the app's own — which ships the matching runtime with it.
+        return UpgradePlan(
+            method=resolved_method,
+            delegated=False,
+            tool=None,
+            command=[],
+            manual_hint=(
+                "running inside the AgentOS desktop app — upgrade the app itself "
+                "from its tray menu: Check for Updates…"
+            ),
         )
 
     if resolved_method is InstallMethod.EDITABLE:

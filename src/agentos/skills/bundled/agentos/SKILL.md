@@ -309,7 +309,10 @@ rebuilds the React control UI before installing, and a PyPI wheel already ships
 a CI-built one. A checkout-backed install gets an informational note naming that
 directory and the script; it never blocks. For pip / editable / unknown installs
 it prints the exact manual command and exits non-zero (**exit 3**) rather than
-faking it; a failed or unverifiable upgrade is **exit 1**. Flags: `--timeout`
+faking it; a failed or unverifiable upgrade is **exit 1**. Inside the desktop
+app the method is `desktop` (the shell exports `AGENTOS_INSTALL_METHOD=desktop`)
+and the hint points at the app's own **Check for Updates…** — its runtime lives
+in the application bundle, so no package-level upgrade is valid. Flags: `--timeout`
 (subprocess bound, default 600s; kills the process group on timeout),
 `--config`, `--json` (adds `sourceDirectory`).
 
