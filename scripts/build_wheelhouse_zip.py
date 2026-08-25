@@ -510,9 +510,23 @@ def extract_python_runtime_archive(archive_path: Path, runtime_root: Path) -> No
         shutil.rmtree(extract_dir, ignore_errors=True)
 
 
+def portable_site_packages_dirs(runtime_root: Path) -> tuple[Path, ...]:
+    """Every site-packages directory a python-build-standalone tree may use.
+
+    The Windows ``install_only`` layout keeps ``Lib/site-packages`` next to
+    ``python.exe``; the macOS/Linux layout versions it as
+    ``lib/python3.12/site-packages``. Returning both keeps callers from
+    hard-coding one platform's spelling — the Windows release path predates
+    the desktop bundle and only ever saw the first form.
+    """
+
+    candidates = [runtime_root / "Lib" / "site-packages"]
+    candidates.extend(sorted((runtime_root / "lib").glob("python3.*/site-packages")))
+    return tuple(path for path in candidates if path.is_dir())
+
+
 def prune_portable_runtime(runtime_root: Path) -> None:
-    site_packages = runtime_root / "Lib" / "site-packages"
-    if site_packages.is_dir():
+    for site_packages in portable_site_packages_dirs(runtime_root):
         removable_names = {
             "_distutils_hack",
             "pip",
@@ -546,18 +560,18 @@ def prune_portable_runtime(runtime_root: Path) -> None:
             pyc.unlink()
 
 
-def install_portable_wheelhouse(release_root: Path) -> None:
-    """Preinstall wheelhouse contents into the bundled Python runtime.
+def install_wheels_into_site_packages(package_dir: Path, site_packages: Path) -> None:
+    """Unpack every wheel in ``package_dir`` into ``site_packages``.
 
-    Portable zips should start like an app, not like a package manager. Avoid
-    runtime venv/ensurepip/pip work on user machines; Windows PowerShell and
-    antivirus hooks can make that path look hung even when the wheels are local.
+    Only ``purelib`` / ``platlib`` payloads are taken from a wheel's ``.data``
+    tree: console scripts are deliberately skipped, so callers launch the CLI
+    as ``python -m agentos.cli.main`` rather than through a generated shim.
+
+    Wheel members carry their POSIX mode in the high bits of ``external_attr``.
+    Extension modules and bundled helper binaries lose their executable bit
+    without this, which only shows up later as a permission error at import
+    time on macOS/Linux.
     """
-
-    package_dir = release_root / "packages"
-    site_packages = release_root / "runtime" / "python" / "Lib" / "site-packages"
-    if not package_dir.is_dir() or not site_packages.is_dir():
-        raise SystemExit("Portable wheelhouse preinstall requires packages and site-packages.")
 
     for wheel_path in sorted(package_dir.glob("*.whl")):
         with zipfile.ZipFile(wheel_path) as wheel:
@@ -580,6 +594,25 @@ def install_portable_wheelhouse(release_root: Path) -> None:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with wheel.open(info) as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
+                mode = info.external_attr >> 16
+                if os.name != "nt" and mode:
+                    target.chmod(mode & 0o7777)
+
+
+def install_portable_wheelhouse(release_root: Path) -> None:
+    """Preinstall wheelhouse contents into the bundled Python runtime.
+
+    Portable zips should start like an app, not like a package manager. Avoid
+    runtime venv/ensurepip/pip work on user machines; Windows PowerShell and
+    antivirus hooks can make that path look hung even when the wheels are local.
+    """
+
+    package_dir = release_root / "packages"
+    site_packages_dirs = portable_site_packages_dirs(release_root / "runtime" / "python")
+    if not package_dir.is_dir() or not site_packages_dirs:
+        raise SystemExit("Portable wheelhouse preinstall requires packages and site-packages.")
+
+    install_wheels_into_site_packages(package_dir, site_packages_dirs[0])
 
 
 def render_install_sh(
