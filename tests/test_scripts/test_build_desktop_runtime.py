@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -232,6 +233,11 @@ def test_verify_rejects_a_runtime_without_the_control_ui(module, tmp_path: Path)
         module.verify_desktop_runtime(root, run_import_probe=False)
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows has no POSIX execute bit: chmod cannot clear it and os.access(X_OK) "
+    "is true for any existing file, which is why the check itself is POSIX-only.",
+)
 def test_verify_rejects_a_non_executable_interpreter(module, tmp_path: Path) -> None:
     root = build_runtime_tree(module, tmp_path)
     (root / "runtime" / "python" / "bin" / "python3.12").chmod(0o644)
