@@ -1,0 +1,265 @@
+name: Desktop Release Assets
+
+# Builds the AgentOS desktop app for every supported platform and attaches the
+# installers to the tag's GitHub release.
+#
+# Each job bundles its own Python runtime, so the wheelhouse must be resolved on
+# the target platform -- `pip wheel` picks dependency wheels by the *host*
+# platform's markers. That is why there is one runner per target rather than one
+# cross-compiling job.
+
+"on":
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional existing tag to upload artifacts to
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+  # Kept in step with scripts/build_wheelhouse_zip.py's defaults; both bundle
+  # the same interpreter so a desktop install and a portable zip behave alike.
+  PYTHON_RUNTIME_RELEASE: "20260414"
+  PYTHON_RUNTIME_VERSION: "3.12.13"
+
+jobs:
+  build:
+    name: ${{ matrix.platform_tag }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            platform_tag: macos-arm64
+          - runner: macos-13
+            platform_tag: macos-x64
+          - runner: windows-latest
+            platform_tag: windows-x64
+          - runner: ubuntu-22.04
+            platform_tag: linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+          ref: ${{ env.RELEASE_TAG != '' && env.RELEASE_TAG || github.ref }}
+
+      - name: Hydrate embedding and router assets
+        shell: bash
+        run: |
+          git lfs pull --include="src/agentos/memory/models/**"
+          git lfs pull --include="src/agentos/agentos_router/models/**"
+
+      - name: Verify LFS assets are hydrated
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # An unhydrated pointer is ~130 bytes of text that imports fine and
+          # then degrades every turn at runtime, so it has to fail here.
+          roots = [
+              Path("src/agentos/memory/models"),
+              Path("src/agentos/agentos_router/models"),
+          ]
+          for root in roots:
+              for path in root.rglob("*"):
+                  if not path.is_file():
+                      continue
+                  prefix = path.read_bytes()[:64]
+                  assert not prefix.startswith(b"version https://git-lfs.github.com/spec/v1"), (
+                      f"LFS pointer not hydrated: {path}"
+                  )
+          PY
+
+      - name: Install Linux webview toolchain
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            fuse \
+            libfuse2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Check tag version
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          version="$(python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "${tag_version}" != "${version}" ]]; then
+            echo "Tag ${RELEASE_TAG} does not match project version ${version}" >&2
+            exit 1
+          fi
+
+      - name: Build the bundled runtime
+        shell: bash
+        run: |
+          python scripts/build_desktop_runtime.py build \
+            --platform-tag "${{ matrix.platform_tag }}" \
+            --python-runtime-release "${PYTHON_RUNTIME_RELEASE}" \
+            --python-runtime-version "${PYTHON_RUNTIME_VERSION}"
+
+      - name: Report bundle size
+        shell: bash
+        run: du -sh desktop/src-tauri/resources
+
+      # Signed before bundling, not after: Tauri's signature goes over an
+      # already-signed resource tree, and codesign cannot seal unsigned nested
+      # Mach-O binaries. See scripts/sign_macos_runtime.sh.
+      - name: Sign the bundled runtime
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Import into a throwaway keychain so the certificate never lands in
+          # the runner's login keychain or survives the job.
+          KEYCHAIN="${RUNNER_TEMP}/agentos-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          echo "${APPLE_CERTIFICATE}" | base64 --decode > "${RUNNER_TEMP}/certificate.p12"
+          security import "${RUNNER_TEMP}/certificate.p12" \
+            -k "${KEYCHAIN}" -P "${APPLE_CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" >/dev/null
+          security list-keychain -d user -s "${KEYCHAIN}" login.keychain-db
+          rm -f "${RUNNER_TEMP}/certificate.p12"
+
+          bash scripts/sign_macos_runtime.sh "${APPLE_SIGNING_IDENTITY}"
+
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build installers
+        working-directory: desktop/src-tauri
+        shell: bash
+        env:
+          # Present only on release builds; the shell hides "Check for
+          # Updates…" behind a configured pubkey, so an unsigned build simply
+          # ships without in-app updates rather than failing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          args=()
+          if [[ -n "${TAURI_UPDATER_PUBKEY}" ]]; then
+            # Updater artifacts and their signatures are only produced when the
+            # release actually has a key to sign them with.
+            args+=(--config "{\"bundle\":{\"createUpdaterArtifacts\":true},\"plugins\":{\"updater\":{\"pubkey\":\"${TAURI_UPDATER_PUBKEY}\",\"endpoints\":[\"https://github.com/use-agent-os/agent-os/releases/latest/download/latest.json\"]}}}")
+          fi
+          cargo tauri build "${args[@]}"
+
+      - name: Collect installers
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          # One flat directory per platform, so the release step does not have
+          # to know each bundler's output layout.
+          bundle = Path("desktop/src-tauri/target/release/bundle")
+          out = Path("dist/desktop")
+          out.mkdir(parents=True, exist_ok=True)
+
+          wanted = (".dmg", ".msi", ".exe", ".AppImage", ".deb", ".sig", ".tar.gz", ".zip")
+          found = []
+          for path in sorted(bundle.rglob("*")):
+              if path.is_file() and path.name.endswith(wanted):
+                  shutil.copy2(path, out / path.name)
+                  found.append(path.name)
+
+          assert found, f"no installers produced under {bundle}"
+          print("\n".join(found))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"### {os.environ['PLATFORM_TAG']}\n\n")
+              for name in found:
+                  size = (out / name).stat().st_size / (1024 * 1024)
+                  summary.write(f"- `{name}` ({size:.0f} MB)\n")
+          PY
+        env:
+          PLATFORM_TAG: ${{ matrix.platform_tag }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform_tag }}
+          path: dist/desktop/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Attach to release
+    needs: build
+    if: needs.build.result == 'success' && (github.event_name == 'push' || github.event.inputs.tag != '')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: desktop-*
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          shopt -s nullglob
+          assets=(dist/*)
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "no desktop assets to publish" >&2
+            exit 1
+          fi
+          gh release upload "${RELEASE_TAG}" "${assets[@]}" \
+            --repo "${REPO}" --clobber

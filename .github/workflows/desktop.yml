@@ -1,0 +1,89 @@
+name: desktop
+"on":
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "scripts/build_desktop_runtime.py"
+      - "scripts/build_desktop_icon.py"
+      - "scripts/build_wheelhouse_zip.py"
+      - "tests/test_scripts/test_build_desktop_runtime.py"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "scripts/build_desktop_runtime.py"
+      - "scripts/build_desktop_icon.py"
+      - "scripts/build_wheelhouse_zip.py"
+      - "tests/test_scripts/test_build_desktop_runtime.py"
+      - ".github/workflows/desktop.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Compile, lint, and unit-test the shell without building a runtime. The
+  # bundled runtime is hundreds of megabytes per platform and is only needed to
+  # produce an installer, which desktop-release.yml does on a tag.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux webview toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check formatting
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: desktop/src-tauri
+        run: cargo test
+
+      - name: Check the runtime builder and its manifest contract
+        run: |
+          python -m pip install --upgrade uv
+          uv run --extra dev pytest tests/test_scripts/test_build_desktop_runtime.py -q
+
+      - name: Verify the committed icons match their generator
+        # The icon set is committed because CI has no image tooling to
+        # regenerate it, so the source PNG must stay in sync with the script
+        # that produced it.
+        run: |
+          python scripts/build_desktop_icon.py all --icons-dir "${RUNNER_TEMP}/icons"
+          for name in icon-source.png tray.png tray-color.png; do
+            if ! cmp -s "${RUNNER_TEMP}/icons/${name}" "desktop/src-tauri/icons/${name}"; then
+              echo "desktop/src-tauri/icons/${name} is stale." >&2
+              echo "Regenerate with: python scripts/build_desktop_icon.py all" >&2
+              exit 1
+            fi
+          done
