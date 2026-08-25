@@ -38,13 +38,20 @@ jobs:
     name: ${{ matrix.platform_tag }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    env:
+      # Job level, not step level: a step's `if` can read the `env` context but
+      # not `secrets`, so a signing step that wants to skip itself when no
+      # certificate is configured has to test the value from here.
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             platform_tag: macos-arm64
-          - runner: macos-13
+          # Intel macOS is a distinct runner image, not a cross-compile: the
+          # wheelhouse has to resolve against the host's platform markers.
+          - runner: macos-15-intel
             platform_tag: macos-x64
           - runner: windows-latest
             platform_tag: windows-x64
@@ -146,13 +153,11 @@ jobs:
       # already-signed resource tree, and codesign cannot seal unsigned nested
       # Mach-O binaries. See scripts/sign_macos_runtime.sh.
       - name: Sign the bundled runtime
-        # Gated on `secrets`, not `env`: a step's own `env:` block is not
-        # reliably in scope for that step's `if`, so keying the condition off
-        # the secret directly is what makes "no certificate configured" mean
-        # "skip signing" rather than "silently never sign even when set".
-        if: runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY != ''
+        # Reads the job-level env, which is where APPLE_SIGNING_IDENTITY has to
+        # live: the `secrets` context is not available in a step `if` at all,
+        # and a step's own `env:` block is not in scope for its own condition.
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
         env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
@@ -185,7 +190,6 @@ jobs:
           # ships without in-app updates rather than failing.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
