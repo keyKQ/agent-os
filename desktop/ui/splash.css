@@ -1,0 +1,119 @@
+/* Brand tokens are the Control UI's own (frontend/src/styles/globals.css), so
+   the splash and the console it hands off to read as one product. */
+:root {
+  --background: #060608;
+  --surface: #0e0e13;
+  --foreground: #ececef;
+  --dim: #93939e;
+  --signal: #ccff00;
+  --danger: #f87171;
+  --hairline: #21212a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu,
+    system-ui, sans-serif;
+  /* The window is undecorated, so the whole surface is the drag handle. */
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+.splash {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 32px;
+  text-align: center;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.mark {
+  width: 56px;
+  height: 56px;
+  color: var(--signal);
+  margin-bottom: 4px;
+}
+
+.headline {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.detail {
+  margin: 0;
+  color: var(--dim);
+  min-height: 2.6em;
+}
+
+.log {
+  margin: 0;
+  color: var(--dim);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  /* A path is the one thing here worth copying out of the window. */
+  -webkit-user-select: text;
+  user-select: text;
+  word-break: break-all;
+}
+
+/* Indeterminate: the gateway reports readiness as a step change, not a
+   percentage, so a filling bar would be inventing progress it cannot know. */
+.progress {
+  width: 180px;
+  height: 2px;
+  overflow: hidden;
+  background: var(--hairline);
+}
+
+.progress span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: var(--signal);
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.splash[data-phase="failed"] .mark {
+  color: var(--danger);
+}
+
+.splash[data-phase="failed"] .progress {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress span {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}

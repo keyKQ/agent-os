@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AgentOS</title>
+    <link rel="stylesheet" href="/splash.css" />
+  </head>
+  <body>
+    <main class="splash" aria-live="polite">
+      <svg class="mark" viewBox="0 0 1024 1024" role="img" aria-label="AgentOS">
+        <g fill="currentColor">
+          <circle cx="512" cy="520" r="124" />
+          <circle cx="512" cy="244" r="62" />
+          <circle cx="262" cy="714" r="56" />
+          <circle cx="762" cy="714" r="56" />
+        </g>
+        <g stroke="currentColor" stroke-width="30" stroke-linecap="round">
+          <line x1="512" y1="520" x2="512" y2="244" />
+          <line x1="512" y1="520" x2="262" y2="714" />
+          <line x1="512" y1="520" x2="762" y2="714" />
+        </g>
+      </svg>
+
+      <p class="headline" id="headline">Starting AgentOS</p>
+      <p class="detail" id="detail">Preparing the local runtime…</p>
+
+      <div class="progress" id="progress"><span></span></div>
+      <p class="log" id="log" hidden></p>
+    </main>
+    <script src="/splash.js"></script>
+  </body>
+</html>

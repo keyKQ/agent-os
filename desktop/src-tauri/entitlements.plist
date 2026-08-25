@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime exceptions required by the bundled CPython interpreter.
+
+  Without these the app is signed and notarized but crashes on first launch:
+  CPython dlopen()s extension modules (.so) that are not part of the main
+  executable's signature, and onnxruntime — which the router and local
+  embeddings both use — allocates executable memory for its kernels.
+
+  Each exception is the narrowest one that still lets the interpreter run;
+  no app-sandbox entitlement is requested, because the agent legitimately
+  reads and writes the user's files on their behalf.
+-->
+<plist version="1.0">
+<dict>
+    <!-- CPython loads .so extension modules that are signed separately from
+         the main binary. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- onnxruntime JITs kernels for the Pilot Router and local embeddings. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- The supervisor passes PYTHONHOME/PYTHONPATH to the bundled runtime. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>
