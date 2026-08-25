@@ -146,7 +146,11 @@ jobs:
       # already-signed resource tree, and codesign cannot seal unsigned nested
       # Mach-O binaries. See scripts/sign_macos_runtime.sh.
       - name: Sign the bundled runtime
-        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
+        # Gated on `secrets`, not `env`: a step's own `env:` block is not
+        # reliably in scope for that step's `if`, so keying the condition off
+        # the secret directly is what makes "no certificate configured" mean
+        # "skip signing" rather than "silently never sign even when set".
+        if: runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY != ''
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
