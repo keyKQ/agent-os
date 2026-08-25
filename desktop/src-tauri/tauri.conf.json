@@ -39,6 +39,7 @@
     ],
     "createUpdaterArtifacts": false,
     "macOS": {
+      "signingIdentity": "-",
       "entitlements": "entitlements.plist",
       "minimumSystemVersion": "11.0",
       "dmg": {

@@ -17,6 +17,16 @@ use tauri_plugin_updater::UpdaterExt;
 
 const TITLE: &str = "AgentOS";
 
+/// Managed once the updater plugin has registered successfully.
+///
+/// Its presence is the only safe signal that `app.updater()` may be called:
+/// that accessor resolves the plugin's managed state and **panics** when the
+/// plugin is absent. With `panic = "abort"` in the release profile, a panic on
+/// the update-check task takes the whole app down at launch — so a release
+/// built with a malformed endpoint or public key would crash for every user,
+/// not merely fail to find updates.
+struct UpdaterReady;
+
 /// True when this build was packaged with a signing key for update artifacts.
 pub fn is_configured(app: &AppHandle) -> bool {
     serde_json::to_value(&app.config().plugins)
@@ -39,14 +49,26 @@ pub fn install_plugin(app: &AppHandle) {
         log::info!("no updater configuration; in-app updates are disabled for this build");
         return;
     }
-    if let Err(error) = app.plugin(tauri_plugin_updater::Builder::new().build()) {
-        log::error!("could not initialize the updater: {error}");
+    match app.plugin(tauri_plugin_updater::Builder::new().build()) {
+        // Registration can still fail on a configuration the deserializer
+        // rejects — an endpoint that is not https, a malformed public key. That
+        // must degrade to "no in-app updates", never to a crash, so nothing
+        // marks the updater ready and every caller below stays away from it.
+        Err(error) => log::error!("could not initialize the updater: {error}"),
+        Ok(()) => {
+            app.manage(UpdaterReady);
+        }
     }
+}
+
+/// True when the plugin registered and `app.updater()` is safe to call.
+fn is_available(app: &AppHandle) -> bool {
+    app.try_state::<UpdaterReady>().is_some()
 }
 
 /// Check once at launch, prompting only when there is something to install.
 pub fn check_on_startup(app: AppHandle) {
-    if !is_configured(&app) {
+    if !is_available(&app) {
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -60,7 +82,10 @@ pub fn check_on_startup(app: AppHandle) {
 
 /// Check because the user asked, which means every outcome needs a dialog.
 pub fn check_interactively(app: AppHandle) {
-    if !is_configured(&app) {
+    if !is_available(&app) {
+        // Same wording whether the build carries no updater configuration or
+        // carries one the plugin refused: from here the two are the same
+        // outcome, and the refusal is already in the log with its reason.
         message(
             &app,
             "This build does not receive automatic updates.\n\nInstall a release build from \
@@ -92,6 +117,15 @@ async fn fetch(
 fn prompt(app: AppHandle, update: tauri_plugin_updater::Update) {
     let version = update.version.clone();
     let handle = app.clone();
+
+    // Reaching here means the endpoint answered, the payload parsed, and its
+    // signature verified against the built-in public key -- everything that can
+    // fail silently before a user ever sees a dialog.
+    log::info!(
+        "update {} available (currently {})",
+        version,
+        update.current_version
+    );
 
     app.dialog()
         .message(format!(

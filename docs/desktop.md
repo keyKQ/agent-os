@@ -86,11 +86,16 @@ them. Nothing about the app is different because of it — the operating system
 simply has no third party vouching for who built the download, so it warns you
 the first time you open it.
 
-**macOS.** The app is ad-hoc signed (which is all that is needed to *run* on
-Apple silicon) but not notarized, so Gatekeeper blocks a copy downloaded through
-a browser. Depending on the macOS version the message is *"Apple could not
-verify AgentOS is free of malware"* or *"AgentOS is damaged and can't be
-opened"* — the second wording is misleading; nothing is damaged.
+**macOS.** The app is ad-hoc signed — `bundle.macOS.signingIdentity` is `"-"` —
+but not notarized, so Gatekeeper blocks a copy downloaded through a browser with
+*"Apple could not verify AgentOS is free of malware"*.
+
+The ad-hoc signature is worth the line of config it costs. Without it the bundle
+ships with a linker signature on the main binary and no seal over its resources,
+which macOS reports not as *unsigned* but as **damaged** — and that dialog
+offers only "Move to Trash", with no way through. A coherent ad-hoc seal
+produces the ordinary unverified-developer dialog instead, which the steps below
+clear.
 
 To open it:
 
@@ -160,7 +165,22 @@ downloads.
 
 Builds that ship without updater signing (developer builds, and distro packages
 where the system package manager owns updates) say so instead of offering a
-check that cannot work.
+check that cannot work. The same applies if the updater is configured but the
+plugin refuses that configuration — a non-`https` endpoint, a malformed key: the
+reason goes to the log and the app carries on without in-app updates.
+
+Updates are independent of the OS code signing above. They are verified with the
+app's own minisign key, so they work on an unsigned build. Enabling them for a
+release costs nothing but a keypair:
+
+```sh
+cargo tauri signer generate -w ~/.tauri/agentos.key
+```
+
+Add the private key and its password to the repository as
+`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, and the
+public half as `TAURI_UPDATER_PUBKEY`. The release workflow turns on updater
+artifacts only when it finds them.
 
 Inside the app, `agentos upgrade` will tell you to update the app rather than
 handing you a `pip install`: the runtime lives inside the application bundle,

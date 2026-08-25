@@ -191,11 +191,49 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
         run: |
-          args=()
+          overrides='{}'
+          merge() {
+            overrides="$(python - "$overrides" "$1" <<'PY'
+          import json, sys
+
+          def deep_merge(base, extra):
+              for key, value in extra.items():
+                  if isinstance(value, dict) and isinstance(base.get(key), dict):
+                      deep_merge(base[key], value)
+                  else:
+                      base[key] = value
+              return base
+
+          print(json.dumps(deep_merge(json.loads(sys.argv[1]), json.loads(sys.argv[2]))))
+          PY
+          )"
+          }
+
           if [[ -n "${TAURI_UPDATER_PUBKEY}" ]]; then
             # Updater artifacts and their signatures are only produced when the
             # release actually has a key to sign them with.
-            args+=(--config "{\"bundle\":{\"createUpdaterArtifacts\":true},\"plugins\":{\"updater\":{\"pubkey\":\"${TAURI_UPDATER_PUBKEY}\",\"endpoints\":[\"https://github.com/use-agent-os/agent-os/releases/latest/download/latest.json\"]}}}")
+            merge "{\"bundle\":{\"createUpdaterArtifacts\":true},\"plugins\":{\"updater\":{\"pubkey\":\"${TAURI_UPDATER_PUBKEY}\",\"endpoints\":[\"https://github.com/use-agent-os/agent-os/releases/latest/download/latest.json\"]}}}"
+          fi
+
+          # tauri.conf.json pins signingIdentity to "-" (ad-hoc), which is what
+          # ships. A real Developer ID has to override it here rather than rely
+          # on the APPLE_SIGNING_IDENTITY environment variable, because the
+          # config value wins over the environment.
+          if [[ "${RUNNER_OS}" == "macOS" && -n "${APPLE_SIGNING_IDENTITY}" ]]; then
+            merge "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"${APPLE_SIGNING_IDENTITY}\"}}}"
+          fi
+
+          # A merge that produced nothing is a bug, not "no overrides": passing
+          # `--config ""` would fail the build with an unrelated parse error.
+          if [[ -z "${overrides}" ]]; then
+            echo "config merge produced no output" >&2
+            exit 1
+          fi
+
+          args=()
+          if [[ "${overrides}" != "{}" ]]; then
+            echo "tauri config overrides: ${overrides}"
+            args+=(--config "${overrides}")
           fi
           cargo tauri build "${args[@]}"
 
