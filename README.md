@@ -88,18 +88,19 @@ file name.
 
 | Path | Audience | When to use |
 | --- | --- | --- |
+| [Desktop app](#desktop-app-no-python) | Anyone who wants a normal app | No Python needed; double-click to run |
 | [Windows portable](#windows-portable-no-python) | Windows users | No Python needed; just unzip and run |
-| [Quick terminal install](#quick-terminal-install) **(recommended)** | End users on any OS | Install a release from a terminal |
+| [Quick terminal install](#quick-terminal-install) **(recommended for CLI)** | End users on any OS | Install a release from a terminal |
 | [Install from source](#install-from-source) | Users who want the latest `main` code | Run from a Git checkout, but don't edit it |
 | [Develop from source](#develop-from-source) | Contributors | Edit, test, or debug the code |
 
 ### Prerequisites
 
-| Requirement | Windows portable | Quick terminal install | Install from source | Develop from source |
-| --- | :---: | :---: | :---: | :---: |
-| Python 3.12+ | bundled | via `uv` | via `uv` or system | via `uv` |
-| Git + Git LFS | — | — | required | required |
-| `uv` | — | installed if missing | recommended | required |
+| Requirement | Desktop app | Windows portable | Quick terminal install | Install from source | Develop from source |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Python 3.12+ | bundled | bundled | via `uv` | via `uv` or system | via `uv` |
+| Git + Git LFS | — | — | — | required | required |
+| `uv` | — | — | installed if missing | recommended | required |
 
 The default `recommended` profile installs **Pilot Router** — AgentOS's
 own on-device model router (strategy `pilot-v1`) — along with the Python
@@ -128,6 +129,34 @@ it — it just routes every turn to one single model instead.
 Install links: [Git](https://git-scm.com/downloads) ·
 [Git LFS](https://git-lfs.com/) ·
 [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### Desktop app (no Python)
+
+The simplest way to run AgentOS: download, open, done. The app
+carries its own Python runtime, so nothing has to be installed
+first — no Python, no `uv`, no terminal.
+
+Grab the installer for your platform from the
+[latest release](https://github.com/use-agent-os/agent-os/releases/latest):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple silicon) | `AgentOS_<version>_aarch64.dmg` |
+| macOS (Intel) | `AgentOS_<version>_x64.dmg` |
+| Windows | `AgentOS_<version>_x64-setup.exe` |
+| Linux | `AgentOS_<version>_amd64.AppImage` or `.deb` |
+
+The app starts the gateway for you, keeps it running, and opens the
+same Web UI console in a native window. It uses the same `~/.agentos`
+home as the CLI, so a session you start in the app is the one
+`agentos chat` resumes in a terminal.
+
+Installers are large — roughly 250–400 MB — because they include a
+complete Python runtime plus the on-device router and embedding
+models. That is the trade for a download that runs on its own.
+
+See [`docs/desktop.md`](docs/desktop.md) for the tray menu, approval
+notifications, deep links, updates, and troubleshooting.
 
 ### Windows portable (no Python)
 

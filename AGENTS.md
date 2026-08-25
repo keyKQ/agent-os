@@ -75,6 +75,31 @@ The React console lives in `frontend/` (Node >= 22) and builds to
 - Dev loop: `agentos gateway run` + `cd frontend && npm run dev`
   (Vite proxies `/ws` and `/control/api` to the gateway).
 
+## Desktop lane (Tauri shell)
+
+The desktop app lives in `desktop/` — a Rust/Tauri shell that bundles a
+python-build-standalone runtime with AgentOS preinstalled, supervises a loopback
+gateway from it, and points a webview at the Control UI that gateway serves.
+See [`docs/desktop.md`](docs/desktop.md).
+
+- Touched `desktop/**`? Run `cargo fmt --check`, `cargo clippy --all-targets --
+  -D warnings`, and `cargo test` in `desktop/src-tauri/`. CI enforces this
+  (`.github/workflows/desktop.yml`); no bundled runtime is needed for any of it.
+- Building an actual app needs `python scripts/build_desktop_runtime.py build`
+  first, and it must run **on the target platform** — `pip wheel` resolves
+  dependency wheels against the host's markers.
+- `runtime.json` is the only contract between the builder and the shell.
+  `tests/test_scripts/test_build_desktop_runtime.py` reads `runtime.rs` and
+  fails if the two sides drift on field names or schema version.
+- The shell grants **no** Tauri capability to any window: the main window hosts
+  a remote origin (the loopback gateway), so it must not reach IPC. Native
+  features are driven from Rust; splash status is pushed with `eval`, not events.
+- The icon set is committed (release runners have no image tooling). Regenerate
+  with `python scripts/build_desktop_icon.py all` plus `cargo tauri icon`.
+- Version lives in `desktop/src-tauri/Cargo.toml` and `tauri.conf.json`; both are
+  bumped by the `pump-version` skill and asserted by
+  `tests/test_release_consistency.py`.
+
 ## Source layout — `src/agentos/`
 
 Every client hits one local **gateway**; the gateway runs turns through the

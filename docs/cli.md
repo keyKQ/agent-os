@@ -254,6 +254,13 @@ It always targets the release, never a local checkout. To install a checkout,
 run `bash scripts/install_source.sh` — that script is the only path that
 rebuilds the React control UI (`npm ci && npm run build`) before installing.
 
+Inside the [desktop app](desktop.md) there is nothing for it to upgrade: the
+runtime lives in the application bundle, where replacing packages breaks the
+code signature and is reverted by the next app update. The desktop shell exports
+`AGENTOS_INSTALL_METHOD=desktop` on every gateway it starts, so `agentos
+upgrade` reports method `desktop` and points at the app's own **Check for
+Updates…** instead of printing a `pip install` that cannot work (exit 3).
+
 ```sh
 agentos upgrade                 # upgrade, restart the gateway, verify
 agentos upgrade --check         # is a newer release available? change nothing

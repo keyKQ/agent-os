@@ -8,6 +8,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **AgentOS ships as a desktop app.** A Tauri shell in `desktop/` bundles a
+  relocatable Python runtime with AgentOS already installed, so the download
+  runs with no Python, `uv`, or terminal on the machine. It supervises a
+  loopback gateway — starting it, holding the window back until `/ready`
+  answers, restarting it if it dies, and stopping it on quit — and points a
+  native window at the Control UI that gateway serves. The same `~/.agentos`
+  home and `config.toml` are used as the CLI, so a session started in the app is
+  the one `agentos chat` resumes.
+
+  A gateway already running on the machine is adopted rather than duplicated:
+  two would contend for the port and the SQLite database. The app records the
+  gateway it starts under `state/desktop/gateway.json`, because
+  `agentos gateway run` writes no pidfile of its own and a gateway orphaned by a
+  force-quit would otherwise be invisible to the next launch.
+
+  Also: a tray menu (status, restart, log, launch-at-login, updates), native
+  notifications for pending tool approvals, `agentos://` deep links, a
+  show/hide global shortcut, and signed in-app updates. The window is confined
+  to the gateway's own origin — links in a transcript open in the system
+  browser — and no window is granted any Tauri IPC capability.
+
+  Installers for macOS (arm64/x64), Windows x64, and Linux x64 are built by
+  `.github/workflows/desktop-release.yml`. See
+  [`docs/desktop.md`](docs/desktop.md).
+
 - `aero-stock-lp` joins the Bankr skill hub. The skill range-LPs Coinbase
   tokenized equities (NVDA, AAPL, GOOGL, META) and AERO/USDC on Aerodrome
   Slipstream (Base) — opening, recentering, and exiting concentrated-liquidity

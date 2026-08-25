@@ -5,6 +5,10 @@ approvals, channels, logs, agents, usage, and operational status. It is the
 best surface when you want browser-based chat, visible tool activity, durable
 approvals, and a quick view of runtime health.
 
+The [desktop app](desktop.md) is this same console in a native window, with the
+gateway started and supervised for you and a bundled Python runtime, so nothing
+has to be installed first. Everything below applies there too.
+
 ## Start the Web UI
 
 Run the gateway in the foreground:

@@ -11,6 +11,15 @@ UI, Pilot Router, memory/search support, and safe local defaults.
 - Git, Git LFS, and Node.js 22 or newer only when installing from source.
 - A provider API key unless you use a local provider such as Ollama.
 
+## No-Terminal Install
+
+If you want AgentOS as an ordinary application rather than a terminal tool,
+install the [desktop app](desktop.md) instead: it bundles its own Python
+runtime, starts and supervises the gateway for you, and opens the same Web UI in
+a native window. None of the requirements above apply to it, and the rest of
+this guide's `agentos` commands still work if you later install the CLI — both
+share the same `~/.agentos` home.
+
 ## Recommended Install
 
 Install the current release (recommended extras included) by following the

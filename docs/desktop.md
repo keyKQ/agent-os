@@ -1,0 +1,210 @@
+# Desktop App
+
+The AgentOS desktop app is the Control UI in a native window, with the gateway
+supervised for you. It bundles its own Python runtime, so there is nothing to
+install first — no Python, no `uv`, no `pip`.
+
+It is the same AgentOS. The app reads and writes the usual `~/.agentos` home, so
+a session started in the app is the session `agentos chat` resumes in a
+terminal, and configuration changes made in either are visible to both.
+
+## Install
+
+Download the installer for your platform from the
+[releases page](https://github.com/use-agent-os/agent-os/releases):
+
+| Platform | Asset |
+| --- | --- |
+| macOS (Apple silicon) | `AgentOS_<version>_aarch64.dmg` |
+| macOS (Intel) | `AgentOS_<version>_x64.dmg` |
+| Windows | `AgentOS_<version>_x64-setup.exe` |
+| Linux | `AgentOS_<version>_amd64.AppImage` or `.deb` |
+
+Installers are large — roughly 250–400 MB — because the app carries a complete
+Python runtime plus the on-device router and embedding models. That is the trade
+for a download that runs without any other install step.
+
+First launch shows a splash while the gateway starts, then swaps in the console.
+A cold first start takes longer than later ones: the router loads its ONNX model
+and memory builds its index.
+
+## How it works
+
+```
+AgentOS.app
+ ├─ shell (Tauri)          native window, tray, notifications, updates
+ └─ resources/runtime/     python-build-standalone + AgentOS + dependencies
+        │
+        └─ spawned as: python -m agentos.cli.main gateway run --bind 127.0.0.1
+                         │
+                         └─ window loads http://127.0.0.1:18791/control/
+```
+
+The window loads the Control UI over loopback rather than from files inside the
+app. The gateway injects each page's asset base and bootstrap context at request
+time, so a copy served from the bundle would boot without either — and loading
+it live means the app tracks Control UI changes with no shim to maintain.
+
+### Port selection and attaching
+
+The app prefers port 18791, the same one `agentos gateway run` uses, so bookmarks
+and CLI defaults keep working.
+
+If a gateway is **already running** on this machine, the app attaches to it
+instead of starting a second one. Two gateways would contend for the port and
+the SQLite database. When the app is attached, the tray shows `Attached · port
+N` and **Restart Gateway** is disabled — that gateway is not the app's to stop.
+
+If port 18791 is taken by something that is not an AgentOS gateway, the app
+falls back to an ephemeral port.
+
+### Configuration and auth
+
+The app does not own your configuration. It starts the gateway against your
+existing `~/.agentos/config.toml`, which means your `auth.mode` applies exactly
+as it does from the terminal — the desktop app does not force a stricter or
+looser posture than `agentos gateway run`.
+
+One consequence is worth knowing: with `auth.mode = "token"`, approval
+notifications need that token to read `/api/approvals`. The app reads it from
+the same config file. If the gateway requires a token and none is configured
+where the app can find it, notifications switch off and say so in the log; the
+rest of the app is unaffected.
+
+The gateway is started with its working directory set to your AgentOS home, so
+config discovery is deterministic rather than depending on where the OS launched
+the app from.
+
+## Tray menu
+
+| Item | Does |
+| --- | --- |
+| Open AgentOS | Shows and focuses the window. |
+| *(status)* | Current gateway state and port. |
+| Restart Gateway | Stops and restarts the gateway. Disabled when attached. |
+| Open Log File | Opens `~/.agentos/logs/desktop-gateway.log`. |
+| Launch at Login | Starts AgentOS when you log in. |
+| Check for Updates… | Looks for a newer release. |
+| Quit AgentOS | Stops the gateway and exits. |
+
+Closing the window **hides** it rather than quitting — the gateway is a
+background service, and a running agent should survive a stray `Cmd+W`. Quit is
+explicit.
+
+`Ctrl+Alt+A` shows or hides the window from anywhere. If another app already
+owns that shortcut, registration fails quietly and the tray still works.
+
+## Notifications
+
+An approval blocks the agent's turn until you answer it, so the app raises a
+native notification the first time it sees each pending request. Clicking the
+tray shows the queue; the tooltip carries the count.
+
+## Deep links
+
+`agentos://` URLs open the app and route into the console:
+
+```text
+agentos://chat              -> /control/chat
+agentos://sessions/abc      -> /control/sessions/abc
+```
+
+## Updates
+
+The app checks once at launch and prompts only if something is available.
+Updates replace the whole bundle — there are no deltas, because the payload is
+mostly the Python runtime and the models — so you are asked before anything
+downloads.
+
+Builds that ship without updater signing (developer builds, and distro packages
+where the system package manager owns updates) say so instead of offering a
+check that cannot work.
+
+Inside the app, `agentos upgrade` will tell you to update the app rather than
+handing you a `pip install`: the runtime lives inside the application bundle,
+where replacing packages breaks the code signature and gets reverted by the next
+app update anyway.
+
+## Security posture
+
+- The gateway binds loopback only, exactly as the CLI does.
+- The window is confined to the gateway's own origin. A link in a transcript —
+  model output and tool results are rendered there — opens in your browser
+  rather than inside the app frame, so a third-party page never inherits the
+  app's chrome. Non-web schemes are refused.
+- The app grants **no** IPC capability to any window. The console cannot call
+  into the native layer at all; native features are driven from the shell side.
+- macOS builds are signed and notarized, with hardened-runtime exceptions
+  limited to what CPython and onnxruntime require
+  (`desktop/src-tauri/entitlements.plist` documents each one).
+
+## Building it yourself
+
+Prerequisites: Rust (stable), Node 22+, Python 3.12, and the Tauri CLI
+(`cargo install tauri-cli --version "^2" --locked`). On Linux you also need
+`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, and `patchelf`.
+
+```sh
+# 1. Build the Control UI, the wheel, and the bundled runtime for this platform.
+python scripts/build_desktop_runtime.py build
+
+# 2. Build the app and its installer.
+cd desktop/src-tauri && cargo tauri build
+```
+
+Step 1 must run on the platform it targets: `pip wheel` resolves dependency
+wheels against the *host* platform's markers, so a runtime for Windows has to be
+built on Windows. `.github/workflows/desktop-release.yml` runs one job per
+target for that reason.
+
+For a faster inner loop, point the shell at a runtime you already built and skip
+rebuilding it:
+
+```sh
+AGENTOS_DESKTOP_RUNTIME=$PWD/desktop/src-tauri/resources \
+  cargo tauri dev --config '{"bundle":{"resources":[]}}'
+```
+
+Shell checks, mirroring `.github/workflows/desktop.yml`:
+
+```sh
+cd desktop/src-tauri
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+The icon set is committed because release runners have no image tooling to
+regenerate it. Change the mark in `scripts/build_desktop_icon.py`, then:
+
+```sh
+python scripts/build_desktop_icon.py all
+cd desktop/src-tauri && cargo tauri icon icons/icon-source.png -o icons
+rm -rf icons/android icons/ios   # desktop targets only
+```
+
+## Troubleshooting
+
+**The splash sits there and then says AgentOS could not start.** Open the log it
+names — `~/.agentos/logs/desktop-gateway.log` — and read the end. The gateway's
+own startup errors (a bad provider key, an unreadable config) land there
+verbatim. The app gives up after three failed starts in two minutes rather than
+respawning forever.
+
+**The app opened but the console is blank or shows a 503.** The bundled runtime
+is missing its Control UI assets, which means a broken install rather than a
+configuration problem. Reinstall from the releases page.
+
+**Tray says "Attached" and Restart Gateway is greyed out.** Another AgentOS
+gateway was already running — probably `agentos gateway start` from a terminal.
+Stop it with `agentos gateway stop` and the app will start its own.
+
+**macOS says the app is damaged.** The download did not complete or was modified
+in transit. Re-download; do not work around it with `xattr -d`.
+
+## See also
+
+- [`web-ui.md`](web-ui.md) — everything the console itself can do.
+- [`gateway.md`](gateway.md) — gateway lifecycle, host/port, and exposure.
+- [`cli.md`](cli.md) — the same runtime from a terminal.
