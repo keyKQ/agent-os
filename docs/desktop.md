@@ -24,6 +24,9 @@ Installers are large — roughly 250–400 MB — because the app carries a comp
 Python runtime plus the on-device router and embedding models. That is the trade
 for a download that runs without any other install step.
 
+They are also unsigned, so macOS and Windows both warn on first launch.
+[Unsigned builds](#unsigned-builds) has the two-click way past it.
+
 First launch shows a splash while the gateway starts, then swaps in the console.
 A cold first start takes longer than later ones: the router loads its ONNX model
 and memory builds its index.
@@ -74,6 +77,45 @@ rest of the app is unaffected.
 The gateway is started with its working directory set to your AgentOS home, so
 config discovery is deterministic rather than depending on where the OS launched
 the app from.
+
+## Unsigned builds
+
+AgentOS releases are not signed with an Apple Developer ID or a Windows code
+certificate. Both are paid annual subscriptions, and the project does not carry
+them. Nothing about the app is different because of it — the operating system
+simply has no third party vouching for who built the download, so it warns you
+the first time you open it.
+
+**macOS.** The app is ad-hoc signed (which is all that is needed to *run* on
+Apple silicon) but not notarized, so Gatekeeper blocks a copy downloaded through
+a browser. Depending on the macOS version the message is *"Apple could not
+verify AgentOS is free of malware"* or *"AgentOS is damaged and can't be
+opened"* — the second wording is misleading; nothing is damaged.
+
+To open it:
+
+1. Try to open AgentOS once and dismiss the warning.
+2. **System Settings → Privacy & Security**, scroll to Security, and click
+   **Open Anyway** next to the AgentOS message.
+3. Confirm. macOS remembers the decision; later launches are normal.
+
+On macOS 15 and newer, right-click → Open no longer bypasses this — Settings is
+the only route. If you prefer the terminal, clearing the quarantine flag does
+the same thing:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/AgentOS.app
+```
+
+**Windows.** SmartScreen shows *"Windows protected your PC"*. Click **More
+info** → **Run anyway**.
+
+**Linux.** No signature check applies to the AppImage or `.deb`.
+
+Only do any of this for a build you fetched from the project's own releases page
+over HTTPS. These steps are exactly what you would have to skip for a genuinely
+tampered download, which is the reason signing is worth having and the reason
+this section is not buried.
 
 ## Tray menu
 
@@ -134,9 +176,10 @@ app update anyway.
   app's chrome. Non-web schemes are refused.
 - The app grants **no** IPC capability to any window. The console cannot call
   into the native layer at all; native features are driven from the shell side.
-- macOS builds are signed and notarized, with hardened-runtime exceptions
-  limited to what CPython and onnxruntime require
-  (`desktop/src-tauri/entitlements.plist` documents each one).
+- Releases are **not** code-signed or notarized — see [Unsigned
+  builds](#unsigned-builds) below for what that means when you install one. The
+  signing machinery is in the release workflow and switches on when the
+  certificates exist; nothing in the app depends on it.
 
 ## Building it yourself
 
@@ -200,8 +243,9 @@ configuration problem. Reinstall from the releases page.
 gateway was already running — probably `agentos gateway start` from a terminal.
 Stop it with `agentos gateway stop` and the app will start its own.
 
-**macOS says the app is damaged.** The download did not complete or was modified
-in transit. Re-download; do not work around it with `xattr -d`.
+**macOS says the app is damaged, or that it cannot be verified.** Expected on an
+unsigned build, and nothing is actually damaged — see [Unsigned
+builds](#unsigned-builds) for how to open it.
 
 ## See also
 

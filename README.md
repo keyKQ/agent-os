@@ -155,6 +155,13 @@ Installers are large — roughly 250–400 MB — because they include a
 complete Python runtime plus the on-device router and embedding
 models. That is the trade for a download that runs on its own.
 
+**First launch warns you.** The builds are not code-signed, so macOS
+says it cannot verify the app (or that it is "damaged" — it is not),
+and Windows SmartScreen asks for a confirmation. On macOS open
+**System Settings → Privacy & Security → Open Anyway**; on Windows
+click **More info → Run anyway**. Details in
+[`docs/desktop.md`](docs/desktop.md#unsigned-builds).
+
 See [`docs/desktop.md`](docs/desktop.md) for the tray menu, approval
 notifications, deep links, updates, and troubleshooting.
 

@@ -25,9 +25,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
   Also: a tray menu (status, restart, log, launch-at-login, updates), native
   notifications for pending tool approvals, `agentos://` deep links, a
-  show/hide global shortcut, and signed in-app updates. The window is confined
+  show/hide global shortcut, and opt-in in-app updates. The window is confined
   to the gateway's own origin — links in a transcript open in the system
   browser — and no window is granted any Tauri IPC capability.
+
+  Releases are **not** code-signed: an Apple Developer ID and a Windows
+  certificate are both paid annual subscriptions the project does not carry. So
+  macOS and Windows each warn on first launch, and `docs/desktop.md` documents
+  the two clicks past it. The release workflow's signing and notarization steps
+  are conditional on the certificates existing, so this becomes a matter of
+  adding secrets if that ever changes.
 
   Installers for macOS (arm64/x64), Windows x64, and Linux x64 are built by
   `.github/workflows/desktop-release.yml`. See
