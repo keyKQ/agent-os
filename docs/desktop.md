@@ -106,9 +106,32 @@ and the rewrite is atomic. In practice this removes settings your older CLI was
 already ignoring, so the older CLI keeps loading the file — but the backup is
 there if you need to compare.
 
-The simplest way to avoid the whole question is to keep the two on the same
-version: run `agentos upgrade` when you install a newer app, or just use the app
-on its own.
+**Keeping the two in step.** Run `agentos upgrade` after installing a newer app.
+It moves the `uv` install onto the published release the app was built from, and
+from then on both speak the same version. Do it again each time you update the
+app; there is no automatic link between them.
+
+### Does the desktop app give me a terminal command?
+
+No — and this catches people out, because the app really does contain the whole
+CLI. Its bundled runtime has every command group `agentos` has: `chat`, `agent`,
+`doctor`, `config`, `cron`, `models`, and the rest. The app starts its own
+gateway by calling straight into it.
+
+What it does not do is put that CLI on your `PATH`. There is no `agentos`
+command installed by the app, deliberately: writing one would collide with the
+`agentos` a `uv tool install` already manages, and the two would then overwrite
+each other on every upgrade.
+
+So if you want AgentOS in a terminal as well as in a window, install the CLI the
+normal way and keep it in step:
+
+```sh
+uv tool install use-agent-os      # once
+agentos upgrade                   # after each app update
+```
+
+If you only ever use the window, you need none of this.
 
 ### Configuration and auth
 
