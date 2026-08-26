@@ -8,9 +8,10 @@
 //! also means the desktop app tracks Control UI changes with no shim to keep
 //! in sync.
 //!
-//! The consequence is that the main window hosts a remote origin, so it is
-//! given no Tauri capability at all — see `capabilities/desktop-shell.json`.
-//! Native features are driven from Rust instead of from injected JavaScript.
+//! The consequence is that the main window hosts a remote origin, so the app
+//! defines no Tauri capability at all and the console cannot reach IPC. Native
+//! features — downloads, notifications, the tray — are driven from Rust here
+//! instead of from JavaScript running in that page.
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
@@ -98,7 +99,75 @@ fn create_main(app: &AppHandle, url: Url, endpoint: Endpoint) -> tauri::Result<W
             }
             allowed
         })
+        .on_download(on_download)
         .build()
+}
+
+/// Let the console save files, and say where they went.
+///
+/// The Control UI downloads through `<a download>` and through
+/// `URL.createObjectURL` — that is how it exports a transcript, a chart image,
+/// the logs, the usage CSV, and every artifact the agent produces. Measured on
+/// macOS, both of those already save without a handler installed, so this is
+/// not repairing a broken feature.
+///
+/// It earns its place twice over anyway. wry answers `Cancel` for any download
+/// WebKit does route through the navigation delegate
+/// (`shouldPerformDownload`) when no handler exists, so registering one closes
+/// that category rather than leaving it to depend on which path WebKit picks.
+/// And a browser has a download shelf while this window has nothing: without
+/// the `Finished` notification a file lands in `~/Downloads` with no
+/// acknowledgement at all, which reads as a download that failed.
+///
+/// wry resolves the destination to the user's downloads directory using
+/// WebKit's suggested filename and already avoids clobbering an existing file,
+/// so `Requested` only has to allow it.
+fn on_download(webview: tauri::Webview, event: tauri::webview::DownloadEvent<'_>) -> bool {
+    match event {
+        tauri::webview::DownloadEvent::Requested { url, destination } => {
+            log::info!("downloading {url} to {}", destination.display());
+            true
+        }
+        tauri::webview::DownloadEvent::Finished { url, path, success } => {
+            announce_download(webview.app_handle(), &url, path.as_deref(), success);
+            true
+        }
+        _ => true,
+    }
+}
+
+fn announce_download(
+    app: &AppHandle,
+    url: &url::Url,
+    path: Option<&std::path::Path>,
+    success: bool,
+) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let (title, body) = if success {
+        let name = path
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "File".to_string());
+        let location = path
+            .and_then(|path| path.parent())
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default();
+        (
+            "Download finished".to_string(),
+            format!("{name} → {location}"),
+        )
+    } else {
+        log::warn!("download failed: {url}");
+        (
+            "Download failed".to_string(),
+            "AgentOS could not save the file.".to_string(),
+        )
+    };
+
+    if let Err(error) = app.notification().builder().title(title).body(body).show() {
+        log::warn!("could not announce the download: {error}");
+    }
 }
 
 /// True when a navigation target is the gateway this window belongs to.
