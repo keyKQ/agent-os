@@ -151,9 +151,10 @@ same Web UI console in a native window. It uses the same `~/.agentos`
 home as the CLI, so a session you start in the app is the one
 `agentos chat` resumes in a terminal.
 
-Installers are large — roughly 250–400 MB — because they include a
-complete Python runtime plus the on-device router and embedding
-models. That is the trade for a download that runs on its own.
+Installers are large — the macOS arm64 `.dmg` measures 165 MB and
+unpacks to about 400 MB — because they include a complete Python
+runtime plus the on-device router and embedding models. That is the
+trade for a download that runs on its own.
 
 **First launch warns you.** The builds are not code-signed, so macOS
 says it cannot verify the app (or that it is "damaged" — it is not),

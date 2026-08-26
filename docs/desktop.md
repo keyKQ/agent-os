@@ -20,9 +20,11 @@ Download the installer for your platform from the
 | Windows | `AgentOS_<version>_x64-setup.exe` |
 | Linux | `AgentOS_<version>_amd64.AppImage` or `.deb` |
 
-Installers are large — roughly 250–400 MB — because the app carries a complete
-Python runtime plus the on-device router and embedding models. That is the trade
-for a download that runs without any other install step.
+Installers are large — the macOS arm64 `.dmg` measures 165 MB, unpacking to
+about 400 MB — because the app carries a complete Python runtime plus the
+on-device router and embedding models. Other platforms are the same order of
+magnitude. That is the trade for a download that runs without any other install
+step.
 
 They are also unsigned, so macOS and Windows both warn on first launch.
 [Unsigned builds](#unsigned-builds) has the two-click way past it.
@@ -55,8 +57,14 @@ and CLI defaults keep working.
 
 If a gateway is **already running** on this machine, the app attaches to it
 instead of starting a second one. Two gateways would contend for the port and
-the SQLite database. When the app is attached, the tray shows `Attached · port
-N` and **Restart Gateway** is disabled — that gateway is not the app's to stop.
+the SQLite database. The tray says which of the two happened:
+
+- `Reconnected · port N` — a gateway this app started in an earlier run and did
+  not get to stop, usually after a force quit. It is still the app's, so
+  **Restart Gateway** works.
+- `Attached · port N` — a gateway you started yourself, from a terminal.
+  **Restart Gateway** is disabled: stopping a process you launched, from a menu
+  that gives no hint of it, is not the app's call.
 
 If port 18791 is taken by something that is not an AgentOS gateway, the app
 falls back to an ephemeral port.
@@ -159,7 +167,7 @@ this section is not buried.
 | --- | --- |
 | Open AgentOS | Shows and focuses the window. |
 | *(status)* | Current gateway state and port. |
-| Restart Gateway | Stops and restarts the gateway. Disabled when attached. |
+| Restart Gateway | Stops and restarts the gateway. Disabled only when attached to a gateway you started yourself. |
 | Open Log File | Opens `~/.agentos/logs/desktop-gateway.log`. |
 | Launch at Login | Starts AgentOS when you log in. |
 | Check for Updates… | Looks for a newer release. |
@@ -300,9 +308,12 @@ respawning forever.
 is missing its Control UI assets, which means a broken install rather than a
 configuration problem. Reinstall from the releases page.
 
-**Tray says "Attached" and Restart Gateway is greyed out.** Another AgentOS
-gateway was already running — probably `agentos gateway start` from a terminal.
-Stop it with `agentos gateway stop` and the app will start its own.
+**Tray says "Attached" and Restart Gateway is greyed out.** A gateway you
+started yourself is already running — probably `agentos gateway start` from a
+terminal — and the app attached to it rather than starting a second one against
+the same database. Stop it with `agentos gateway stop` and the app will start
+its own. (`Reconnected` is the other case: a gateway this app left behind, which
+it can restart.)
 
 **macOS says the app is damaged, or that it cannot be verified.** Expected on an
 unsigned build, and nothing is actually damaged — see [Unsigned

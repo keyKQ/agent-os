@@ -184,10 +184,22 @@ pub fn apply_status(app: &AppHandle, status: &Status) {
 fn status_label(status: &Status) -> String {
     match status.phase {
         Phase::Starting => "Starting…".to_string(),
-        Phase::Ready if status.adopted => match &status.endpoint {
-            Some(endpoint) => format!("Attached · port {}", endpoint.port),
-            None => "Attached".to_string(),
-        },
+        // Two different situations, and the menu has to distinguish them: the
+        // Restart item is enabled for one and not the other, so labelling both
+        // "Attached" would make that difference look arbitrary.
+        Phase::Ready if status.adopted => {
+            let word = if status.restartable {
+                // A gateway this app started in an earlier run and can stop.
+                "Reconnected"
+            } else {
+                // Someone else's, started from a terminal. Not ours to restart.
+                "Attached"
+            };
+            match &status.endpoint {
+                Some(endpoint) => format!("{word} · port {}", endpoint.port),
+                None => word.to_string(),
+            }
+        }
         Phase::Ready => match &status.endpoint {
             Some(endpoint) => format!("Running · port {}", endpoint.port),
             None => "Running".to_string(),
@@ -227,12 +239,21 @@ mod tests {
     use crate::endpoint::Endpoint;
 
     fn status(phase: Phase, adopted: bool, port: Option<u16>) -> Status {
+        restartable_status(phase, adopted, port, !adopted)
+    }
+
+    fn restartable_status(
+        phase: Phase,
+        adopted: bool,
+        port: Option<u16>,
+        restartable: bool,
+    ) -> Status {
         Status {
             phase,
             message: String::new(),
             endpoint: port.map(|port| Endpoint::new(port, "/control")),
             adopted,
-            restartable: !adopted,
+            restartable,
             log_path: String::new(),
         }
     }
@@ -244,9 +265,18 @@ mod tests {
     }
 
     #[test]
-    fn an_adopted_gateway_is_labelled_differently() {
-        let label = status_label(&status(Phase::Ready, true, Some(9000)));
+    fn a_gateway_started_elsewhere_reads_as_attached() {
+        // Not ours to stop, and the Restart item is disabled to match.
+        let label = status_label(&restartable_status(Phase::Ready, true, Some(9000), false));
         assert_eq!(label, "Attached · port 9000");
+    }
+
+    #[test]
+    fn a_gateway_left_by_a_previous_run_reads_as_reconnected() {
+        // This one the app can stop, so the label must not claim otherwise --
+        // an enabled Restart under an "Attached" label looks arbitrary.
+        let label = status_label(&restartable_status(Phase::Ready, true, Some(9000), true));
+        assert_eq!(label, "Reconnected · port 9000");
     }
 
     #[test]
