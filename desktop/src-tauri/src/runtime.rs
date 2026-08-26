@@ -116,6 +116,22 @@ impl BundledRuntime {
         command.env_clear();
         command.envs(crate::environment::gateway_environment());
 
+        // Bytecode goes beside the state directory, never into the bundle.
+        //
+        // Python writes `__pycache__` next to each source file by default. For
+        // an interpreter living inside an application bundle that means ~1700
+        // `.pyc` files land among the signed resources on first run, and the
+        // bundle's code signature stops verifying — `codesign --verify` reports
+        // them one by one as "file added". Ad-hoc signed today, that is merely
+        // wrong; on a Developer ID build it is an app that passes Gatekeeper
+        // once and fails afterwards. It would also simply not work where the
+        // bundle is not writable.
+        //
+        // Redirecting the cache keeps the startup benefit without touching the
+        // bundle. `PYTHONDONTWRITEBYTECODE` would also protect the signature,
+        // at the cost of recompiling every module on every launch.
+        command.env("PYTHONPYCACHEPREFIX", bytecode_cache_dir());
+
         // Buffered output would hide the gateway's own startup diagnostics from
         // the log file for as long as the pipe stays under 4 KiB, which is
         // exactly the window where a failing launch needs them.
@@ -126,6 +142,22 @@ impl BundledRuntime {
         crate::platform::configure_child(&mut command);
         command
     }
+}
+
+/// Where the bundled interpreter may write bytecode.
+///
+/// Created eagerly: Python silently skips caching when the prefix cannot be
+/// written, which would be a quiet startup-time regression rather than a
+/// visible failure.
+fn bytecode_cache_dir() -> PathBuf {
+    let dir = crate::config::agentos_home().join("cache").join("pycache");
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        log::warn!(
+            "could not create the bytecode cache {}: {error}",
+            dir.display()
+        );
+    }
+    dir
 }
 
 fn resource_paths(app: &AppHandle) -> Result<(PathBuf, PathBuf)> {

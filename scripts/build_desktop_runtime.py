@@ -223,11 +223,29 @@ def verify_desktop_runtime(resources_root: Path, *, run_import_probe: bool = Tru
     if os.name != "nt" and not os.access(python_exe, os.X_OK):
         raise SystemExit(f"Bundled interpreter is not executable: {python_exe}")
 
+    # Bytecode must not ship inside the tree. On macOS the runtime lands among
+    # an application bundle's signed resources, so a stray ``.pyc`` is a file
+    # the code signature does not account for. It also makes the build
+    # non-reproducible: whether it is there depends on whether anyone happened
+    # to run the interpreter from this tree beforehand. The app itself redirects
+    # ``PYTHONPYCACHEPREFIX`` outside the bundle at runtime; this keeps the
+    # shipped artifact clean to begin with.
+    stray = [path for path in runtime_root.rglob("*.pyc")]
+    stray.extend(path for path in runtime_root.rglob("__pycache__") if path.is_dir())
+    if stray:
+        raise SystemExit(
+            f"Bundled runtime contains {len(stray)} bytecode artifact(s), e.g. {stray[0]}. "
+            "Rebuild with: python scripts/build_desktop_runtime.py build"
+        )
+
     if not run_import_probe:
         return
 
+    # ``-B`` so the probe cannot create the very bytecode the check above
+    # rejects -- it runs after that check and would otherwise poison the tree
+    # it just validated.
     probe = subprocess.run(
-        [str(python_exe), "-c", "import agentos; print(agentos.__version__)"],
+        [str(python_exe), "-B", "-c", "import agentos; print(agentos.__version__)"],
         capture_output=True,
         text=True,
         check=False,

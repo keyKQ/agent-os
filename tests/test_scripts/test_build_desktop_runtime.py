@@ -243,3 +243,27 @@ def test_verify_rejects_a_non_executable_interpreter(module, tmp_path: Path) -> 
     (root / "runtime" / "python" / "bin" / "python3.12").chmod(0o644)
     with pytest.raises(SystemExit, match="not executable"):
         module.verify_desktop_runtime(root, run_import_probe=False)
+
+
+def test_verify_rejects_bytecode_left_in_the_tree(module, tmp_path: Path) -> None:
+    # On macOS the runtime sits among an app bundle's signed resources, so a
+    # stray .pyc is a file the signature does not account for -- and whether one
+    # exists otherwise depends on who ran the interpreter from this tree before
+    # the build, which makes the artifact non-reproducible.
+    root = build_runtime_tree(module, tmp_path)
+    layout = module.runtime_layout("macos-arm64", "3.12.13")
+    cache = layout.site_packages_path(root / "runtime" / "python") / "agentos" / "__pycache__"
+    cache.mkdir(parents=True)
+    (cache / "__init__.cpython-312.pyc").write_bytes(b"\x00")
+
+    with pytest.raises(SystemExit, match="bytecode artifact"):
+        module.verify_desktop_runtime(root, run_import_probe=False)
+
+
+def test_the_import_probe_cannot_create_bytecode(module) -> None:
+    # The probe runs after the bytecode check, so without -B it would poison
+    # the tree it had just validated.
+    import inspect
+
+    source = inspect.getsource(module.verify_desktop_runtime)
+    assert '"-B"' in source, "the import probe must run with -B"
