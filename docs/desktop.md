@@ -69,6 +69,47 @@ the SQLite database. The tray says which of the two happened:
 If port 18791 is taken by something that is not an AgentOS gateway, the app
 falls back to an ephemeral port.
 
+### If you already installed AgentOS with `uv`
+
+Nothing is duplicated and nothing is lost. The app uses the same `~/.agentos`
+home, so your configuration, `.env`, sessions, agents, skills, and channels are
+all already there the first time you open it.
+
+What matters is which one is *running*:
+
+| Situation | What happens |
+| --- | --- |
+| No gateway running | The app starts its own, from its bundled runtime |
+| Your CLI gateway is already running | The app attaches to it and uses **your installed version**, not the bundled one |
+| App's gateway is running, and you run `agentos …` | See below |
+
+That last row is the one to know about. The CLI refuses to talk to a gateway
+newer than itself:
+
+```text
+Error: Gateway (2026.8.24) is NEWER than this CLI (2026.8.23). The gateway may
+have written config with a newer schema, so this older CLI refuses to act on it.
+Upgrade the CLI (agentos upgrade) or restart the gateway from this environment.
+```
+
+This is [the project's version-skew policy](cli.md#upgrade), not something the
+desktop app invents — but the app makes it easy to hit, because you download the
+current release while your `uv` install may be several versions behind. The
+message names both fixes: `agentos upgrade` to bring the CLI level, or quit the
+app so your own gateway is the one running. The reverse direction — a CLI newer
+than the gateway — only warns.
+
+**Your configuration may be migrated.** A newer gateway rewrites
+`~/.agentos/config.toml` when the schema has moved, dropping keys that are no
+longer read. It writes a timestamped `config.toml.backup.*` next to it first,
+and the rewrite is atomic. In practice this removes settings your older CLI was
+already ignoring, so the older CLI keeps loading the file — but the backup is
+there if you need to compare.
+
+The simplest way to avoid the whole question is to keep the two on the same
+version: run `agentos upgrade` when you install a newer app, or just use the app
+on its own.
+
 ### Configuration and auth
 
 The app does not own your configuration. It starts the gateway against your
