@@ -248,7 +248,7 @@ impl Supervisor {
             }
             starts.push(Instant::now());
 
-            match self.launch(&app, &runtime, &settings.base_path) {
+            match self.launch(&app, &runtime, &settings) {
                 Ok(active) => {
                     self.publish(
                         &app,
@@ -303,10 +303,10 @@ impl Supervisor {
         &self,
         app: &AppHandle,
         runtime: &BundledRuntime,
-        base_path: &str,
+        settings: &config::GatewaySettings,
     ) -> anyhow::Result<Endpoint> {
         let port = endpoint::pick_port()?;
-        let active = Endpoint::new(port, base_path);
+        let active = Endpoint::new(port, &settings.base_path);
 
         self.publish(
             app,
@@ -323,10 +323,14 @@ impl Supervisor {
         let log = open_log(&self.inner.log_path)?;
         let mut command = runtime.gateway_command(&active.host, active.port);
         command
-            // A GUI app inherits an arbitrary working directory — `/` when
-            // launched from Finder. Anchoring it at the AgentOS home makes
-            // config discovery and relative paths deterministic.
-            .current_dir(working_directory())
+            // A GUI app inherits an arbitrary working directory -- `/` when
+            // launched from Finder. Anchoring it at the configured workspace
+            // makes config discovery deterministic and, more importantly, lines
+            // `Path.cwd()` up with `workspace_dir`: several tools fall back to
+            // the process cwd when a call carries no workspace of its own, and
+            // pointing that at the AgentOS home would have let the agent write
+            // among config.toml, .env, and state/.
+            .current_dir(working_directory(&settings.workspace_dir))
             .stdin(Stdio::null())
             .stderr(log.try_clone()?)
             .stdout(log);
@@ -436,7 +440,14 @@ fn gateway_log_path() -> PathBuf {
     agentos_home().join("logs").join("desktop-gateway.log")
 }
 
-fn working_directory() -> PathBuf {
+/// The gateway's working directory: the configured workspace, created if it
+/// does not exist yet. Falls back to the AgentOS home only if the workspace
+/// cannot be created, since a non-existent cwd fails the spawn outright.
+fn working_directory(workspace: &PathBuf) -> PathBuf {
+    if std::fs::create_dir_all(workspace).is_ok() {
+        return workspace.clone();
+    }
+    log::warn!("could not create the workspace {}", workspace.display());
     let home = agentos_home();
     let _ = std::fs::create_dir_all(&home);
     home

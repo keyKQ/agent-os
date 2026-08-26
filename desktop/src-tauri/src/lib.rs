@@ -10,6 +10,7 @@
 mod approvals;
 mod config;
 mod endpoint;
+mod environment;
 mod platform;
 mod runtime;
 mod supervisor;

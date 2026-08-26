@@ -23,6 +23,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `agentos gateway run` writes no pidfile of its own and a gateway orphaned by a
   force-quit would otherwise be invisible to the next launch.
 
+  The app is not a weaker AgentOS than the CLI. It bundles the same
+  `recommended` profile, and it reconstructs the operator's shell environment
+  before starting the gateway — a GUI launch otherwise gets launchd's `PATH`
+  (`/usr/bin:/bin:/usr/sbin:/sbin`), which the gateway would pass straight down
+  to the `shell` tool and to every stdio MCP server, so `npx` servers would fail
+  to start and skills calling `node`, `ffmpeg`, or `rg` would fail at their
+  first subprocess.
+
   Also: a tray menu (status, restart, log, launch-at-login, updates), native
   notifications for pending tool approvals, `agentos://` deep links, a
   show/hide global shortcut, and opt-in in-app updates. The window is confined

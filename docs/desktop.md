@@ -74,9 +74,40 @@ the same config file. If the gateway requires a token and none is configured
 where the app can find it, notifications switch off and say so in the log; the
 rest of the app is unaffected.
 
-The gateway is started with its working directory set to your AgentOS home, so
-config discovery is deterministic rather than depending on where the OS launched
-the app from.
+### Environment parity with the terminal
+
+A gateway you start from a terminal inherits your shell environment. One a
+desktop app starts from Finder or the Dock does not — macOS hands a GUI app
+launchd's environment, whose `PATH` is just `/usr/bin:/bin:/usr/sbin:/sbin`.
+
+That would make the desktop app a weaker AgentOS than the same version run from
+a terminal, because the gateway passes its own environment down to the `shell`
+tool and to every stdio MCP server. Under a bare launchd `PATH` an `npx`-based
+MCP server cannot start, and skills that call `ffmpeg`, `node`, or `rg` fail at
+their first subprocess.
+
+So on first launch the app asks your login shell (`$SHELL -l -i`) for its
+environment and starts the gateway with it. That is what picks up `nvm`,
+`pyenv`, `bun`, Homebrew, and anything else that edits `PATH` from a shell rc
+file. If the shell cannot be read or takes longer than ten seconds, the app
+falls back to appending the standard login directories (`/opt/homebrew/bin`,
+`/usr/local/bin`, `/usr/bin`, `/bin`) instead.
+
+Two variables are deliberately **not** inherited: `PYTHONHOME` and `PYTHONPATH`.
+Either one, set for some other interpreter, would break or contaminate the
+runtime inside the app bundle.
+
+API keys work the same as they do for the CLI: AgentOS reads
+`~/.agentos/.env` itself, so keys stored there need no shell involvement.
+
+### Working directory
+
+The gateway runs with its working directory set to the configured
+`workspace_dir` — `~/.agentos/workspace` unless you have changed it. This keeps
+the process cwd and the workspace in agreement: several tools fall back to the
+process cwd when a call carries no workspace of its own, and pointing that at
+the AgentOS home would let the agent write among `config.toml`, `.env`, and
+`state/`.
 
 ## Unsigned builds
 

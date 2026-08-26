@@ -24,6 +24,11 @@ pub struct GatewaySettings {
     pub base_path: String,
     pub auth_mode: String,
     pub auth_token: Option<String>,
+    /// Mirrors `GatewayConfig.workspace_dir`, whose default is
+    /// `<agentos home>/workspace`. The shell needs it because it chooses the
+    /// gateway's working directory, and several tools fall back to
+    /// `Path.cwd()` when a call carries no workspace of its own.
+    pub workspace_dir: PathBuf,
 }
 
 impl Default for GatewaySettings {
@@ -32,6 +37,7 @@ impl Default for GatewaySettings {
             base_path: DEFAULT_BASE_PATH.to_string(),
             auth_mode: "none".to_string(),
             auth_token: None,
+            workspace_dir: agentos_home().join("workspace"),
         }
     }
 }
@@ -86,6 +92,14 @@ fn settings_from_toml(table: toml::Table) -> GatewaySettings {
     {
         settings.base_path = normalize_base_path(base);
     }
+    if let Some(workspace) = table
+        .get("workspace_dir")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        settings.workspace_dir = expand_home(workspace);
+    }
     if let Some(auth) = table.get("auth") {
         if let Some(mode) = auth.get("mode").and_then(|value| value.as_str()) {
             settings.auth_mode = mode.to_string();
@@ -108,6 +122,12 @@ where
 {
     if let Some(base) = lookup("AGENTOS_CONTROL_UI_BASE_PATH") {
         settings.base_path = normalize_base_path(&base);
+    }
+    if let Some(workspace) = lookup("AGENTOS_GATEWAY_WORKSPACE_DIR") {
+        let trimmed = workspace.trim();
+        if !trimmed.is_empty() {
+            settings.workspace_dir = expand_home(trimmed);
+        }
     }
     if let Some(mode) = lookup("AGENTOS_AUTH_MODE") {
         settings.auth_mode = mode;

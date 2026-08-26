@@ -109,6 +109,13 @@ impl BundledRuntime {
             .arg("--port")
             .arg(port.to_string());
 
+        // A GUI launch inherits launchd's environment, not the operator's
+        // shell one. The gateway passes its own environment down to the shell
+        // tool and to stdio MCP servers, so without this the agent runs with a
+        // PATH that has no Homebrew, no node, and no version-manager shims.
+        command.env_clear();
+        command.envs(crate::environment::gateway_environment());
+
         // Buffered output would hide the gateway's own startup diagnostics from
         // the log file for as long as the pipe stays under 4 KiB, which is
         // exactly the window where a failing launch needs them.
