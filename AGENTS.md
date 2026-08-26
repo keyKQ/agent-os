@@ -96,9 +96,11 @@ See [`docs/desktop.md`](docs/desktop.md).
   features are driven from Rust; splash status is pushed with `eval`, not events.
 - The icon set is committed (release runners have no image tooling). Regenerate
   with `python scripts/build_desktop_icon.py all` plus `cargo tauri icon`.
-- Version lives in `desktop/src-tauri/Cargo.toml` and `tauri.conf.json`; both are
-  bumped by the `pump-version` skill and asserted by
-  `tests/test_release_consistency.py`.
+- Version lives in `desktop/src-tauri/Cargo.toml` and `tauri.conf.json`, in
+  semver rather than PEP 440 spelling. Both are listed in
+  [Version bump](#version-bump-release-cut) below and asserted by
+  `tests/test_release_consistency.py`, which fails the build if either drifts
+  from `pyproject.toml`.
 
 ## Source layout — `src/agentos/`
 
@@ -190,6 +192,19 @@ below changes in that same commit — `tests/test_release_consistency.py` and
 | `install.sh` / `install.ps1` | `default_version` / `$defaultVersion` plus the version shown in usage and error text |
 | `tests/test_release_consistency.py` | `CURRENT_VERSION` |
 | `tests/test_install_scripts.py` | `CURRENT_RELEASE_TAG` |
+| `desktop/src-tauri/Cargo.toml` | `[package] version` — **semver, not PEP 440** (see below) |
+| `desktop/src-tauri/tauri.conf.json` | top-level `version` — same semver spelling |
+
+The desktop shell's two files take the *semver* spelling of the release, because
+Cargo rejects PEP 440. A normal CalVer is already valid semver and copies over
+unchanged; a pre-release moves the marker after a hyphen, and a post-release has
+no semver equivalent that sorts correctly, so it becomes build metadata:
+
+| Release | Desktop files |
+|---|---|
+| `2026.8.24` | `2026.8.24` |
+| `2026.8.24rc1` | `2026.8.24-rc1` |
+| `2026.8.24.post1` | `2026.8.24+post1` — semver **ignores** build metadata when ordering, so the desktop updater will not offer a post-release to anyone already on the base version |
 
 Then run the full quality gate above (at minimum
 `uv run pytest tests/test_release_consistency.py tests/test_install_scripts.py -q`
