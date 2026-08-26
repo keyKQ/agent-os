@@ -68,6 +68,17 @@ Or stop the managed gateway:
 agentos gateway stop
 ```
 
+The [desktop app](desktop.md) handles this on its own: it attaches to a gateway
+that is already running rather than starting a second one, and falls back to an
+ephemeral port when 18791 is held by something else.
+
+## Desktop App Problems
+
+The desktop app has its own failure modes — an unsigned build that macOS refuses
+to open, a splash that never hands over, a tray that says "Attached". They are
+covered in [`desktop.md`](desktop.md#troubleshooting), along with the log file
+to read: `~/.agentos/logs/desktop-gateway.log`.
+
 ## Provider Not Configured
 
 Run:

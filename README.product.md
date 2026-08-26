@@ -65,6 +65,7 @@ single-turn chat alone.
 | Configure providers, router, search, channels, memory, and permissions | [`docs/configuration.md`](docs/configuration.md) |
 | Learn the CLI command groups | [`docs/cli.md`](docs/cli.md) |
 | Use the local control console | [`docs/web-ui.md`](docs/web-ui.md) |
+| Run AgentOS as a desktop app | [`docs/desktop.md`](docs/desktop.md) |
 | Resume, export, abort, or delete sessions | [`docs/sessions.md`](docs/sessions.md) |
 | Choose and inspect LLM providers/models | [`docs/providers-and-models.md`](docs/providers-and-models.md) |
 | Configure web search | [`docs/search.md`](docs/search.md) |

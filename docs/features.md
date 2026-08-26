@@ -8,6 +8,7 @@ channels, scheduling, and reusable skills.
 | Surface | What it is for |
 | --- | --- |
 | Web UI | Local control console, setup, chat sessions, approvals, logs, channels, and usage surfaces. |
+| Desktop app | The Web UI in a native window, with the gateway supervised for you and a bundled Python runtime, so nothing has to be installed first. |
 | CLI chat | Interactive terminal agent work. |
 | CLI agent | Single-turn automation, CI-like runs, and benchmark-style invocations. |
 | Gateway RPC | Local server surface for Web UI, CLI clients, channels, and external clients. |
