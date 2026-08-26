@@ -178,6 +178,16 @@ An approval blocks the agent's turn until you answer it, so the app raises a
 native notification the first time it sees each pending request. Clicking the
 tray shows the queue; the tooltip carries the count.
 
+## Downloads
+
+Everything the console can export — a chat transcript, a chart image, the logs,
+the usage CSV, and any artifact the agent produced — saves to your downloads
+folder, using the name the console suggests and without overwriting a file
+that is already there.
+
+The window has no download shelf the way a browser does, so each finished
+download raises a notification naming the file and the folder it went to.
+
 ## Deep links
 
 `agentos://` URLs open the app and route into the console:
