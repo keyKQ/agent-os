@@ -168,7 +168,7 @@ So if you want AgentOS in a terminal as well as in a window, install the CLI the
 normal way and keep it in step:
 
 ```sh
-uv tool install use-agent-os      # once
+uv tool install --python 3.12 "use-agent-os[recommended]"   # once
 agentos upgrade                   # after each app update
 ```
 

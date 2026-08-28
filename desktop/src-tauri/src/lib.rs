@@ -101,15 +101,37 @@ pub fn run() {
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
 
-    let supervisor = Supervisor::new();
-    app.manage(supervisor.clone());
-
     if let Err(error) = window::create_splash(&handle) {
         log::error!("could not create the splash window: {error}");
     }
     if let Err(error) = tray::build(&handle) {
         log::error!("could not create the tray icon: {error}");
     }
+
+    register_terminate_handler(&handle);
+    register_shortcut(&handle);
+    register_deep_links(&handle);
+    updater::install_plugin(&handle);
+    updater::check_on_startup(handle.clone());
+
+    // Everything below resolves the AgentOS home, which reads the gateway's
+    // environment — and that may consult the operator's login shell, up to
+    // ten seconds on an rc file that blocks. On the main thread that stall
+    // would sit between the double-click and the first pixel: the splash is
+    // created above but nothing paints until this function returns and the
+    // event loop runs. Every reader of the Supervisor state tolerates its
+    // absence (`try_state`), which is what makes the brief unmanaged window
+    // safe.
+    std::thread::Builder::new()
+        .name("agentos-bootstrap".to_string())
+        .spawn(move || bootstrap_gateway(handle))?;
+
+    Ok(())
+}
+
+fn bootstrap_gateway(handle: AppHandle) {
+    let supervisor = Supervisor::new();
+    handle.manage(supervisor.clone());
 
     match BundledRuntime::load(&handle) {
         Ok(bundled) => {
@@ -121,7 +143,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 bundled.manifest.profile
             );
             supervisor.spawn(handle.clone(), bundled);
-            app.manage(ApprovalWatcher::spawn(handle.clone(), supervisor));
+            handle.manage(ApprovalWatcher::spawn(handle.clone(), supervisor));
         }
         Err(error) => {
             // Nothing this app does works without the runtime, and no retry
@@ -139,14 +161,6 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 .blocking_show();
         }
     }
-
-    register_terminate_handler(&handle);
-    register_shortcut(&handle);
-    register_deep_links(&handle);
-    updater::install_plugin(&handle);
-    updater::check_on_startup(handle);
-
-    Ok(())
 }
 
 /// Stop the gateway when the OS asks this process to quit.

@@ -78,7 +78,7 @@ jobs:
       - name: Verify LFS assets are hydrated
         shell: bash
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           # An unhydrated pointer is ~130 bytes of text that imports fine and

@@ -91,7 +91,14 @@ fn resolve() -> BTreeMap<String, String> {
             env.extend(login);
         }
         None => {
-            log::warn!("could not read the login shell environment; falling back to a default PATH")
+            // Only worth a warning where a login shell was actually consulted;
+            // on Windows the stub always answers None by design, and the GUI
+            // session already carries the user environment.
+            if cfg!(unix) {
+                log::warn!(
+                    "could not read the login shell environment; falling back to a default PATH"
+                );
+            }
         }
     }
 

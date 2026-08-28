@@ -170,7 +170,10 @@ fn read_record(path: &PathBuf, base_path: &str, keep_pid: bool) -> Option<Discov
         .then(|| record.get("pid").and_then(|value| value.as_u64()))
         .flatten()
         .and_then(|pid| u32::try_from(pid).ok())
-        .filter(|pid| crate::platform::pid_alive(*pid));
+        // pid 0 addresses the caller's own process group on unix, so a
+        // corrupted record would pass the liveness probe and a later stop
+        // would signal the app itself.
+        .filter(|pid| *pid != 0 && crate::platform::pid_alive(*pid));
     Some(Discovered { endpoint, pid })
 }
 
