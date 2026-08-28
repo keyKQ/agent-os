@@ -267,3 +267,14 @@ def test_the_import_probe_cannot_create_bytecode(module) -> None:
 
     source = inspect.getsource(module.verify_desktop_runtime)
     assert '"-B"' in source, "the import probe must run with -B"
+
+
+def test_host_python_must_match_the_bundled_runtime(module) -> None:
+    """The wheelhouse is resolved by the host interpreter; a major.minor drift
+    would pair wheels for one ABI with a runtime of another and surface only at
+    gateway boot on user machines."""
+    matching = f"{sys.version_info.major}.{sys.version_info.minor}.99"
+    module.ensure_host_python_matches_runtime(matching)
+
+    with pytest.raises(SystemExit, match="cannot resolve the wheelhouse"):
+        module.ensure_host_python_matches_runtime(f"{sys.version_info.major + 1}.0.1")

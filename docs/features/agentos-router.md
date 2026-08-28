@@ -176,8 +176,9 @@ The Web UI setup wizard / CLI preselect the
 **Local ML — English-optimized (Pilot)** router mode by default.
 
 **Degrade behavior.** Like `v4_phase3`, Pilot never fails the turn if its
-artifacts are missing. When the Pilot model bundle is not present (e.g. a source
-checkout without `git lfs pull`), the strategy tags the decision
+artifacts are missing. When the Pilot model bundle is not present (e.g. a stale
+checkout that still has Git LFS pointer stubs from before the weights became
+plain git objects), the strategy tags the decision
 `pilot_unavailable` and routes the turn to the default tier (the same graceful
 degrade `v4_phase3` used when its bundle was missing).
 

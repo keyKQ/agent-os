@@ -59,6 +59,29 @@ pub fn gateway_environment() -> &'static BTreeMap<String, String> {
     RESOLVED.get_or_init(resolve)
 }
 
+/// One variable from the gateway's resolved environment.
+///
+/// The shell must read `AGENTOS_*` overrides from the same environment the
+/// gateway child will run with. Reading `std::env` here instead would split
+/// the world in two on macOS: an `export AGENTOS_STATE_DIR=…` in `.zshrc`
+/// reaches the gateway (login-shell resolution) but not the shell's own idea
+/// of the AgentOS home, pidfile, and config path — re-creating the two-homes,
+/// two-gateways problem this module exists to prevent.
+///
+/// Test builds read the process environment directly: resolving would shell
+/// out to a login shell once per test binary, which is neither deterministic
+/// nor cheap.
+pub fn var(key: &str) -> Option<String> {
+    #[cfg(not(test))]
+    {
+        gateway_environment().get(key).cloned()
+    }
+    #[cfg(test)]
+    {
+        std::env::var(key).ok()
+    }
+}
+
 fn resolve() -> BTreeMap<String, String> {
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
 
@@ -75,8 +98,14 @@ fn resolve() -> BTreeMap<String, String> {
     for name in WITHHELD {
         env.remove(name);
     }
-    let path = ensure_login_path(env.get("PATH").map(String::as_str).unwrap_or_default());
-    env.insert("PATH".to_string(), path);
+    // Unix only: the floor's entries are unix paths and the joiner is ':',
+    // while Windows separates PATH with ';' — appending here would corrupt
+    // the last real entry into `C:\dir:/opt/homebrew/bin:...` for the
+    // gateway, the shell tool, and every stdio MCP server under them.
+    if cfg!(unix) {
+        let path = ensure_login_path(env.get("PATH").map(String::as_str).unwrap_or_default());
+        env.insert("PATH".to_string(), path);
+    }
     env
 }
 

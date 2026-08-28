@@ -60,7 +60,8 @@ Windows portable zip `/releases/latest/download/` URL:
 - `AgentOS-windows-x64-portable.zip`
 
 GitHub source archives remain available for code review and developer
-reference; source installs should use `git clone` plus Git LFS. Public
+reference; source installs should use `git clone` (the model weights are plain
+git objects, so no Git LFS step exists anymore). Public
 wheelhouse zips, macOS portable zips, and Linux portable zips are intentionally
 not published for the 0.0.x line. macOS and Linux users install the same wheel
 through the versioned `uv tool install` command documented in the README.
@@ -113,7 +114,9 @@ exists. Fully pinned URLs remain available:
 These checks cannot be fully proven by local artifact generation:
 
 - The tag exists on GitHub and matches `pyproject.toml`.
-- The release workflow can fetch hydrated Git LFS router assets.
+- The release workflow's checkout carries real router/embedding weights, not
+  Git LFS pointer stubs — the workflows verify this explicitly, as the belt
+  against a stray LFS-tracked file ever reappearing.
 - Preview GitHub Releases contain the versioned assets and `SHA256SUMS` after
   `gh release upload --clobber`.
 - Non-preview GitHub Releases contain the versioned assets, Windows latest alias, and
@@ -159,7 +162,6 @@ Four things would break it, none of them loudly until a release runs:
 
 - Turning that Actions switch back off. The job pushes its branch, then fails
   to open the pull request and exits non-zero.
-
 - Requiring approvals or status checks on `main`. The job would open the pull
   request, fail to merge it, and exit non-zero — the cask waits for a human.
 - Moving any tracked file back to Git LFS. `brew tap` clones with the user's

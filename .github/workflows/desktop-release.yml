@@ -258,12 +258,29 @@ jobs:
           out = Path("dist/desktop")
           out.mkdir(parents=True, exist_ok=True)
 
+          # Both macOS architectures emit the same updater artifact name, and
+          # the release job merges every platform's directory flat -- so the
+          # arch goes into the filename here, where the platform is known.
+          platform_tag = os.environ["PLATFORM_TAG"]
+          arch = {"macos-arm64": "aarch64", "macos-x64": "x64"}.get(platform_tag, "")
+          renames = {
+              "AgentOS.app.tar.gz": f"AgentOS_{arch}.app.tar.gz",
+              "AgentOS.app.tar.gz.sig": f"AgentOS_{arch}.app.tar.gz.sig",
+          }
+
           wanted = (".dmg", ".msi", ".exe", ".AppImage", ".deb", ".sig", ".tar.gz", ".zip")
           found = []
           for path in sorted(bundle.rglob("*")):
-              if path.is_file() and path.name.endswith(wanted):
-                  shutil.copy2(path, out / path.name)
-                  found.append(path.name)
+              if not path.is_file() or not path.name.endswith(wanted):
+                  continue
+              # The macOS `app` target materializes AgentOS.app itself under
+              # the bundle tree; anything inside it is runtime payload, not an
+              # installer, and must never ride along as a release asset.
+              if any(part.endswith(".app") for part in path.parent.parts):
+                  continue
+              name = renames.get(path.name, path.name)
+              shutil.copy2(path, out / name)
+              found.append(name)
 
           assert found, f"no installers produced under {bundle}"
           print("\n".join(found))
@@ -298,6 +315,76 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
 
+      # Only produced when the build actually signed updater artifacts (the
+      # TAURI_SIGNING_PRIVATE_KEY secret is set). The updater plugin polls
+      # `releases/latest/download/latest.json`; `cargo tauri build` emits the
+      # signed payloads but not the manifest, so without this step a build
+      # carrying TAURI_UPDATER_PUBKEY would offer "Check for Updates…" that can
+      # never answer.
+      - name: Compose the updater manifest
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          dist = Path("dist")
+          names = {path.name for path in dist.iterdir() if path.is_file()}
+          if not any(name.endswith(".sig") for name in names):
+              print("no signed updater artifacts; skipping latest.json")
+              sys.exit(0)
+
+          versions = {
+              match.group(1)
+              for name in names
+              if (match := re.fullmatch(r"AgentOS_(.+)_(?:aarch64|x64)\.dmg", name))
+          }
+          if len(versions) != 1:
+              sys.exit(f"cannot derive one version from the DMGs: {sorted(names)}")
+          version = versions.pop()
+
+          base = (
+              f"https://github.com/{os.environ['REPO']}/releases/download/"
+              f"{os.environ['RELEASE_TAG']}"
+          )
+          # The updater artifact per platform, in tauri's platform-key terms.
+          artifacts = {
+              "darwin-aarch64": "AgentOS_aarch64.app.tar.gz",
+              "darwin-x86_64": "AgentOS_x64.app.tar.gz",
+              "linux-x86_64": f"AgentOS_{version}_amd64.AppImage",
+              "windows-x86_64": f"AgentOS_{version}_x64-setup.exe",
+          }
+          platforms = {}
+          for key, artifact in artifacts.items():
+              signature = dist / f"{artifact}.sig"
+              if artifact in names and signature.is_file():
+                  platforms[key] = {
+                      "signature": signature.read_text(encoding="utf-8").strip(),
+                      "url": f"{base}/{artifact}",
+                  }
+              else:
+                  print(f"note: no updater artifact for {key}", file=sys.stderr)
+
+          if not platforms:
+              sys.exit("signatures exist but no platform entry could be built")
+
+          manifest = {
+              "version": version,
+              "pub_date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "platforms": platforms,
+          }
+          (dist / "latest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          print(f"latest.json covers: {', '.join(sorted(platforms))}")
+          PY
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -310,6 +397,23 @@ jobs:
             echo "no desktop assets to publish" >&2
             exit 1
           fi
+
+          # The GitHub release itself is created by wheelhouse-release.yml,
+          # which runs on the same tag but on its own clock. Uploading into a
+          # release that does not exist yet fails, so wait for it -- and if the
+          # wheelhouse run died, fail here loudly rather than half-publish.
+          for _ in $(seq 60); do
+            if gh release view "${RELEASE_TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+              break
+            fi
+            echo "release ${RELEASE_TAG} does not exist yet; waiting"
+            sleep 30
+          done
+          if ! gh release view "${RELEASE_TAG}" --repo "${REPO}" >/dev/null 2>&1; then
+            echo "release ${RELEASE_TAG} never appeared; is wheelhouse-release green?" >&2
+            exit 1
+          fi
+
           gh release upload "${RELEASE_TAG}" "${assets[@]}" \
             --repo "${REPO}" --clobber
 
@@ -395,8 +499,12 @@ jobs:
 
           # A previous run may have opened the pull request and then failed to
           # merge it; creating a second one for the same head errors, so reuse.
-          if [[ -z "$(gh pr list --head "${branch}" --base main --state open \
-              --json number --jq '.[].number')" ]]; then
+          # Probed with `gh pr view` because it shares `gh pr merge`'s finder
+          # (same-repo heads only) -- `gh pr list --head` also matches a fork
+          # branch of the same name, which would skip the create here and then
+          # find nothing to merge below, wedging the publish on a squatted name.
+          state="$(gh pr view "${branch}" --json state --jq .state 2>/dev/null || true)"
+          if [[ "${state}" != "OPEN" ]]; then
             gh pr create --base main --head "${branch}" \
               --title "chore(homebrew): point the cask at ${RELEASE_TAG}" \
               --body "Generated by the desktop release workflow from the \

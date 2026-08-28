@@ -54,20 +54,24 @@ impl GatewaySettings {
 /// Mirrors `agentos.paths.default_agentos_home` so the shell and the gateway
 /// agree on where the pidfile and configuration live.
 pub fn agentos_home() -> PathBuf {
-    if let Some(raw) = std::env::var_os("AGENTOS_STATE_DIR") {
-        let trimmed = raw.to_string_lossy().trim().to_string();
+    // Read through the gateway's resolved environment, not `std::env`: on a
+    // GUI launch the launchd environment lacks `.zshrc` exports, and a shell
+    // that resolves `AGENTOS_STATE_DIR` differently from the gateway child it
+    // spawns would probe the wrong pidfile and defeat the one-gateway rule.
+    if let Some(raw) = crate::environment::var("AGENTOS_STATE_DIR") {
+        let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            return expand_home(&trimmed);
+            return expand_home(trimmed);
         }
     }
     home_dir().join(".agentos")
 }
 
 pub fn config_path() -> PathBuf {
-    if let Some(raw) = std::env::var_os("AGENTOS_GATEWAY_CONFIG_PATH") {
-        let trimmed = raw.to_string_lossy().trim().to_string();
+    if let Some(raw) = crate::environment::var("AGENTOS_GATEWAY_CONFIG_PATH") {
+        let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            return expand_home(&trimmed);
+            return expand_home(trimmed);
         }
     }
     agentos_home().join("config.toml")
@@ -79,7 +83,7 @@ pub fn load() -> GatewaySettings {
         .and_then(|raw| raw.parse::<toml::Table>().ok())
         .map(settings_from_toml)
         .unwrap_or_default();
-    apply_env_overrides(from_file, |key| std::env::var(key).ok())
+    apply_env_overrides(from_file, crate::environment::var)
 }
 
 fn settings_from_toml(table: toml::Table) -> GatewaySettings {

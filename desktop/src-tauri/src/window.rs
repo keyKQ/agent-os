@@ -13,11 +13,24 @@
 //! features — downloads, notifications, the tray — are driven from Rust here
 //! instead of from JavaScript running in that page.
 
+use std::sync::RwLock;
+
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use crate::endpoint::Endpoint;
+
+/// The endpoint the navigation guard compares against, updated on every
+/// readiness event.
+///
+/// Managed state rather than a closure capture, deliberately: a gateway
+/// restart can land on a new port (an occupied default falls back to an
+/// ephemeral one), and a guard pinned to the endpoint the window was created
+/// with would veto the very `navigate` that follows the restart — stranding
+/// the window on a dead origin and handing every later navigation to the
+/// system browser.
+struct CurrentEndpoint(RwLock<Endpoint>);
 
 pub const MAIN_WINDOW: &str = "main";
 pub const SPLASH_WINDOW: &str = "splash";
@@ -53,6 +66,15 @@ pub fn on_gateway_ready(app: &AppHandle, endpoint: &Endpoint) {
         return;
     };
 
+    // Refresh the guard's endpoint before any navigation it will judge.
+    if let Some(current) = app.try_state::<CurrentEndpoint>() {
+        if let Ok(mut guarded) = current.0.write() {
+            *guarded = endpoint.clone();
+        }
+    } else {
+        app.manage(CurrentEndpoint(RwLock::new(endpoint.clone())));
+    }
+
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let needs_navigation = window
             .url()
@@ -65,7 +87,7 @@ pub fn on_gateway_ready(app: &AppHandle, endpoint: &Endpoint) {
         }
         let _ = window.show();
         let _ = window.set_focus();
-    } else if let Err(error) = create_main(app, url, endpoint.clone()) {
+    } else if let Err(error) = create_main(app, url) {
         log::error!("could not create the main window: {error}");
         return;
     }
@@ -83,7 +105,7 @@ pub fn on_gateway_failed(app: &AppHandle) {
     }
 }
 
-fn create_main(app: &AppHandle, url: Url, endpoint: Endpoint) -> tauri::Result<WebviewWindow> {
+fn create_main(app: &AppHandle, url: Url) -> tauri::Result<WebviewWindow> {
     let handle = app.clone();
 
     WebviewWindowBuilder::new(app, MAIN_WINDOW, WebviewUrl::External(url))
@@ -93,7 +115,18 @@ fn create_main(app: &AppHandle, url: Url, endpoint: Endpoint) -> tauri::Result<W
         .center()
         .visible(true)
         .on_navigation(move |url| {
-            let allowed = is_gateway_url(url, &endpoint);
+            // Read the endpoint at decision time, not window-creation time:
+            // `on_gateway_ready` keeps this state current across restarts.
+            let allowed = handle
+                .try_state::<CurrentEndpoint>()
+                .and_then(|current| {
+                    current
+                        .0
+                        .read()
+                        .ok()
+                        .map(|endpoint| is_gateway_url(url, &endpoint))
+                })
+                .unwrap_or(false);
             if !allowed {
                 hand_off(&handle, url);
             }

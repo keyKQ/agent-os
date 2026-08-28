@@ -444,7 +444,21 @@ jobs:
               if name.startswith("use_agent_os-")
               and name.endswith("-py3-none-any.whl")
           ]
-          allowed = expected | set(versioned_zip) | set(versioned_wheel)
+          # Desktop installers ride the same release, uploaded by
+          # desktop-release.yml on its own clock. Tauri spells them with an
+          # underscore (`AgentOS_…`), never the hyphen the wheelhouse assets
+          # use, so the prefix is the discriminator; `latest.json` is the
+          # in-app updater's manifest. They are allowed but not required:
+          # the desktop build may still be running when this verify does, and
+          # its own workflow fails loudly if it cannot publish.
+          desktop_assets = {
+              name
+              for name in names
+              if name.startswith("AgentOS_") or name == "latest.json"
+          }
+          allowed = (
+              expected | set(versioned_zip) | set(versioned_wheel) | desktop_assets
+          )
           unexpected = sorted(names - allowed)
           if (
               missing

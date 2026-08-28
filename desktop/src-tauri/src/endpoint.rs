@@ -161,10 +161,16 @@ fn read_record(path: &PathBuf, base_path: &str, keep_pid: bool) -> Option<Discov
     if !is_ready(&endpoint) {
         return None;
     }
+    // Readiness proves the *port*, not the pid: after a reboot the record's
+    // pid is dead while an operator's own `agentos gateway run` may answer on
+    // the recorded port. Adopting that pid would label their gateway as ours
+    // — Restart enabled — and eventually SIGTERM whatever process now holds
+    // the number. A dead pid demotes the discovery to attach-only.
     let pid = keep_pid
         .then(|| record.get("pid").and_then(|value| value.as_u64()))
         .flatten()
-        .and_then(|pid| u32::try_from(pid).ok());
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| crate::platform::pid_alive(*pid));
     Some(Discovered { endpoint, pid })
 }
 

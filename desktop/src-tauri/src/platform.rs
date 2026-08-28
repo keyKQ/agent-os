@@ -79,12 +79,44 @@ pub fn stop_child(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// True when `pid` names a live process.
+///
+/// This cannot tell a survivor from a recycled pid — only start-time
+/// bookkeeping could — but it removes the common stale-record case: after a
+/// reboot every recorded pid is dead, and a dead pid must never be treated as
+/// "our earlier gateway" (and later signalled) just because some *other*
+/// process now answers on the recorded port.
+pub fn pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // SAFETY: kill(2) with signal 0 performs error checking only and is
+        // defined for any pid. Alive-but-not-ours answers EPERM, which still
+        // means the pid is in use.
+        let outcome = unsafe { libc::kill(pid as i32, 0) };
+        outcome == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(windows)]
+    {
+        // `tasklist` filtered to the exact pid prints a table row containing
+        // it on a hit and a "no tasks" message otherwise. Slower than an
+        // OpenProcess probe but dependency-free, and this runs once per adopt.
+        std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")))
+            .unwrap_or(false)
+    }
+}
+
 /// Stop a gateway by pid — one this app started in an earlier run and adopted.
 ///
 /// Not a `Child`, so there is nothing to reap and no exit status to collect;
 /// the process is reparented to init and disappears on its own. The pid comes
-/// from the app's own record and is only used after the endpoint it names has
-/// answered `/ready`, which is what keeps a recycled pid from being signalled.
+/// from the app's own record, adopted only after `pid_alive` said the process
+/// still exists *and* the recorded endpoint answered `/ready`; a recycled pid
+/// behind a real gateway port remains theoretically reachable, which is why
+/// the record is cleared on every clean shutdown.
 pub fn stop_pid(pid: u32) {
     #[cfg(unix)]
     {

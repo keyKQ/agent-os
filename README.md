@@ -369,7 +369,7 @@ After install, use the `agentos` command — do not use `uv run`. If
 you plan to change the code, use
 [Develop from source](#develop-from-source) instead.
 
-1. **Clone the code, with the large files too**
+1. **Clone the code**
 
    Source installs build the bundled Control UI and therefore require
    **Node.js 22 or newer** in addition to Python 3.12+, Git, and `uv`.

@@ -263,6 +263,27 @@ def verify_desktop_runtime(resources_root: Path, *, run_import_probe: bool = Tru
         )
 
 
+def ensure_host_python_matches_runtime(python_version: str) -> None:
+    """Refuse a build whose wheelhouse would target the wrong interpreter.
+
+    ``pip wheel``/``pip download`` resolve wheels for the interpreter running
+    them, and the wheelhouse below is resolved with ``sys.version_info`` — so a
+    host Python whose major.minor differs from the bundled runtime's would
+    pair, say, cp313 wheels with a 3.12 runtime. The pure-Python import probe
+    would still pass; native dependencies (pydantic-core, onnxruntime) would
+    fail only at gateway boot on user machines. Failing here keeps that drift
+    a build error instead of a shipped one.
+    """
+    runtime = tuple(int(part) for part in python_version.split(".")[:2])
+    host = (sys.version_info.major, sys.version_info.minor)
+    if runtime != host:
+        raise SystemExit(
+            f"Host Python {host[0]}.{host[1]} cannot resolve the wheelhouse for the "
+            f"bundled runtime {python_version}; run the build with Python "
+            f"{runtime[0]}.{runtime[1]}."
+        )
+
+
 def build_desktop_runtime(
     *,
     repo_root: Path,
@@ -300,6 +321,7 @@ def build_desktop_runtime(
             + "\nRun: python scripts/build_control_ui.py build"
         )
 
+    ensure_host_python_matches_runtime(python_version)
     builder.download_wheelhouse(
         package_dir,
         wheel_path,

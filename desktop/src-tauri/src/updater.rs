@@ -149,23 +149,43 @@ fn prompt(app: AppHandle, update: tauri_plugin_updater::Update) {
 }
 
 async fn install(app: AppHandle, update: tauri_plugin_updater::Update) {
+    // Download while everything still runs: the payload is a few hundred
+    // megabytes, and a failed download must leave a working app. Stopping the
+    // gateway first would leave a dead app whose tray still offers a Restart
+    // that a finished supervision loop can never honour.
+    let bytes = match update.download(|_chunk, _total| {}, || {}).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            log::error!("update download failed: {error}");
+            message(
+                &app,
+                &format!("The update could not be downloaded:\n{error}"),
+                MessageDialogKind::Error,
+            );
+            return;
+        }
+    };
+
     // The gateway holds the SQLite database and a listening socket, and the
-    // installer is about to replace the interpreter running it. Stopping first
-    // turns a possible mid-write replacement into an ordinary shutdown.
+    // installer is about to replace the interpreter running it. Stopping now —
+    // with the payload already on disk — turns a possible mid-write
+    // replacement into an ordinary shutdown.
     if let Some(supervisor) = app.try_state::<crate::supervisor::Supervisor>() {
         supervisor.shutdown();
     }
 
-    match update
-        .download_and_install(|_chunk, _total| {}, || {})
-        .await
-    {
+    match update.install(bytes) {
         Ok(()) => app.restart(),
         Err(error) => {
             log::error!("update install failed: {error}");
+            // The supervisor is already down and its loop has exited, so honesty
+            // about the way back matters more than optimism here.
             message(
                 &app,
-                &format!("The update could not be installed:\n{error}"),
+                &format!(
+                    "The update could not be installed:\n{error}\n\nQuit and reopen AgentOS to \
+                     restart the gateway."
+                ),
                 MessageDialogKind::Error,
             );
         }
