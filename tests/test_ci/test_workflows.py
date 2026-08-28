@@ -112,16 +112,16 @@ def test_default_ci_blocks_pull_requests_and_main_and_dev_pushes() -> None:
     assert "branches: [main, dev]" in text
     assert "PYTHONPATH: ${{ github.workspace }}" in text
     assert "Configure runtime directories" in text
-    assert 'AGENTOS_STATE_DIR=%s/agentos-state\\n' in text
-    assert 'AGENTOS_LOG_DIR=%s/agentos-logs\\n' in text
-    assert "AGENTOS_TURN_CALL_LOG: \"0\"" in text
+    assert "AGENTOS_STATE_DIR=%s/agentos-state\\n" in text
+    assert "AGENTOS_LOG_DIR=%s/agentos-logs\\n" in text
+    assert 'AGENTOS_TURN_CALL_LOG: "0"' in text
     assert "actionlint@v1.7.12" in text
     assert "Classify changed files" in text
     assert "Ubuntu quality gate" in text
     assert "Windows compatibility tests" in text
     assert "Release packaging contracts" in text
     assert "CI result" in text
-    assert 'push)\n              printf \'.ci/run-all\\n\' > "${changed_files}"' in text
+    assert "push)\n              printf '.ci/run-all\\n' > \"${changed_files}\"" in text
     assert "runtime_changed" in text
     assert "test_changed" in text
     assert "ci_changed" in text
@@ -150,6 +150,27 @@ def test_ci_change_classifier_allows_root_and_docs_markdown_only(tmp_path: Path)
         "dependency_changed": "false",
         "release_changed": "false",
     }
+
+
+def test_ci_change_classifier_treats_the_homebrew_cask_as_release_surface(
+    tmp_path: Path,
+) -> None:
+    """The cask decides what a released tap serves; it ships nothing into the app."""
+    outputs = _classify_changed_files(
+        tmp_path,
+        [
+            "packaging/homebrew/agentos.rb",
+            "scripts/render_homebrew_cask.py",
+            "tests/test_scripts/test_render_homebrew_cask.py",
+        ],
+    )
+
+    assert outputs["release_changed"] == "true"
+    assert outputs["test_changed"] == "true"
+    assert outputs["docs_only"] == "false"
+    # `scripts/*` would otherwise fall through to the runtime bucket and drag in
+    # the full quality gate for a file the app never loads.
+    assert outputs["runtime_changed"] == "false"
 
 
 def test_classifier_helper_prefers_git_bash_over_windows_wsl_bash(tmp_path: Path) -> None:
@@ -384,13 +405,9 @@ def test_live_release_e2e_workflow_is_manual_and_separates_private_inputs() -> N
     assert "playwright install chromium" not in text
     assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in text
     assert (
-        "AGENTOS_LIVE_TELEGRAM_BOT_TOKEN: "
-        "${{ secrets.AGENTOS_LIVE_TELEGRAM_BOT_TOKEN }}"
+        "AGENTOS_LIVE_TELEGRAM_BOT_TOKEN: ${{ secrets.AGENTOS_LIVE_TELEGRAM_BOT_TOKEN }}"
     ) in text
-    assert (
-        "AGENTOS_LIVE_TELEGRAM_CHAT_ID: "
-        "${{ secrets.AGENTOS_LIVE_TELEGRAM_CHAT_ID }}"
-    ) in text
+    assert ("AGENTOS_LIVE_TELEGRAM_CHAT_ID: ${{ secrets.AGENTOS_LIVE_TELEGRAM_CHAT_ID }}") in text
     assert "tests/private" not in text
 
 
@@ -494,7 +511,7 @@ def test_wheelhouse_release_publishes_only_recommended_router_profile() -> None:
 
     assert "      profile:\n" not in text
     assert "RELEASE_PROFILE: recommended" in text
-    assert "--profile \"${RELEASE_PROFILE}\"" in text
+    assert '--profile "${RELEASE_PROFILE}"' in text
     assert "- core" not in text
 
 

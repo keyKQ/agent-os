@@ -96,6 +96,14 @@ See [`docs/desktop.md`](docs/desktop.md).
   features are driven from Rust; splash status is pushed with `eval`, not events.
 - The icon set is committed (release runners have no image tooling). Regenerate
   with `python scripts/build_desktop_icon.py all` plus `cargo tauri icon`.
+- The macOS Homebrew cask is generated, not committed: edit the template at
+  `packaging/homebrew/agentos.rb`, and the release workflow renders it with
+  `scripts/render_homebrew_cask.py` and pushes it to the
+  `use-agent-os/homebrew-agentos` tap. The tap must stay a separate, LFS-free
+  repository — `brew tap` cannot clone this one (LFS filter, no `git-lfs` on
+  brew's PATH). The template carries no version of its own, so it stays out of
+  the bump table below. Validate a change with `brew style` against a rendered
+  copy; `tests/test_scripts/test_render_homebrew_cask.py` covers the rest.
 - Version lives in `desktop/src-tauri/Cargo.toml` and `tauri.conf.json`, in
   semver rather than PEP 440 spelling. Both are listed in
   [Version bump](#version-bump-release-cut) below and asserted by

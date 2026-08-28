@@ -414,6 +414,7 @@ jobs:
           uv run pytest \
             tests/test_scripts/test_build_control_ui.py \
             tests/test_scripts/test_build_wheelhouse_zip.py \
+            tests/test_scripts/test_render_homebrew_cask.py \
             tests/test_frontend_third_party_notices.py \
             tests/test_install_scripts.py \
             tests/test_root_start_scripts.py \

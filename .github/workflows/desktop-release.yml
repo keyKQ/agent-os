@@ -309,3 +309,84 @@ jobs:
           fi
           gh release upload "${RELEASE_TAG}" "${assets[@]}" \
             --repo "${REPO}" --clobber
+
+  homebrew:
+    name: Publish Homebrew cask
+    # Only after the assets are attached: the cask's URLs have to resolve by
+    # the time anyone can `brew install` it.
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      # Job level for the same reason the macOS signing step reads it there: a
+      # step's `if` cannot see the `secrets` context. Without the token this
+      # job renders and checks the cask, then stops -- forks and pre-token
+      # releases stay green instead of failing on a push they cannot make.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      TAP_REPO: use-agent-os/homebrew-agentos
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the macOS installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: desktop-macos-*
+          merge-multiple: true
+
+      - name: Render the cask
+        shell: bash
+        run: |
+          if [[ -z "${RELEASE_TAG}" ]]; then
+            echo "no release tag to render a cask for" >&2
+            exit 1
+          fi
+          python scripts/render_homebrew_cask.py \
+            --tag "${RELEASE_TAG}" \
+            --dmg-dir dist \
+            --output Casks/agentos.rb
+          cat Casks/agentos.rb
+
+      - name: Push to the tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        shell: bash
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${TAP_REPO}.git" tap
+          mkdir -p tap/Casks
+          cp Casks/agentos.rb tap/Casks/agentos.rb
+
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Staged, not worktree: on the tap's first release the cask is an
+          # untracked file, which `git diff` reports as no change at all -- the
+          # push would skip itself forever. A re-run of the same tag renders
+          # byte-identical output and stages nothing, which is the case this
+          # guard is actually for, because `git commit` errors on an empty tree.
+          git -C tap add Casks/agentos.rb
+          if git -C tap diff --cached --quiet; then
+            echo "tap already carries this cask; nothing to push"
+            exit 0
+          fi
+
+          git -C tap commit -m "agentos: update to ${RELEASE_TAG#v}"
+          git -C tap push origin HEAD
+
+      - name: Report a skipped push
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        shell: bash
+        run: |
+          {
+            echo "### Homebrew cask"
+            echo
+            echo "Rendered but **not published**: \`HOMEBREW_TAP_TOKEN\` is not set,"
+            echo "so the ${TAP_REPO} tap still points at the previous release."
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -26,8 +26,42 @@ on-device router and embedding models. Other platforms are the same order of
 magnitude. That is the trade for a download that runs without any other install
 step.
 
-They are also unsigned, so macOS and Windows both warn on first launch.
-[Unsigned builds](#unsigned-builds) has the two-click way past it.
+A download from that page is also unsigned, so macOS and Windows both warn on
+first launch. [Unsigned builds](#unsigned-builds) has the two-click way past it.
+
+### Homebrew
+
+On macOS the tap serves the same `.dmg`, and skips that warning:
+
+```sh
+brew tap use-agent-os/agentos
+brew trust use-agent-os/agentos
+brew install --cask agentos
+```
+
+The second line is not optional ceremony. Homebrew 6 refuses to load a cask from
+a tap it does not know — *"Refusing to load cask … from untrusted tap"* — and a
+bare `brew upgrade` skips untrusted taps rather than failing, printing one
+*"Skipping … because it is not trusted"* warning as it goes, so without it your
+updates stop with nothing louder than a line in the scroll. Trusting is a
+one-time, per-tap decision.
+
+If you would rather not trust the tap, naming the cask in full counts as saying
+yes to that one cask instead:
+
+```sh
+brew install --cask use-agent-os/agentos/agentos
+```
+
+The cask clears the quarantine flag once the app is staged, announcing it as it
+goes, so the first launch is an ordinary one. That is a deliberate trade rather
+than a free win — [Unsigned builds](#unsigned-builds) says what it costs and why
+the checksum is what carries the weight instead.
+
+`brew upgrade --cask agentos` moves you to the next release. The cask in the tap
+is generated, not written by hand: the release workflow fills in the version and
+both checksums from the installers it just built, so the tap cannot point at a
+hash the release does not have.
 
 First launch shows a splash while the gateway starts, then swaps in the console.
 A cold first start takes longer than later ones: the router loads its ONNX model
@@ -215,6 +249,26 @@ the same thing:
 xattr -dr com.apple.quarantine /Applications/AgentOS.app
 ```
 
+**macOS via Homebrew.** The cask runs that same command for you in a
+`postflight` block, and prints a line saying so. Homebrew applies the quarantine
+attribute itself when it stages a cask — it is not something the browser did and
+the cask inherited — so an unnotarized app installed with `brew` would otherwise
+land in `/Applications` and refuse to open, which is a worse failure than the
+browser download because nothing explains it.
+
+`brew install --cask --no-quarantine` was the supported way to ask for this.
+Homebrew deprecated the flag in 4.6.19 (October 2025) and deleted it in 6.0.14
+(July 2026); on a current Homebrew it now fails with `Error: invalid option:
+--no-quarantine`. Clearing the attribute from the cask is what remains.
+
+What that costs is real: Gatekeeper stops vetting the bundle, and it does so
+without asking. What stands in its place is the `sha256` in the cask, which is
+generated from the installer the release actually published — so Homebrew
+refuses the download outright if the bytes are not the ones this project built.
+That check is stronger than the dialog it replaces, but it is a different check,
+and it says nothing about who built them. Notarization is the thing that would,
+and it needs a paid Apple Developer ID the project does not carry.
+
 **Windows.** SmartScreen shows *"Windows protected your PC"*. Click **More
 info** → **Run anyway**.
 
@@ -295,6 +349,12 @@ Add the private key and its password to the repository as
 public half as `TAURI_UPDATER_PUBKEY`. The release workflow turns on updater
 artifacts only when it finds them.
 
+If you installed through [Homebrew](#homebrew), prefer `brew upgrade --cask
+agentos` and let the in-app prompt go. Both routes work and both land on the
+same build, but only Homebrew's leaves the Caskroom agreeing with what is in
+`/Applications`; after an in-app update the two disagree until the next
+`brew upgrade` puts the cask's copy back.
+
 Inside the app, `agentos upgrade` will tell you to update the app rather than
 handing you a `pip install`: the runtime lives inside the application bundle,
 where replacing packages breaks the code signature and gets reverted by the next
@@ -313,6 +373,11 @@ app update anyway.
   builds](#unsigned-builds) below for what that means when you install one. The
   signing machinery is in the release workflow and switches on when the
   certificates exist; nothing in the app depends on it.
+- The [Homebrew](#homebrew) cask goes further and clears the quarantine flag on
+  your behalf, which is the one place AgentOS lowers a macOS defence rather than
+  telling you how to. What backs the install instead is the cask's `sha256`,
+  generated from the published installer. It is called out here because a
+  security posture that only lists the defences is not one.
 
 ## Building it yourself
 

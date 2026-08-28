@@ -65,7 +65,7 @@ while IFS= read -r path || [[ -n "${path}" ]]; do
     .github/scripts/*)
       mark_ci_changed
       ;;
-    tests/test_scripts/test_build_control_ui.py | tests/test_scripts/test_build_wheelhouse_zip.py | tests/test_frontend_third_party_notices.py | tests/test_install_scripts.py | tests/test_root_start_scripts.py | tests/test_release_consistency.py | tests/test_public_release_hygiene.py)
+    tests/test_scripts/test_build_control_ui.py | tests/test_scripts/test_build_wheelhouse_zip.py | tests/test_scripts/test_render_homebrew_cask.py | tests/test_frontend_third_party_notices.py | tests/test_install_scripts.py | tests/test_root_start_scripts.py | tests/test_release_consistency.py | tests/test_public_release_hygiene.py)
       mark_test_changed
       mark_release_changed
       ;;
@@ -78,6 +78,11 @@ while IFS= read -r path || [[ -n "${path}" ]]; do
       ;;
     scripts/build_wheelhouse_zip.py | scripts/install_source.sh | scripts/install_source.ps1)
       mark_runtime_changed
+      mark_release_changed
+      ;;
+    # The Homebrew cask template and its renderer ship nothing into the app;
+    # they only decide what a released tap serves.
+    packaging/homebrew/* | scripts/render_homebrew_cask.py)
       mark_release_changed
       ;;
     install.sh | install.ps1 | start.sh | start.ps1 | README.release.md | RELEASES.md)

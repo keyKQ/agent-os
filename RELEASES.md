@@ -123,6 +123,43 @@ These checks cannot be fully proven by local artifact generation:
 - Windows browser downloads may carry Mark-of-the-Web; SmartScreen,
   Smart App Control, enterprise policy, and unsigned binary reputation must be
   checked on a real Windows machine.
+- The `homebrew` job in `desktop-release.yml` pushed a cask carrying this tag's
+  version and checksums to `use-agent-os/homebrew-agentos`. Without
+  `HOMEBREW_TAP_TOKEN` it renders the cask, skips the push, and says so in the
+  job summary — a green run does not by itself mean the tap moved.
+
+## Homebrew tap
+
+`brew install --cask agentos` is served by a separate repository,
+`use-agent-os/homebrew-agentos`. The separation is forced, not aesthetic: this
+repository stores its models in Git LFS, and `brew tap` clones with the user's
+LFS filter active but no `git-lfs` on its scrubbed PATH — the clone hard-fails
+with a git fatal on any machine that ever ran `git lfs install`, which includes
+every contributor here. A tap has to be an LFS-free repository, and calling it
+`homebrew-agentos` is what lets `brew tap use-agent-os/agentos` find it by name.
+
+The cask is generated, never hand-edited: `packaging/homebrew/agentos.rb` in
+this repository is the template, and `scripts/render_homebrew_cask.py` fills in
+the tag, the version, and one SHA-256 per architecture from the DMGs the
+release just built.
+
+One-time setup:
+
+1. Create `use-agent-os/homebrew-agentos`, initialised with a README so it has
+   a default branch to push onto. The first release adds `Casks/agentos.rb`;
+   nothing in it is ever edited by hand.
+2. Add a token with `contents: write` on that repository as the
+   `HOMEBREW_TAP_TOKEN` secret here. A fine-grained PAT scoped to the single
+   tap repository is the smallest thing that works.
+
+An expired token does not skip quietly: the skip path only covers an unset
+secret, so the push step runs, fails to clone, and turns the job red.
+
+To check a release by hand afterwards:
+
+```sh
+brew update && brew upgrade --cask agentos
+```
 
 ## Why preview package versions use rc
 

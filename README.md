@@ -146,6 +146,18 @@ Grab the installer for your platform from the
 | Windows | `AgentOS_<version>_x64-setup.exe` |
 | Linux | `AgentOS_<version>_amd64.AppImage` or `.deb` |
 
+On macOS you can let Homebrew fetch the same `.dmg` instead:
+
+```sh
+brew tap use-agent-os/agentos
+brew trust use-agent-os/agentos
+brew install --cask agentos
+```
+
+Homebrew refuses casks from taps it does not know, and a bare
+`brew upgrade` only prints a warning as it skips them, so the
+middle line is what keeps updates working.
+
 The app starts the gateway for you, keeps it running, and opens the
 same Web UI console in a native window. It uses the same `~/.agentos`
 home as the CLI, so a session you start in the app is the one
@@ -156,11 +168,13 @@ unpacks to about 400 MB — because they include a complete Python
 runtime plus the on-device router and embedding models. That is the
 trade for a download that runs on its own.
 
-**First launch warns you.** The builds are not code-signed, so macOS
-says it cannot verify the app (or that it is "damaged" — it is not),
-and Windows SmartScreen asks for a confirmation. On macOS open
-**System Settings → Privacy & Security → Open Anyway**; on Windows
-click **More info → Run anyway**. Details in
+**A downloaded installer warns you on first launch.** The builds are
+not code-signed, so macOS says it cannot verify the app (or that it is
+"damaged" — it is not), and Windows SmartScreen asks for a
+confirmation. On macOS open **System Settings → Privacy & Security →
+Open Anyway**; on Windows click **More info → Run anyway**. The
+Homebrew cask clears that flag for you and says so while it does it.
+What each route trades away is in
 [`docs/desktop.md`](docs/desktop.md#unsigned-builds).
 
 See [`docs/desktop.md`](docs/desktop.md) for the tray menu, approval
