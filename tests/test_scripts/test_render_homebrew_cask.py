@@ -140,11 +140,35 @@ def test_release_workflow_publishes_the_committed_template() -> None:
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
     assert "scripts/render_homebrew_cask.py" in workflow
-    assert "use-agent-os/homebrew-agentos" in workflow
-    # The push has to wait for the assets the cask's URLs point at.
+    assert "--output Casks/agentos.rb" in workflow
+    # The commit has to wait for the assets the cask's URLs point at.
     assert "needs: release" in workflow
-    # This repository cannot serve as its own tap: `brew tap` clones with git
-    # LFS filters active but no `git-lfs` on its scrubbed PATH, so the clone
-    # hard-fails on any machine that ever ran `git lfs install`. The cask has
-    # to live in a separate, LFS-free repository.
-    assert "HOMEBREW_TAP_TOKEN" in workflow
+    # This repository is its own tap, and `brew` reads a tap's default branch,
+    # so a cask committed onto the tag would never reach anyone.
+    assert "ref: main" in workflow
+
+
+def test_release_workflow_needs_no_credential_beyond_the_run_token() -> None:
+    """`main` is protected but takes zero approvals, so the run can self-merge."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "GH_TOKEN: ${{ github.token }}" in workflow
+    assert "gh pr merge" in workflow
+    # A personal access token here would be a standing credential the release
+    # does not need; the default read-only permission is raised per job instead.
+    assert "HOMEBREW_TAP_TOKEN" not in workflow
+    assert "pull-requests: write" in workflow
+
+
+def test_repository_stays_tappable() -> None:
+    """`brew tap` of this repository is the install path; two things break it.
+
+    A formula sharing the `agentos` token would win a bare `brew install
+    agentos` over the cask, and an LFS-tracked file makes `brew tap` clone
+    hard-fail on any machine that ever ran `git lfs install` (the user's LFS
+    filter fires with no `git-lfs` on brew's scrubbed PATH).
+    """
+    assert not (REPO_ROOT / "Formula" / "agentos.rb").exists()
+
+    gitattributes = (REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert "filter=lfs" not in gitattributes

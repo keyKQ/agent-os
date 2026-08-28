@@ -80,9 +80,10 @@ while IFS= read -r path || [[ -n "${path}" ]]; do
       mark_runtime_changed
       mark_release_changed
       ;;
-    # The Homebrew cask template and its renderer ship nothing into the app;
-    # they only decide what a released tap serves.
-    packaging/homebrew/* | scripts/render_homebrew_cask.py)
+    # The Homebrew cask template, its renderer, and the generated cask this
+    # repository serves as a tap ship nothing into the app; they only decide
+    # what `brew install` fetches.
+    packaging/homebrew/* | scripts/render_homebrew_cask.py | Casks/*)
       mark_release_changed
       ;;
     install.sh | install.ps1 | start.sh | start.ps1 | README.release.md | RELEASES.md)

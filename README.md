@@ -146,17 +146,19 @@ Grab the installer for your platform from the
 | Windows | `AgentOS_<version>_x64-setup.exe` |
 | Linux | `AgentOS_<version>_amd64.AppImage` or `.deb` |
 
-On macOS you can let Homebrew fetch the same `.dmg` instead:
+On macOS you can let Homebrew fetch the same `.dmg` instead —
+this repository doubles as the tap, hence the URL:
 
 ```sh
-brew tap use-agent-os/agentos
+brew tap use-agent-os/agentos https://github.com/use-agent-os/agent-os
 brew trust use-agent-os/agentos
 brew install --cask agentos
 ```
 
 Homebrew refuses casks from taps it does not know, and a bare
 `brew upgrade` only prints a warning as it skips them, so the
-middle line is what keeps updates working.
+middle line is what keeps updates working. The tap clone is
+around 130 MB: it is the whole project, models included.
 
 The app starts the gateway for you, keeps it running, and opens the
 same Web UI console in a native window. It uses the same `~/.agentos`

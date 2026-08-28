@@ -136,7 +136,3 @@ desktop/src-tauri/target/
 desktop/src-tauri/resources/runtime/
 desktop/src-tauri/resources/runtime.json
 desktop/src-tauri/gen/
-
-# Rendered Homebrew cask. The template is packaging/homebrew/agentos.rb; the
-# filled-in copy belongs in the use-agent-os/homebrew-agentos tap, not here.
-Casks/

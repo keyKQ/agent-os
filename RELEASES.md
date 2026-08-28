@@ -123,37 +123,41 @@ These checks cannot be fully proven by local artifact generation:
 - Windows browser downloads may carry Mark-of-the-Web; SmartScreen,
   Smart App Control, enterprise policy, and unsigned binary reputation must be
   checked on a real Windows machine.
-- The `homebrew` job in `desktop-release.yml` pushed a cask carrying this tag's
-  version and checksums to `use-agent-os/homebrew-agentos`. Without
-  `HOMEBREW_TAP_TOKEN` it renders the cask, skips the push, and says so in the
-  job summary — a green run does not by itself mean the tap moved.
+- The `homebrew` job in `desktop-release.yml` merged a cask carrying this tag's
+  version and checksums onto `main` as `Casks/agentos.rb`. It opens a pull
+  request and merges it in the same run, so a green run means the tap moved; a
+  red one usually means branch protection changed under it.
 
 ## Homebrew tap
 
-`brew install --cask agentos` is served by a separate repository,
-`use-agent-os/homebrew-agentos`. The separation is forced, not aesthetic: this
-repository stores its models in Git LFS, and `brew tap` clones with the user's
-LFS filter active but no `git-lfs` on its scrubbed PATH — the clone hard-fails
-with a git fatal on any machine that ever ran `git lfs install`, which includes
-every contributor here. A tap has to be an LFS-free repository, and calling it
-`homebrew-agentos` is what lets `brew tap use-agent-os/agentos` find it by name.
+This repository is its own tap — there is deliberately no separate
+`homebrew-agentos` repository to keep in step with a release. Homebrew's
+`homebrew-<tap>` naming rule only governs what `brew tap` can find by name
+alone; pointed at a URL, it takes any repository, which is why the documented
+install starts with
+`brew tap use-agent-os/agentos https://github.com/use-agent-os/agent-os`.
 
-The cask is generated, never hand-edited: `packaging/homebrew/agentos.rb` in
-this repository is the template, and `scripts/render_homebrew_cask.py` fills in
-the tag, the version, and one SHA-256 per architecture from the DMGs the
-release just built.
+The cask is generated, never hand-edited. `packaging/homebrew/agentos.rb` is
+the template, `scripts/render_homebrew_cask.py` fills in the tag, the version,
+and one SHA-256 per architecture from the DMGs the release just built, and the
+result is committed to `Casks/agentos.rb`. Until the first desktop release
+runs, tapping works but the cask does not exist yet.
 
-One-time setup:
+There is no setup and no secret. `main` is protected, so the job cannot push to
+it; what it can do is open a pull request and merge it, because protection here
+requires a pull request but zero approvals and no status checks. The run's own
+`GITHUB_TOKEN` covers both, with `contents: write` and `pull-requests: write`
+raised on that job alone.
 
-1. Create `use-agent-os/homebrew-agentos`, initialised with a README so it has
-   a default branch to push onto. The first release adds `Casks/agentos.rb`;
-   nothing in it is ever edited by hand.
-2. Add a token with `contents: write` on that repository as the
-   `HOMEBREW_TAP_TOKEN` secret here. A fine-grained PAT scoped to the single
-   tap repository is the smallest thing that works.
+Three things would break it, none of them loudly until a release runs:
 
-An expired token does not skip quietly: the skip path only covers an unset
-secret, so the push step runs, fails to clone, and turns the job red.
+- Requiring approvals or status checks on `main`. The job would open the pull
+  request, fail to merge it, and exit non-zero — the cask waits for a human.
+- Moving any tracked file back to Git LFS. `brew tap` clones with the user's
+  LFS filter active but no `git-lfs` on brew's scrubbed PATH, so the clone
+  hard-fails on any machine that ever ran `git lfs install`.
+  `tests/test_scripts/test_render_homebrew_cask.py` pins this.
+- Renaming or unpublishing this repository. The tap URL is what users typed.
 
 To check a release by hand afterwards:
 

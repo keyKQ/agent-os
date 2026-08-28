@@ -162,6 +162,9 @@ def test_ci_change_classifier_treats_the_homebrew_cask_as_release_surface(
             "packaging/homebrew/agentos.rb",
             "scripts/render_homebrew_cask.py",
             "tests/test_scripts/test_render_homebrew_cask.py",
+            # Written by the release workflow itself, so it lands on main on
+            # its own and would otherwise drag the full gate behind it.
+            "Casks/agentos.rb",
         ],
     )
 

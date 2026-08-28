@@ -4,9 +4,10 @@
 The template lives at ``packaging/homebrew/agentos.rb`` and carries
 ``__UPPER_SNAKE__`` placeholders. This script fills them with the release tag,
 the version Tauri stamped into the DMG filenames, and the SHA-256 of each
-architecture's DMG, then writes the finished cask. The ``homebrew`` job in
-``.github/workflows/desktop-release.yml`` pushes that output to the
-use-agent-os/homebrew-agentos tap after every desktop release.
+architecture's DMG, then writes the finished cask to ``Casks/agentos.rb``. This
+repository is its own Homebrew tap, so that path is what ``brew`` reads; the
+``homebrew`` job in ``.github/workflows/desktop-release.yml`` merges it onto
+``main`` after every desktop release.
 
 Everything it needs is on disk: no network call, no GitHub API, and no second
 source for the version. The DMGs are the artifacts the release actually

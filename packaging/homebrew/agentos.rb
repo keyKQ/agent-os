@@ -5,9 +5,10 @@
 # The double-underscored upper-case tokens below are placeholders.
 # `scripts/render_homebrew_cask.py` fills them from the release tag and the
 # built `.dmg` files, and the `homebrew` job in
-# `.github/workflows/desktop-release.yml` pushes the result to the
-# use-agent-os/homebrew-agentos tap. Edit this template, never the copy in the
-# tap: the next release overwrites it.
+# `.github/workflows/desktop-release.yml` merges the result onto `main` as
+# `Casks/agentos.rb`, which is the file `brew` actually reads -- this repository
+# is its own tap. Edit this template, never `Casks/agentos.rb`: the next release
+# overwrites it.
 cask "agentos" do
   arch arm: "aarch64", intel: "x64"
 

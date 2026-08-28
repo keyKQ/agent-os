@@ -34,10 +34,17 @@ first launch. [Unsigned builds](#unsigned-builds) has the two-click way past it.
 On macOS the tap serves the same `.dmg`, and skips that warning:
 
 ```sh
-brew tap use-agent-os/agentos
+brew tap use-agent-os/agentos https://github.com/use-agent-os/agent-os
 brew trust use-agent-os/agentos
 brew install --cask agentos
 ```
+
+This repository is the tap — there is no separate `homebrew-agentos` repository
+to keep in step with it. That is why the first line carries a URL: Homebrew
+finds a tap by name alone only when the repository is called `homebrew-<tap>`,
+and takes any other repository if you point at it. The trade is the clone,
+around 130 MB, because the tap is the whole project rather than a directory
+holding one file.
 
 The second line is not optional ceremony. Homebrew 6 refuses to load a cask from
 a tap it does not know — *"Refusing to load cask … from untrusted tap"* — and a
@@ -58,7 +65,7 @@ goes, so the first launch is an ordinary one. That is a deliberate trade rather
 than a free win — [Unsigned builds](#unsigned-builds) says what it costs and why
 the checksum is what carries the weight instead.
 
-`brew upgrade --cask agentos` moves you to the next release. The cask in the tap
+`brew upgrade --cask agentos` moves you to the next release. `Casks/agentos.rb`
 is generated, not written by hand: the release workflow fills in the version and
 both checksums from the installers it just built, so the tap cannot point at a
 hash the release does not have.
