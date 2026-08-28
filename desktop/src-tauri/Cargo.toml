@@ -1,6 +1,6 @@
 [package]
 name = "agentos-desktop"
-version = "2026.8.24"
+version = "2026.8.28"
 description = "AgentOS desktop application"
 authors = ["AgentOS contributors"]
 license = "Apache-2.0"
