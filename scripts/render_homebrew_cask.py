@@ -27,7 +27,14 @@ DEFAULT_TEMPLATE = REPO_ROOT / "packaging" / "homebrew" / "agentos.rb"
 DEFAULT_OUTPUT = REPO_ROOT / "Casks" / "agentos.rb"
 
 # Tauri's DMG bundler names its output `<productName>_<version>_<arch>.dmg`.
-DMG_NAME = re.compile(r"^AgentOS_(?P<version>.+)_(?P<arch>aarch64|x64)\.dmg$")
+# The version charset is restricted to what a release can actually spell
+# (CalVer plus semver's `-rc1` / `+post1` markers): the captured text lands
+# verbatim in Casks/agentos.rb, a Ruby file every `brew install` executes, so
+# `"`/`#{`/`$` must never travel from a filename into it.
+DMG_NAME = re.compile(r"^AgentOS_(?P<version>[0-9A-Za-z.+-]+)_(?P<arch>aarch64|x64)\.dmg$")
+
+# Same reasoning for the tag, which is substituted into the cask's `url`.
+TAG_FORMAT = re.compile(r"^v[0-9A-Za-z.-]+$")
 
 # The cask's `arch` stanza maps Homebrew's two macOS arches onto these names,
 # so the same two keys have to arrive from the filenames.
@@ -133,8 +140,11 @@ def render(
 
 
 def build_cask(*, tag: str, dmg_dir: Path, template_path: Path) -> str:
-    if not tag.startswith("v"):
-        raise RenderError(f"release tag must start with 'v'; got '{tag}'")
+    if TAG_FORMAT.fullmatch(tag) is None:
+        raise RenderError(
+            f"release tag must be 'v' plus [0-9A-Za-z.-]; got '{tag}'. The tag "
+            "is substituted into executable Ruby, so no other characters travel."
+        )
     if not template_path.is_file():
         raise RenderError(f"cask template not found: {template_path}")
     if not dmg_dir.is_dir():

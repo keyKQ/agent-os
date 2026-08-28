@@ -107,6 +107,37 @@ def test_accepts_every_spelling_the_release_cut_produces(
     assert f"/releases/download/{tag}/" in cask
 
 
+@pytest.mark.parametrize(
+    "tag",
+    [
+        'v2026"; system("id") #',
+        "v2026.8.24#{system('id')}",
+        "v2026.8.24 rc1",
+        "v2026.8.24$PATH",
+    ],
+)
+def test_tag_charset_is_allowlisted_because_the_cask_is_executable_ruby(
+    tmp_path: Path, tag: str
+) -> None:
+    script = load_script()
+    make_release(tmp_path)
+
+    with pytest.raises(script.RenderError, match="release tag must be"):
+        script.build_cask(tag=tag, dmg_dir=tmp_path, template_path=TEMPLATE_PATH)
+
+
+def test_dmg_version_charset_is_allowlisted_too(tmp_path: Path) -> None:
+    """The version lands in the cask verbatim; a hostile filename must not."""
+    script = load_script()
+    write_dmg(tmp_path, 'AgentOS_2026"esc_aarch64.dmg', b"arm bytes")
+    write_dmg(tmp_path, 'AgentOS_2026"esc_x64.dmg', b"intel bytes")
+
+    # The quoted name fails the DMG pattern, so the render dies on the
+    # missing-architecture check instead of writing the payload through.
+    with pytest.raises(script.RenderError, match="no DMG for"):
+        script.build_cask(tag="v2026.8.24", dmg_dir=tmp_path, template_path=TEMPLATE_PATH)
+
+
 def test_unfilled_placeholder_fails_instead_of_shipping(tmp_path: Path) -> None:
     script = load_script()
     template = tmp_path / "agentos.rb"

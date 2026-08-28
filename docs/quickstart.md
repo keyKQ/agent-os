@@ -8,7 +8,7 @@ UI, Pilot Router, memory/search support, and safe local defaults.
 
 - Python 3.12 or newer for terminal installs.
 - `uv` for the recommended terminal install.
-- Git, Git LFS, and Node.js 22 or newer only when installing from source.
+- Git and Node.js 22 or newer only when installing from source.
 - A provider API key unless you use a local provider such as Ollama.
 
 ## No-Terminal Install
@@ -235,11 +235,8 @@ After the first run:
 Use source install when you want a checkout-backed install:
 
 ```sh
-git lfs install
 git clone https://github.com/use-agent-os/agent-os.git
 cd agent-os
-git lfs pull --include="src/agentos/memory/models/**"
-git lfs pull --include="src/agentos/agentos_router/models/**"
 bash scripts/install_source.sh
 ```
 

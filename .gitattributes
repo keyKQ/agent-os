@@ -6,8 +6,9 @@ src/agentos/memory/models/bge_onnx/*.json text eol=lf
 src/agentos/memory/models/bge_onnx/*.txt text eol=lf
 
 # Bundled embedding exports (Pilot router MiniLM INT8 and any future model
-# shipped under models/embeddings/{short}-int8). ONNX weights via LFS; the
-# tokenizer/config sidecars stay text.
+# shipped under models/embeddings/{short}-int8). ONNX weights are plain binary
+# git objects -- never LFS, which would break `brew tap` of this repository --
+# and the tokenizer/config sidecars stay text.
 src/agentos/memory/models/embeddings/**/*.onnx -text
 src/agentos/memory/models/embeddings/**/*.json text eol=lf
 src/agentos/memory/models/embeddings/**/*.txt text eol=lf

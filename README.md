@@ -78,7 +78,7 @@ fits what you need.
 Windows portable and Quick terminal install give you a ready-made
 **release**. You do not need Git for these. The other two — Install
 from source and Develop from source — need a **Git checkout**
-(`git clone` + Git LFS).
+(`git clone`).
 
 Release installs use files from GitHub releases. The Windows
 portable zip also has a short link at `/releases/latest/download/`
@@ -99,16 +99,17 @@ file name.
 | Requirement | Desktop app | Windows portable | Quick terminal install | Install from source | Develop from source |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | Python 3.12+ | bundled | bundled | via `uv` | via `uv` or system | via `uv` |
-| Git + Git LFS | — | — | — | required | required |
+| Git | — | — | — | required | required |
 | `uv` | — | — | installed if missing | recommended | required |
 
 The default `recommended` profile installs **Pilot Router** — AgentOS's
 own on-device model router (strategy `pilot-v1`) — along with the Python
 dependencies it needs (ONNX Runtime, NumPy, Tokenizers). Its model
 bundle ships inside the wheel, so routing works offline with no extra
-download. If you install from a source checkout, run
-`git lfs pull` first; without it the bundle is only pointer stubs, and the
-router degrades gracefully — it logs a warning at boot and pins every turn to
+download. The model weights are ordinary committed files, so a source
+checkout carries them too — a plain `git clone` is enough. Should the bundle
+ever be missing or unreadable, the router degrades gracefully — it logs a
+warning at boot and pins every turn to
 the default tier (c1) rather than crashing. The `llm_judge` strategy needs no
 local model files at all (it routes via a small LLM call, optionally against a
 local Ollama/LM Studio endpoint) — pick it during onboarding or set
@@ -127,7 +128,6 @@ runtime for you, using `winget`. The **Quick terminal install**
 it — it just routes every turn to one single model instead.
 
 Install links: [Git](https://git-scm.com/downloads) ·
-[Git LFS](https://git-lfs.com/) ·
 [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ### Desktop app (no Python)
@@ -334,8 +334,6 @@ python -m pip install --user --upgrade "use-agent-os[recommended]"
 # install from source
 cd agent-os
 git pull
-git lfs pull --include="src/agentos/memory/models/**"
-git lfs pull --include="src/agentos/agentos_router/models/**"
 bash scripts/install_source.sh        # Windows: scripts/install_source.ps1
 ```
 
@@ -374,14 +372,11 @@ you plan to change the code, use
 1. **Clone the code, with the large files too**
 
    Source installs build the bundled Control UI and therefore require
-   **Node.js 22 or newer** in addition to Python 3.12+, Git, Git LFS, and `uv`.
+   **Node.js 22 or newer** in addition to Python 3.12+, Git, and `uv`.
 
    ```sh
-   git lfs install
    git clone https://github.com/use-agent-os/agent-os.git
    cd agent-os
-   git lfs pull --include="src/agentos/memory/models/**"
-   git lfs pull --include="src/agentos/agentos_router/models/**"
    ```
 
 2. **Run the installer**
@@ -422,34 +417,30 @@ you plan to change the code, use
 <details>
 <summary>Install from source — terminal prerequisites and installer options</summary>
 
-**Install Git, Git LFS, Node.js 22+, and uv from a terminal**
+**Install Git, Node.js 22+, and uv from a terminal**
 
 Windows PowerShell:
 
 ```powershell
 winget install --id Git.Git -e
-winget install --id GitHub.GitLFS -e
 powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-git lfs install
 ```
 
 macOS (Homebrew):
 
 ```sh
-brew install git git-lfs uv
-git lfs install
+brew install git uv
 ```
 
 Debian / Ubuntu:
 
 ```sh
-sudo apt update && sudo apt install -y git git-lfs
+sudo apt update && sudo apt install -y git
 curl -LsSf https://astral.sh/uv/install.sh | sh
-git lfs install
 ```
 
-On Fedora, use `sudo dnf install -y git git-lfs`. On Arch, use
-`sudo pacman -S --needed git git-lfs`. Then install `uv` with the
+On Fedora, use `sudo dnf install -y git`. On Arch, use
+`sudo pacman -S --needed git`. Then install `uv` with the
 `curl` command above. After running these installers, PATH changes
 only apply in new terminal windows.
 
@@ -650,9 +641,10 @@ before you bind to `0.0.0.0`.
 **Docker**
 
 The Docker Compose setup runs an `agentos:local` image that you
-build yourself. Build it from a source checkout, after pulling the
-Git LFS embedding-model files (see [Install from source](#install-from-source)
-for the clone and `git lfs pull` steps):
+build yourself. Build it from a source checkout (see
+[Install from source](#install-from-source) for the clone step — the
+embedding-model files are ordinary committed files, so the checkout
+already carries them):
 
 ```sh
 docker build -t agentos:local .

@@ -145,13 +145,20 @@ and one SHA-256 per architecture from the DMGs the release just built, and the
 result is committed to `Casks/agentos.rb`. Until the first desktop release
 runs, tapping works but the cask does not exist yet.
 
-There is no setup and no secret. `main` is protected, so the job cannot push to
-it; what it can do is open a pull request and merge it, because protection here
-requires a pull request but zero approvals and no status checks. The run's own
-`GITHUB_TOKEN` covers both, with `contents: write` and `pull-requests: write`
-raised on that job alone.
+There is no secret and almost no setup. `main` is protected, so the job cannot
+push to it; what it can do is open a pull request and merge it, because
+protection here requires a pull request but zero approvals and no status
+checks. The run's own `GITHUB_TOKEN` covers both, with `contents: write` and
+`pull-requests: write` raised on that job alone — provided one repository
+switch is on: **Settings → Actions → General → "Allow GitHub Actions to create
+and approve pull requests"**. Organization repositories default it to off, and
+with it off the job fails at `gh pr create` on the first release. Flipping it
+is the only one-time step.
 
-Three things would break it, none of them loudly until a release runs:
+Four things would break it, none of them loudly until a release runs:
+
+- Turning that Actions switch back off. The job pushes its branch, then fails
+  to open the pull request and exits non-zero.
 
 - Requiring approvals or status checks on `main`. The job would open the pull
   request, fail to merge it, and exit non-zero — the cask waits for a human.

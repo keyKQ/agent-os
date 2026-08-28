@@ -65,6 +65,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `git-lfs`, so the clone hard-failed on any machine that had run
   `git lfs install`. Every existing LFS step in CI degrades to a no-op.
 
+### Removed
+
+- `Formula/agentos.rb`, a draft Homebrew formula from the initial commit with a
+  placeholder all-zeros `sha256` pointing at a tag that was never cut. Sharing
+  the `agentos` token, it would have won a bare `brew install agentos` over the
+  cask now that this repository is a tap.
+
 ## [2026.8.28] - 2026-08-28
 
 ### Added

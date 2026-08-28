@@ -268,13 +268,16 @@ Homebrew deprecated the flag in 4.6.19 (October 2025) and deleted it in 6.0.14
 (July 2026); on a current Homebrew it now fails with `Error: invalid option:
 --no-quarantine`. Clearing the attribute from the cask is what remains.
 
-What that costs is real: Gatekeeper stops vetting the bundle, and it does so
-without asking. What stands in its place is the `sha256` in the cask, which is
-generated from the installer the release actually published — so Homebrew
+What that costs is real: Gatekeeper stops vetting the bundle — the whole
+first-launch assessment, malware scan included, not just the dialog — and it
+does so without asking. What stands in its place is the `sha256` in the cask,
+generated from the installer the release actually published, so Homebrew
 refuses the download outright if the bytes are not the ones this project built.
-That check is stronger than the dialog it replaces, but it is a different check,
-and it says nothing about who built them. Notarization is the thing that would,
-and it needs a paid Apple Developer ID the project does not carry.
+That check is different, and narrower: it defends the bytes in transit, not the
+publisher — the hash and the artifact come from the same pipeline, so a
+compromised release account moves both together — and it says nothing about who
+built them. Notarization is the thing that would, and it needs a paid Apple
+Developer ID the project does not carry.
 
 **Windows.** SmartScreen shows *"Windows protected your PC"*. Click **More
 info** → **Run anyway**.

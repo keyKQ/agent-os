@@ -119,14 +119,11 @@ If logs show `DLL load failed`:
 
 ### Router Degraded or Pinned to One Tier
 
-A missing or incomplete ONNX model bundle is the usual cause. From a source
-checkout:
-
-```sh
-git lfs pull --include="src/agentos/agentos_router/models/**"
-```
-
-Then rebuild and reinstall. Release installs ship the bundle in the wheel.
+A missing or incomplete ONNX model bundle is the usual cause. The weights are
+ordinary committed files, so a current source checkout carries them; a checkout
+that still has ~130-byte Git LFS pointer stubs predates their move into plain
+git objects — `git pull` brings the real files. Then rebuild and reinstall.
+Release installs ship the bundle in the wheel.
 
 To use the `llm_judge` strategy instead (no local model files), pick it during
 onboarding or set:
@@ -282,11 +279,10 @@ If the embedding model is not loaded, the `recommended` extra may be missing:
 uv tool install --force "use-agent-os[recommended]"
 ```
 
-For source installs, pull the Git LFS weights:
-
-```sh
-git lfs pull --include="src/agentos/memory/models/**"
-```
+For source installs, the weights are ordinary committed files under
+`src/agentos/memory/models/` — a current checkout carries them, and `git pull`
+refreshes a checkout that still has Git LFS pointer stubs from before the
+weights moved into plain git objects.
 
 If the model files are pointer stubs instead of real weights, embeddings will
 not load. `agentos doctor` will report memory embeddings as FTS-only.
