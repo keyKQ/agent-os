@@ -127,12 +127,17 @@ def test_tag_charset_is_allowlisted_because_the_cask_is_executable_ruby(
 
 
 def test_dmg_version_charset_is_allowlisted_too(tmp_path: Path) -> None:
-    """The version lands in the cask verbatim; a hostile filename must not."""
-    script = load_script()
-    write_dmg(tmp_path, 'AgentOS_2026"esc_aarch64.dmg', b"arm bytes")
-    write_dmg(tmp_path, 'AgentOS_2026"esc_x64.dmg', b"intel bytes")
+    """The version lands in the cask verbatim; a hostile filename must not.
 
-    # The quoted name fails the DMG pattern, so the render dies on the
+    The payload characters are `#{}` — Ruby interpolation — rather than a
+    quote, because Windows refuses `"` in filenames and this suite runs there
+    too; `#{` is the sharper threat anyway.
+    """
+    script = load_script()
+    write_dmg(tmp_path, "AgentOS_2026#{esc}_aarch64.dmg", b"arm bytes")
+    write_dmg(tmp_path, "AgentOS_2026#{esc}_x64.dmg", b"intel bytes")
+
+    # The interpolated name fails the DMG pattern, so the render dies on the
     # missing-architecture check instead of writing the payload through.
     with pytest.raises(script.RenderError, match="no DMG for"):
         script.build_cask(tag="v2026.8.24", dmg_dir=tmp_path, template_path=TEMPLATE_PATH)
