@@ -19,7 +19,7 @@ root release README with task-oriented guides.
 7. [`desktop.md`](desktop.md) - the desktop app: install, supervised gateway,
    tray, notifications, and updates.
 8. [`sessions.md`](sessions.md) - session continuity, export, resume, abort,
-   and cleanup.
+   cleanup, and projects (session groups with shared knowledge).
 9. [`glossary.md`](glossary.md) - user-facing terminology.
 
 ## Feature Guides
