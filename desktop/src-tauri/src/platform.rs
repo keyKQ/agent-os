@@ -55,12 +55,22 @@ pub fn configure_child(command: &mut Command) {
 /// app kill is not fatal in either case: the next launch probes the recorded
 /// pidfile and attaches to the survivor instead of fighting it for the port.
 pub fn stop_child(child: &mut Child) {
+    // Establishes the precondition the SIGTERM below depends on, rather than
+    // trusting every caller to have checked. A reaped child's pid is free for
+    // the OS to hand to something else, and signalling it would then hit an
+    // unrelated process; an unreaped one cannot be recycled, so a negative
+    // answer here stays true for as long as it is needed.
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+
     #[cfg(unix)]
     {
         let pid = child.id() as i32;
-        // SAFETY: `pid` names a child of this process that has not been reaped
-        // yet, so the identifier cannot have been recycled; kill(2) on a live
-        // child is defined and errors are non-fatal here.
+        // SAFETY: `try_wait` above reported the child as still running, and
+        // only this function reaps it, so `pid` cannot have been recycled onto
+        // another process; kill(2) on a live child is defined and errors are
+        // non-fatal here.
         unsafe {
             libc::kill(pid, libc::SIGTERM);
         }
@@ -263,5 +273,44 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         panic!("child ignored SIGTERM: it inherited the parent's blocked signal mask");
+    }
+
+    /// The supervisor's readiness wait reaps the child as soon as it exits, so
+    /// `stop_child` is now routinely handed one that is already gone. It must
+    /// stay out of the signalling path entirely: a reaped pid belongs to the
+    /// OS again and may already name an unrelated process.
+    ///
+    /// This covers the observable half — returning at once, and leaving the
+    /// child reaped. That no signal is sent is enforced by construction, since
+    /// the check guards the only `kill` call.
+    #[test]
+    fn an_already_reaped_child_is_left_alone() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_child(&mut command);
+
+        let mut child = command.spawn().expect("/bin/sh should spawn");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && !matches!(child.try_wait(), Ok(Some(_))) {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        assert!(
+            matches!(child.try_wait(), Ok(Some(_))),
+            "the child should have exited on its own"
+        );
+
+        let started = Instant::now();
+        stop_child(&mut child);
+
+        assert!(
+            started.elapsed() < GRACEFUL_STOP,
+            "a child that has already exited must not be waited on"
+        );
+        assert!(matches!(child.try_wait(), Ok(Some(_))));
     }
 }
