@@ -3,8 +3,12 @@
 //! Responsibilities, in the order they matter to a user:
 //!
 //! 1. Adopt a gateway this machine is already running rather than starting a
-//!    second one. Two gateways would contend for the port and the SQLite
-//!    database, and the second would lose in ways that read as data loss.
+//!    second one. The gateway takes a pid lock over its state directory at
+//!    boot, so a second instance against the same AgentOS home does not share
+//!    the database — it exits within a fraction of a second. The cost of
+//!    failing to adopt is therefore not corruption but a gateway nobody can
+//!    reach: this app spawns a replacement that immediately dies, and the
+//!    survivor is left running, orphaned, and no longer in any record.
 //! 2. Otherwise start one from the bundled runtime and hold the window back
 //!    until `/ready` answers, so nobody sees a half-booted console.
 //! 3. Restart it if it dies, with enough accounting that a gateway which
@@ -41,6 +45,40 @@ const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 /// How often an adopted gateway is re-probed. It is not our child, so process
 /// exit is not observable; polling is the only way to notice it went away.
 const ADOPTED_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a failed supervisor checks whether the user asked for another try.
+/// Only a menu click ends that wait, so this trades nothing for being cheap.
+const FAILED_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Accounting for automatic restarts, kept apart from the supervision loop so
+/// the policy can be exercised without a gateway to supervise.
+#[derive(Debug, Default)]
+struct RestartBudget {
+    starts: Vec<Instant>,
+}
+
+impl RestartBudget {
+    /// Record an automatic (re)start. False once too many have happened inside
+    /// the window, which means the gateway is failing on startup rather than
+    /// crashing occasionally, and respawning it again only buries the real
+    /// error deeper in the log.
+    fn try_record(&mut self, now: Instant) -> bool {
+        self.starts
+            .retain(|start| now.saturating_duration_since(*start) < RESTART_WINDOW);
+        if self.starts.len() >= MAX_STARTS {
+            return false;
+        }
+        self.starts.push(now);
+        true
+    }
+
+    /// Forget the history. A restart the operator asked for is not evidence of
+    /// a broken gateway, and neither is a gateway that ran fine until it was
+    /// adopted away.
+    fn forgive(&mut self) {
+        self.starts.clear();
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -158,18 +196,62 @@ impl Supervisor {
 
     fn stop_child(&self) {
         let mut guard = self.inner.child.lock().expect("child lock");
-        if let Some(mut child) = guard.take() {
-            platform::stop_child(&mut child);
-        }
+        let stopped = match guard.take() {
+            Some(mut child) => {
+                platform::stop_child(&mut child);
+                true
+            }
+            None => false,
+        };
         drop(guard);
         // Written only while a gateway of ours is running, so a clean stop must
         // retract it: a stale record would make the next launch probe a port
         // that some unrelated process may since have taken.
-        endpoint::clear_desktop_record();
+        //
+        // Only when there really was a child, though. The record describes the
+        // gateway *this* supervisor spawned, so retracting it without having
+        // stopped anything deletes someone else's -- which is exactly what a
+        // `cargo test` run used to do to a developer's running desktop app,
+        // leaving its gateway alive and unfindable.
+        if stopped {
+            endpoint::clear_desktop_record();
+        }
     }
 
     fn shutting_down(&self) -> bool {
         self.inner.shutting_down.load(Ordering::SeqCst)
+    }
+
+    /// True once the gateway child is gone.
+    ///
+    /// Readiness polling cannot tell "still booting" from "exited a moment
+    /// ago" -- an unanswered probe looks identical either way -- so without
+    /// this a gateway that refuses to start is waited on for the full
+    /// `READY_TIMEOUT`. That is not a rare path: a second gateway against a
+    /// state directory another one already holds is turned away by the pid
+    /// lock within a fraction of a second.
+    fn child_has_exited(&self) -> bool {
+        let mut guard = self.inner.child.lock().expect("child lock");
+        match guard.as_mut() {
+            None => true,
+            // A `try_wait` that errors leaves the child unobservable, which is
+            // the same dead end as an exit and is how `await_exit` treats it.
+            Some(child) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
+        }
+    }
+
+    /// Block until the user asks for another try, or the app quits.
+    ///
+    /// `restart_requested` is only ever set by `request_restart`, whose sole
+    /// caller is the tray menu, so waiting on it is waiting on a human -- and
+    /// a human clicking a button is its own rate limit.
+    fn wait_for_restart_request(&self) {
+        while !self.shutting_down() {
+            if self.inner.restart_requested.swap(false, Ordering::SeqCst) {
+                return;
+            }
+            std::thread::sleep(FAILED_POLL_INTERVAL);
+        }
     }
 
     fn publish(&self, app: &AppHandle, status: Status) {
@@ -179,7 +261,11 @@ impl Supervisor {
     }
 
     fn run(self, app: AppHandle, runtime: BundledRuntime) {
-        let mut starts: Vec<Instant> = Vec::new();
+        let mut budget = RestartBudget::default();
+        // Carried across an iteration because the accounting happens at the top
+        // of the loop and the answer is only known at the bottom of the last
+        // one: a restart the user asked for must not spend the crash budget.
+        let mut by_request = false;
 
         while !self.shutting_down() {
             let settings = config::load();
@@ -231,12 +317,17 @@ impl Supervisor {
                     break;
                 }
                 // The adopted gateway went away. Loop round and start our own.
-                starts.clear();
+                budget.forgive();
                 continue;
             }
 
-            starts.retain(|start| start.elapsed() < RESTART_WINDOW);
-            if starts.len() >= MAX_STARTS {
+            if by_request {
+                // Not evidence of anything being broken, so it neither spends
+                // the budget nor inherits one already spent.
+                budget.forgive();
+                by_request = false;
+            }
+            if !budget.try_record(Instant::now()) {
                 self.fail(
                     &app,
                     format!(
@@ -244,9 +335,17 @@ impl Supervisor {
                          The last error is at the end of the log."
                     ),
                 );
-                return;
+                // Park rather than return. The tray keeps Restart enabled in
+                // this phase, and a loop that has returned turns that into a
+                // button which quietly does nothing -- leaving quitting the app
+                // as the only way out of a state the user can often fix.
+                self.wait_for_restart_request();
+                if self.shutting_down() {
+                    break;
+                }
+                budget.forgive();
+                continue;
             }
-            starts.push(Instant::now());
 
             match self.launch(&app, &runtime, &settings) {
                 Ok(active) => {
@@ -262,7 +361,7 @@ impl Supervisor {
                         },
                     );
                     crate::window::on_gateway_ready(&app, &active);
-                    self.await_exit(&app);
+                    by_request = self.await_exit(&app);
                 }
                 Err(error) => {
                     log::error!("gateway launch failed: {error:#}");
@@ -351,13 +450,27 @@ impl Supervisor {
             })?;
         *self.inner.child.lock().expect("child lock") = Some(child);
 
-        if endpoint::wait_until_ready(&active, READY_TIMEOUT, || self.shutting_down()) {
+        if endpoint::wait_until_ready(&active, READY_TIMEOUT, || {
+            self.shutting_down() || self.child_has_exited()
+        }) {
             return Ok(active);
         }
 
+        // Read before stopping, which drops the child and would make every
+        // failure look like an early exit.
+        let exited_early = self.child_has_exited();
         self.stop_child();
         if self.shutting_down() {
             return Err(anyhow::anyhow!("Startup cancelled."));
+        }
+        if exited_early {
+            // Deliberately not the timeout wording: a gateway that refused to
+            // start has a reason waiting in the log, and telling the user to
+            // wait longer sends them looking for a problem that is not there.
+            return Err(anyhow::anyhow!(
+                "The AgentOS gateway stopped before it finished starting. \
+                 The reason is at the end of the log."
+            ));
         }
         Err(anyhow::anyhow!(
             "The AgentOS gateway did not become ready within {} seconds.",
@@ -366,7 +479,10 @@ impl Supervisor {
     }
 
     /// Block until the running gateway exits, then classify why.
-    fn await_exit(&self, app: &AppHandle) {
+    ///
+    /// Returns whether the exit was one the user asked for, which decides
+    /// whether the next start counts against the crash budget.
+    fn await_exit(&self, app: &AppHandle) -> bool {
         loop {
             {
                 let mut guard = self.inner.child.lock().expect("child lock");
@@ -391,7 +507,7 @@ impl Supervisor {
         }
 
         if self.shutting_down() {
-            return;
+            return false;
         }
         let requested = self.inner.restart_requested.swap(false, Ordering::SeqCst);
         self.publish(
@@ -409,6 +525,7 @@ impl Supervisor {
                 log_path: self.inner.log_path.display().to_string(),
             },
         );
+        requested
     }
 
     fn fail(&self, app: &AppHandle, message: String) {
@@ -489,5 +606,117 @@ mod tests {
     fn phases_serialize_in_the_shape_the_splash_matches_on() {
         let rendered = serde_json::to_string(&Phase::Restarting).expect("phase should serialize");
         assert_eq!(rendered, "\"restarting\"");
+    }
+
+    #[test]
+    fn a_supervisor_with_no_child_counts_as_exited() {
+        // The launch path asks this while waiting for readiness, so "there is
+        // nothing to wait for" has to answer the same way as "it has stopped".
+        assert!(Supervisor::new().child_has_exited());
+    }
+
+    /// Kill and reap whatever the supervisor is holding, without going through
+    /// `shutdown`: that path also clears the desktop record, which on a
+    /// developer's machine is a real file belonging to a real running app.
+    #[cfg(unix)]
+    fn discard_child(supervisor: &Supervisor) {
+        let mut guard = supervisor.inner.child.lock().expect("child lock");
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        guard.take();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_gateway_that_exits_during_boot_is_noticed() {
+        // The regression this guards is the expensive one: readiness polling
+        // alone cannot see an exit, so a gateway that refuses to start used to
+        // be waited on for the full two-minute timeout before anyone found out.
+        let supervisor = Supervisor::new();
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 3"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("/bin/sh should spawn");
+        *supervisor.inner.child.lock().expect("child lock") = Some(child);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if supervisor.child_has_exited() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        discard_child(&supervisor);
+        panic!("a gateway that had already exited was still reported as running");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_gateway_still_booting_is_not_mistaken_for_a_dead_one() {
+        // The other half: a slow cold start must still get its full timeout.
+        let supervisor = Supervisor::new();
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("/bin/sh should spawn");
+        *supervisor.inner.child.lock().expect("child lock") = Some(child);
+
+        let still_running = !supervisor.child_has_exited();
+        discard_child(&supervisor);
+        assert!(still_running, "a live gateway must not be given up on");
+    }
+
+    #[test]
+    fn the_budget_gives_up_after_enough_starts_in_the_window() {
+        let mut budget = RestartBudget::default();
+        let now = Instant::now();
+
+        for attempt in 0..MAX_STARTS {
+            assert!(budget.try_record(now), "start {attempt} should be allowed");
+        }
+        assert!(
+            !budget.try_record(now),
+            "a gateway failing this fast must not be respawned again"
+        );
+    }
+
+    #[test]
+    fn starts_older_than_the_window_stop_counting() {
+        // The regression this guards: while a failed launch took longer than
+        // the window, every previous start aged out before it could be counted
+        // and the budget could never be reached at all.
+        let mut budget = RestartBudget::default();
+        let now = Instant::now();
+        for _ in 0..MAX_STARTS {
+            budget.try_record(now);
+        }
+
+        let later = now + RESTART_WINDOW + Duration::from_secs(1);
+        assert!(budget.try_record(later));
+    }
+
+    #[test]
+    fn a_restart_the_user_asked_for_does_not_spend_the_budget() {
+        let mut budget = RestartBudget::default();
+        let now = Instant::now();
+        for _ in 0..MAX_STARTS {
+            budget.try_record(now);
+        }
+
+        budget.forgive();
+
+        assert!(
+            budget.try_record(now),
+            "clicking Restart must not be able to exhaust the crash budget"
+        );
     }
 }

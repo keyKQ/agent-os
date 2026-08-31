@@ -17,11 +17,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   home and `config.toml` are used as the CLI, so a session started in the app is
   the one `agentos chat` resumes.
 
-  A gateway already running on the machine is adopted rather than duplicated:
-  two would contend for the port and the SQLite database. The app records the
-  gateway it starts under `state/desktop/gateway.json`, because
-  `agentos gateway run` writes no pidfile of its own and a gateway orphaned by a
-  force-quit would otherwise be invisible to the next launch.
+  A gateway already running on the machine is adopted rather than duplicated.
+  The gateway's own pid lock stops a second instance from ever sharing the
+  database, so the risk being managed here is not corruption but reachability:
+  an app that fails to adopt starts a replacement that immediately exits, and
+  leaves the working gateway orphaned. The app records the gateway it starts
+  under `state/desktop/gateway.json`, because `agentos gateway run` writes no
+  pidfile of its own and a gateway orphaned by a force-quit would otherwise be
+  invisible to the next launch.
 
   The app is not a weaker AgentOS than the CLI. It bundles the same
   `recommended` profile, and it reconstructs the operator's shell environment
