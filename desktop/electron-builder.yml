@@ -1,0 +1,24 @@
+appId: dev.agentos.desktop
+productName: AgentOS
+directories:
+  buildResources: resources
+  output: release
+files:
+  - out/**
+  - package.json
+asar: true
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Ad-hoc signing until a Developer ID identity is configured. The app talks
+  # only to the local gateway over loopback, so no extra entitlements are needed.
+  identity: null
+  hardenedRuntime: false
+  darkModeSupport: true
+dmg:
+  sign: false
+npmRebuild: false

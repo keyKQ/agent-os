@@ -1,0 +1,60 @@
+export const shell = {
+  'shell.brand': 'AgentOS',
+  'shell.tagline':
+    'Give me a task, a question, or a snippet. I keep the session, cite what I used, and ask before I guess.',
+
+  'sidebar.new': 'New session',
+  'sidebar.jobs': 'Scheduled jobs',
+  'sidebar.search': 'Search sessions',
+  'sidebar.sessions': 'Sessions',
+  'sidebar.sessions.empty': 'Your sessions will collect here',
+  'sidebar.sessions.loading': 'Loading sessions',
+  'sidebar.filter': 'Filter sessions',
+  'sidebar.home': 'Home',
+  'sidebar.sync': 'Sync',
+  'sidebar.more': 'More',
+  'sidebar.collapse': 'Hide sidebar',
+  'sidebar.resize': 'Resize sidebar',
+
+  'group.today': 'Today',
+  'group.yesterday': 'Yesterday',
+  'group.week': 'This week',
+
+  'toolbar.layout': 'Layout',
+  'toolbar.sound': 'Sound',
+  'toolbar.settings': 'Settings',
+  'toolbar.inspector': 'Inspector',
+
+  'composer.placeholder': 'Start with a goal',
+  'composer.attach': 'Attach files',
+  'composer.route': 'Model route',
+  'composer.send': 'Send',
+  'composer.stop': 'Stop',
+
+  'chat.untitled': 'New session',
+  'chat.newChat': 'New chat',
+  'chat.reset': 'Reset session',
+  'chat.export': 'Export as Markdown',
+  'chat.waitingGateway': 'Waiting for the gateway',
+  'chat.gatewayDown': 'The gateway is not running. Start it from the sidebar.',
+
+  'gateway.state.stopped': 'Gateway off',
+  'gateway.state.starting': 'Starting gateway',
+  'gateway.state.running': 'Gateway running',
+  'gateway.state.stopping': 'Stopping gateway',
+  'gateway.state.error': 'Gateway failed',
+  'gateway.start': 'Start gateway',
+  'gateway.stop': 'Stop gateway',
+
+  'view.jobs.title': 'Scheduled jobs',
+  'view.jobs.body': 'Recurring agent work and its run history will appear here.',
+
+  'settings.gateway.section': 'Gateway',
+  'settings.gateway.mode': 'Run mode',
+  'settings.gateway.mode.help': 'Managed starts the gateway with the app. External only connects.',
+  'settings.gateway.mode.managed': 'Managed',
+  'settings.gateway.mode.external': 'External',
+  'settings.gateway.endpoint': 'Endpoint',
+  'settings.gateway.cli': 'Command-line tool',
+  'settings.gateway.cli.auto': 'Found automatically',
+} as const
