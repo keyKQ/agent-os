@@ -1,7 +1,8 @@
+import { jobs } from './en/jobs'
 import { shell } from './en/shell'
 import { theme } from './en/theme'
 
-const en = { ...shell, ...theme } as const
+const en = { ...shell, ...theme, ...jobs } as const
 
 export type MessageKey = keyof typeof en
 

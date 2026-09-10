@@ -1,7 +1,5 @@
-import { CalendarClock } from 'lucide-react'
 import { createHashRouter, Navigate } from 'react-router'
 import { ChatView } from '~/views/chat/ChatView'
-import { PlaceholderView } from '~/views/PlaceholderView'
 import { SettingsView } from '~/views/settings/SettingsView'
 import { AppShell } from './AppShell'
 
@@ -12,6 +10,9 @@ import { AppShell } from './AppShell'
 // send navigates from the keyless home to `/sessions/<key>` and React Router
 // keeps the same element mounted, so the composer docks with an animation
 // instead of remounting.
+//
+// Scheduled jobs is not a route: it is a panel over the window (AppShell),
+// so opening it never leaves the conversation underneath.
 export const router = createHashRouter([
   {
     path: '/',
@@ -19,12 +20,6 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="/sessions" replace /> },
       { path: 'sessions/:key?', Component: ChatView },
-      {
-        path: 'jobs',
-        element: (
-          <PlaceholderView icon={CalendarClock} title="view.jobs.title" body="view.jobs.body" />
-        ),
-      },
       { path: 'settings', Component: SettingsView },
     ],
   },

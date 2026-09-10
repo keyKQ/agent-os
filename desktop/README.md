@@ -55,6 +55,9 @@ desktop/
             ├── app/          #   App, AppShell, GatewayProviders (rpc + approvals), router
             ├── views/chat/   #   ChatView + chat.css — the desktop skin for the
             │                 #   console's transcript DOM
+            ├── views/jobs/   #   Scheduled jobs panel (a layer over the window, not a
+            │                 #   route): job list + blueprints, detail pane, create/edit
+            │                 #   sheet with the natural schedule builder
             ├── views/settings/
             ├── components/   #   Sidebar (+ resizer, session list), Toolbar, composer/
             ├── theme/        #   theme system (see below)
@@ -127,5 +130,13 @@ postinstall), run `node node_modules/electron/install.js` once.
   gateway's WebSocket guard rejects `file://`, and the renderer is the local
   operator, the same trust the browser console gets.
 - The gateway is started (or adopted, if one is already running) when the app
-  launches, and stopped on quit; the chat view waits for `running` before it
-  connects.
+  launches, and stopped on quit; the chat and jobs views wait for `running`
+  before they connect.
+- Scheduled jobs open as a panel over whatever is on screen (the `jobsOpen`
+  flag in `stores/ui.ts`, toggled from the sidebar), so checking a schedule
+  never leaves the conversation. The panel reuses the console's cron model end to end (`@/views/cron/logic`:
+  `seedForm`, `buildSavePayload`, the cron parser and humanizer) and the same
+  `cron.*` RPCs, so a job created here reads identically in the web console.
+  Only the presentation is the desktop's: health buckets, the natural-language
+  schedule builder (`views/jobs/logic.ts`), native time/date pickers, and the
+  session picker fed by the sidebar's session list.

@@ -46,9 +46,6 @@ export const shell = {
   'gateway.start': 'Start gateway',
   'gateway.stop': 'Stop gateway',
 
-  'view.jobs.title': 'Scheduled jobs',
-  'view.jobs.body': 'Recurring agent work and its run history will appear here.',
-
   'settings.gateway.section': 'Gateway',
   'settings.gateway.mode': 'Run mode',
   'settings.gateway.mode.help': 'Managed starts the gateway with the app. External only connects.',

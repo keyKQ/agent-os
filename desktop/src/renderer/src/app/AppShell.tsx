@@ -3,6 +3,7 @@ import { Outlet } from 'react-router'
 import { Sidebar } from '~/components/Sidebar'
 import { Toolbar } from '~/components/Toolbar'
 import { bindGatewayEvents } from '~/stores/gateway'
+import { JobsPanel } from '~/views/jobs/JobsPanel'
 
 /** Window chrome: translucent full-height sidebar, then toolbar + routed content. */
 export function AppShell() {
@@ -17,6 +18,8 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      {/* Layers over the whole window, whichever route is showing. */}
+      <JobsPanel />
     </div>
   )
 }

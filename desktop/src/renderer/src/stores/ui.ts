@@ -30,10 +30,15 @@ interface UiStore {
   sidebarOpen: boolean
   sidebarWidth: number
   sessionQuery: string
+  /** The Scheduled jobs panel is a layer over the window, not a route. */
+  jobsOpen: boolean
   toggleSidebar(): void
   setSidebarWidth(width: number): void
   resetSidebarWidth(): void
   setSessionQuery(q: string): void
+  openJobs(): void
+  closeJobs(): void
+  toggleJobs(): void
 }
 
 /** Chrome state. Only the sidebar width survives a relaunch. */
@@ -41,6 +46,7 @@ export const useUi = create<UiStore>((set) => ({
   sidebarOpen: true,
   sidebarWidth: loadWidth(),
   sessionQuery: '',
+  jobsOpen: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => {
     const clamped = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width)))
@@ -52,4 +58,7 @@ export const useUi = create<UiStore>((set) => ({
     set({ sidebarWidth: SIDEBAR_DEFAULT, sidebarOpen: true })
   },
   setSessionQuery: (sessionQuery) => set({ sessionQuery }),
+  openJobs: () => set({ jobsOpen: true }),
+  closeJobs: () => set({ jobsOpen: false }),
+  toggleJobs: () => set((s) => ({ jobsOpen: !s.jobsOpen })),
 }))

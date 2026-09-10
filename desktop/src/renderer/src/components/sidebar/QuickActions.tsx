@@ -1,26 +1,31 @@
 import { CalendarClock, PenSquare, type LucideIcon } from 'lucide-react'
-import { Link, NavLink } from 'react-router'
+import { Link } from 'react-router'
 import { t, type MessageKey } from '~/i18n'
+import { useUi } from '~/stores/ui'
 
 interface Action {
-  to: string
   label: MessageKey
   icon: LucideIcon
   shortcut?: readonly string[]
-  /** Actions navigate but are never shown as the selected place. */
-  action?: boolean
+  /** Navigate here (never shown as the selected place). */
+  to?: string
+  /** Or open a panel over the window instead of navigating. */
+  panel?: 'jobs'
 }
 
 export const QUICK_ACTIONS: readonly Action[] = [
-  { to: '/sessions', label: 'sidebar.new', icon: PenSquare, shortcut: ['⌘', 'N'], action: true },
-  { to: '/jobs', label: 'sidebar.jobs', icon: CalendarClock },
+  { to: '/sessions', label: 'sidebar.new', icon: PenSquare, shortcut: ['⌘', 'N'] },
+  { panel: 'jobs', label: 'sidebar.jobs', icon: CalendarClock },
 ]
 
 /** Fixed destinations above the session list. */
 export function QuickActions() {
+  const jobsOpen = useUi((s) => s.jobsOpen)
+  const openJobs = useUi((s) => s.openJobs)
+
   return (
     <nav aria-label={t('shell.brand')} className="flex flex-col gap-px px-2">
-      {QUICK_ACTIONS.map(({ to, label, icon: Icon, shortcut, action }) => {
+      {QUICK_ACTIONS.map(({ to, panel, label, icon: Icon, shortcut }) => {
         const body = (
           <>
             <Icon
@@ -40,14 +45,24 @@ export function QuickActions() {
             ) : null}
           </>
         )
-        return action ? (
-          <Link key={to} to={to} className="mac-row">
+        if (panel) {
+          return (
+            <button
+              key={label}
+              type="button"
+              className="mac-row w-full app-no-drag"
+              aria-haspopup="dialog"
+              aria-expanded={jobsOpen}
+              onClick={openJobs}
+            >
+              {body}
+            </button>
+          )
+        }
+        return (
+          <Link key={label} to={to ?? '/'} className="mac-row">
             {body}
           </Link>
-        ) : (
-          <NavLink key={to} to={to} className="mac-row">
-            {body}
-          </NavLink>
         )
       })}
     </nav>

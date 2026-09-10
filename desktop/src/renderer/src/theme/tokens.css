@@ -224,8 +224,12 @@
     padding: 0 8px;
     border-radius: var(--radius-control);
     font-size: 13px;
+    text-align: left;
     color: var(--sidebar-foreground);
     transition: background-color 80ms ease-out;
+  }
+  .mac-row[aria-expanded='true'] {
+    background: var(--sidebar-accent);
   }
   .mac-row:hover {
     background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
@@ -717,6 +721,174 @@
   .composer-chip:focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 1px;
+  }
+
+  /* NSTextField / NSPopUpButton / NSSwitch. Shared by every form in the app
+     so a field looks the same in Settings and in a sheet. */
+  .mac-input,
+  .mac-select,
+  .mac-textarea {
+    width: 100%;
+    min-width: 0;
+    height: 26px;
+    padding: 0 8px;
+    border-radius: var(--radius-control);
+    border: 0;
+    outline: 0;
+    background: var(--surface);
+    box-shadow:
+      0 0 0 0.5px var(--input),
+      inset 0 1px 1px rgba(0, 0, 0, 0.06);
+    font: inherit;
+    font-size: 13px;
+    color: var(--foreground);
+    user-select: text;
+    transition: box-shadow 100ms ease-out;
+  }
+  .mac-input::placeholder,
+  .mac-textarea::placeholder {
+    color: var(--dim);
+  }
+  .mac-input:focus,
+  .mac-select:focus,
+  .mac-textarea:focus {
+    box-shadow:
+      0 0 0 0.5px var(--input),
+      0 0 0 3px color-mix(in srgb, var(--ring) 32%, transparent);
+  }
+  .mac-input:disabled,
+  .mac-select:disabled,
+  .mac-textarea:disabled {
+    opacity: 0.5;
+  }
+  .mac-input[data-mono='true'],
+  .mac-textarea[data-mono='true'] {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+  }
+  .mac-input[data-invalid='true'] {
+    box-shadow:
+      0 0 0 0.5px var(--danger),
+      0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+  }
+  .mac-input[type='number'] {
+    font-variant-numeric: tabular-nums;
+  }
+  .mac-input[type='time'],
+  .mac-input[type='datetime-local'] {
+    width: auto;
+    padding-right: 4px;
+  }
+  .mac-input::-webkit-calendar-picker-indicator {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .mac-textarea {
+    height: auto;
+    min-height: 72px;
+    padding: 6px 8px;
+    line-height: 1.45;
+    resize: vertical;
+  }
+  .mac-select {
+    appearance: none;
+    padding-right: 24px;
+    background-image:
+      linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+      linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+    background-position:
+      calc(100% - 13px) 11px,
+      calc(100% - 9px) 11px;
+    background-size:
+      4px 4px,
+      4px 4px;
+    background-repeat: no-repeat;
+  }
+  .mac-select[data-compact='true'] {
+    width: auto;
+  }
+
+  .mac-switch {
+    position: relative;
+    flex-shrink: 0;
+    width: 26px;
+    height: 15px;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--foreground) 18%, transparent);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--foreground) 10%, transparent);
+    transition: background-color 160ms ease;
+  }
+  .mac-switch::after {
+    content: '';
+    position: absolute;
+    top: 1.5px;
+    left: 1.5px;
+    width: 12px;
+    height: 12px;
+    border-radius: var(--radius-pill);
+    background: #fff;
+    box-shadow:
+      0 1px 2px rgba(0, 0, 0, 0.3),
+      0 0 0 0.5px rgba(0, 0, 0, 0.06);
+    transition: transform 160ms cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .mac-switch[aria-checked='true'] {
+    background: var(--primary);
+  }
+  .mac-switch[aria-checked='true']::after {
+    transform: translateX(11px);
+  }
+  .mac-switch:disabled {
+    opacity: 0.45;
+  }
+  .mac-switch:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Label above a control, System Settings sheet posture. */
+  .mac-field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+  .mac-label {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+  }
+
+  /* Small rounded tag: kind, target, status words. */
+  .mac-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 18px;
+    padding: 0 7px;
+    border-radius: var(--radius-pill);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--muted-foreground);
+    background: color-mix(in srgb, var(--foreground) 7%, transparent);
+    white-space: nowrap;
+  }
+  .mac-chip[data-tone='primary'] {
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+  .mac-chip[data-tone='ok'] {
+    color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+  }
+  .mac-chip[data-tone='warn'] {
+    color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 14%, transparent);
+  }
+  .mac-chip[data-tone='danger'] {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
   }
 
   /* Keyboard shortcut caps. */
