@@ -1,11 +1,12 @@
 import { app, BrowserWindow, session } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import path from 'node:path'
+import type { DesktopSettings } from '@shared/settings'
 import { GatewaySupervisor } from './gateway/supervisor'
 import { registerIpc } from './ipc'
 import { installAppMenu } from './menu'
 import { SettingsStore } from './settings/store'
-import { createMainWindow } from './window'
+import { applyVibrancy, createMainWindow } from './window'
 
 // Single instance: a second launch focuses the existing window.
 if (!app.requestSingleInstanceLock()) {
@@ -29,13 +30,16 @@ if (!app.requestSingleInstanceLock()) {
     installLoopbackOriginRewrite()
     registerIpc({ settings, gateway })
     installAppMenu()
-    createMainWindow()
+    createMainWindow({ reduceTransparency: settings.get().appearance.reduceTransparency })
+    mirrorSettingsToOs(settings)
     // The shell is only useful with a gateway behind it: bring it up (or
     // adopt a running one) without waiting for a click.
     void gateway.start()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow({ reduceTransparency: settings.get().appearance.reduceTransparency })
+      }
     })
   })
 
@@ -43,14 +47,41 @@ if (!app.requestSingleInstanceLock()) {
   // gateway) alive in the Dock; Cmd+Q is the way out.
   app.on('window-all-closed', () => {})
 
-  // Never leave an orphaned gateway behind when the app quits.
+  // Never leave an orphaned gateway behind when the app quits, unless the
+  // user asked to keep it running (Settings > General).
   let stopping = false
   app.on('before-quit', (event) => {
     if (stopping || gateway.current().pid === null) return
+    if (!settings.get().general.stopGatewayOnQuit) return
     event.preventDefault()
     stopping = true
     void gateway.stop().finally(() => app.quit())
   })
+}
+
+/**
+ * Two settings are really OS state: the login item and window vibrancy.
+ * Apply them at boot and again on every change so the file and macOS agree.
+ */
+function mirrorSettingsToOs(settings: SettingsStore): void {
+  let last: DesktopSettings | null = null
+  const apply = (next: DesktopSettings) => {
+    if (next.general.openAtLogin !== last?.general.openAtLogin) {
+      try {
+        if (app.isPackaged || next.general.openAtLogin !== app.getLoginItemSettings().openAtLogin) {
+          app.setLoginItemSettings({ openAtLogin: next.general.openAtLogin })
+        }
+      } catch {
+        /* unsigned dev builds cannot register a login item; the pane reads back the truth */
+      }
+    }
+    if (next.appearance.reduceTransparency !== last?.appearance.reduceTransparency) {
+      applyVibrancy(next.appearance.reduceTransparency)
+    }
+    last = next
+  }
+  apply(settings.get())
+  settings.subscribe(apply)
 }
 
 /**

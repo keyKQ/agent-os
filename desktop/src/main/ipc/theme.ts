@@ -11,6 +11,8 @@ import type { SettingsStore } from '../settings/store'
  */
 export function registerThemeIpc(settings: SettingsStore): void {
   applyThemeSource(settings.get().theme)
+  // Any write to settings (a reset, not just theme:set) keeps the OS in step.
+  settings.subscribe((s) => applyThemeSource(s.theme))
 
   ipcMain.handle(IPC.theme.set, (_e, next: Partial<ThemeSettings>): ThemeSettings => {
     const patch = normalizeThemeSettings({ ...settings.get().theme, ...next })
@@ -34,5 +36,5 @@ export function currentResolved(): ResolvedTheme {
 }
 
 function applyThemeSource(theme: ThemeSettings): void {
-  nativeTheme.themeSource = theme.preference
+  if (nativeTheme.themeSource !== theme.preference) nativeTheme.themeSource = theme.preference
 }

@@ -60,7 +60,9 @@ desktop/
             │                 #   sheet with the natural schedule builder
             ├── views/projects/ # Project page (`/projects/:id`): renamable title,
             │                 #   self-saving brief, the chats filed there
-            ├── views/settings/
+            ├── views/settings/ # Settings sheet: SettingsPanel + one pane per section
+            │                 #   (general, appearance, gateway, models, notifications,
+            │                 #   shortcuts, advanced, about), parts.tsx primitives, logic.ts
             ├── components/   #   Sidebar (+ resizer, project folders, session list),
             │                 #   Toolbar, Menu, composer/
             ├── theme/        #   theme system (see below)
@@ -97,8 +99,31 @@ Adding a palette: add an id to `PALETTE_IDS` in `shared/theme.ts` and a full
 `PaletteDefinition` in `palettes.ts`. The type forces every token for both
 modes; `palettes.test.ts` fails otherwise.
 
-UI: `ThemeToggle` (title bar, cycles preference) and `ThemePicker` (Settings
-view, mode segmented control + palette cards).
+UI: `ThemeToggle` (title bar, cycles preference) and `ThemePicker` (Settings >
+Appearance, mode segmented control + palette cards).
+
+## Settings
+
+Settings is a sheet over the window (System Settings posture: a source list of
+panes on the left, grouped rows on the right), opened from the toolbar gear,
+⌘, or the app menu's "Settings…" (main pushes `settings:open`). Everything
+persists to `settings.json` through `settings:update`; `shared/settings.ts`
+owns the schema and validates every read.
+
+| Pane          | What it holds                                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General       | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset                                                |
+| Appearance    | Theme + palette, text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`)                                                                                              |
+| Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs |
+| Models        | From the gateway's `config.get` / `models.list` / `status`: default model and thinking level (written via `config.set`), Pilot Router on/off and its tiers                                                            |
+| Notifications | Reply chime (WebAudio, no asset), background notification when a reply finishes, approval alerts, system permission state + test                                                                                      |
+| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable                                                                                                                                               |
+| Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all settings behind an alertdialog                                                              |
+| About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links                                                                                                                                      |
+
+Main mirrors two settings onto the OS on every write (`mirrorSettingsToOs`
+in `main/index.ts`): the login item and window vibrancy. `nativeTheme` follows
+the theme section the same way, so a reset repaints correctly.
 
 ## Commands
 

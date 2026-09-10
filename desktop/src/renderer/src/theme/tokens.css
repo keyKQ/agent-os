@@ -129,6 +129,20 @@
   [data-selectable] {
     user-select: text;
   }
+  /* Settings > Appearance > Text size. The base size feeds every rem/em
+     below; explicit px sizes in the chrome stay put on purpose. */
+  html[data-text-size='small'] body {
+    font-size: 12px;
+  }
+  html[data-text-size='large'] body {
+    font-size: 14.5px;
+  }
+  html[data-text-size='large'] .composer textarea {
+    font-size: 15.5px;
+  }
+  html[data-text-size='small'] .composer textarea {
+    font-size: 13px;
+  }
   /* Palette-controlled atmospheric grain over content panes only. */
   .mac-content::before {
     content: '';
@@ -176,6 +190,11 @@
     background: color-mix(in srgb, var(--sidebar) 62%, transparent);
     border-right: 1px solid var(--sidebar-border);
     color: var(--sidebar-foreground);
+  }
+  /* Settings > Appearance > Reduce transparency: the sidebar goes opaque and
+     main drops the window vibrancy to match (window.ts applyVibrancy). */
+  html[data-transparency='reduced'] .mac-sidebar {
+    background: var(--sidebar);
   }
   .mac-content {
     position: relative;

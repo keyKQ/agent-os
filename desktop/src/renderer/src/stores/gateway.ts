@@ -8,6 +8,7 @@ interface GatewayStore {
   refresh(): Promise<void>
   start(): Promise<void>
   stop(): Promise<void>
+  restart(): Promise<void>
 }
 
 /** Mirror of the main-process GatewaySupervisor, kept fresh by IPC pushes. */
@@ -29,6 +30,14 @@ export const useGateway = create<GatewayStore>((set) => ({
     set({ busy: true })
     try {
       set({ status: await desktopApi().gateway.stop() })
+    } finally {
+      set({ busy: false })
+    }
+  },
+  async restart() {
+    set({ busy: true })
+    try {
+      set({ status: await desktopApi().gateway.restart() })
     } finally {
       set({ busy: false })
     }

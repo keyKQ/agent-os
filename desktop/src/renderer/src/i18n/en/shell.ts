@@ -45,13 +45,8 @@ export const shell = {
   'gateway.state.error': 'Gateway failed',
   'gateway.start': 'Start gateway',
   'gateway.stop': 'Stop gateway',
+  'gateway.restart': 'Restart gateway',
 
-  'settings.gateway.section': 'Gateway',
-  'settings.gateway.mode': 'Run mode',
-  'settings.gateway.mode.help': 'Managed starts the gateway with the app. External only connects.',
-  'settings.gateway.mode.managed': 'Managed',
-  'settings.gateway.mode.external': 'External',
-  'settings.gateway.endpoint': 'Endpoint',
-  'settings.gateway.cli': 'Command-line tool',
-  'settings.gateway.cli.auto': 'Found automatically',
+  'toolbar.sound.on': 'Reply sound on',
+  'toolbar.sound.off': 'Reply sound off',
 } as const

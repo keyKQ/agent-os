@@ -1,7 +1,12 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { DEFAULT_SETTINGS, normalizeSettings, type DesktopSettings } from '@shared/settings'
-import type { SettingsPatch } from '@shared/ipc'
+import {
+  DEFAULT_SETTINGS,
+  mergeSettings,
+  normalizeSettings,
+  type DesktopSettings,
+  type SettingsPatch,
+} from '@shared/settings'
 
 /**
  * Tiny JSON-backed settings store. One file, read once at boot, written
@@ -12,7 +17,7 @@ export class SettingsStore {
   private value: DesktopSettings
   private readonly listeners = new Set<(s: DesktopSettings) => void>()
 
-  constructor(private readonly filePath: string) {
+  constructor(readonly filePath: string) {
     this.value = this.load()
   }
 
@@ -21,19 +26,24 @@ export class SettingsStore {
   }
 
   update(patch: SettingsPatch): DesktopSettings {
-    const merged: DesktopSettings = {
-      theme: { ...this.value.theme, ...(patch.theme ?? {}) },
-      gateway: { ...this.value.gateway, ...(patch.gateway ?? {}) },
-    }
-    this.value = normalizeSettings(merged)
-    this.persist()
-    for (const fn of this.listeners) fn(this.get())
-    return this.get()
+    return this.commit(mergeSettings(this.value, patch))
+  }
+
+  /** Back to factory defaults; the file is rewritten, not deleted. */
+  reset(): DesktopSettings {
+    return this.commit(structuredClone(DEFAULT_SETTINGS))
   }
 
   subscribe(fn: (s: DesktopSettings) => void): () => void {
     this.listeners.add(fn)
     return () => this.listeners.delete(fn)
+  }
+
+  private commit(next: DesktopSettings): DesktopSettings {
+    this.value = next
+    this.persist()
+    for (const fn of this.listeners) fn(this.get())
+    return this.get()
   }
 
   private load(): DesktopSettings {

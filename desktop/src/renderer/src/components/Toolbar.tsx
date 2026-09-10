@@ -1,7 +1,7 @@
-import { LayoutPanelLeft, PanelRight, Settings, Volume2 } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { LayoutPanelLeft, PanelRight, Settings, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { ThemeToggle } from '~/theme/ThemeToggle'
 
@@ -13,6 +13,12 @@ import { ThemeToggle } from '~/theme/ThemeToggle'
 export function Toolbar() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const sidebarOpen = useUi((s) => s.sidebarOpen)
+  const settingsOpen = useUi((s) => s.settingsOpen)
+  const openSettings = useUi((s) => s.openSettings)
+  const sound = useSettings((s) => s.settings.notifications.sound)
+  const update = useSettings((s) => s.update)
+  const soundLabel = sound ? t('toolbar.sound.on') : t('toolbar.sound.off')
+
   return (
     <header
       className="app-drag flex shrink-0 items-center justify-between px-3"
@@ -55,23 +61,29 @@ export function Toolbar() {
         <Button
           variant="ghost"
           size="icon"
-          aria-label={t('toolbar.sound')}
-          title={t('toolbar.sound')}
+          aria-label={soundLabel}
+          title={soundLabel}
+          aria-pressed={sound}
+          onClick={() => void update({ notifications: { sound: !sound } })}
         >
-          <Volume2 className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+          {sound ? (
+            <Volume2 className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+          ) : (
+            <VolumeX className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+          )}
         </Button>
         <ThemeToggle />
-        <NavLink to="/settings" aria-label={t('toolbar.settings')} title={t('toolbar.settings')}>
-          {({ isActive }) => (
-            <span
-              className="mac-button flex"
-              data-variant={isActive ? 'secondary' : 'ghost'}
-              data-size="icon"
-            >
-              <Settings className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-            </span>
-          )}
-        </NavLink>
+        <Button
+          variant={settingsOpen ? 'secondary' : 'ghost'}
+          size="icon"
+          aria-label={t('toolbar.settings')}
+          title={`${t('toolbar.settings')} (⌘,)`}
+          aria-haspopup="dialog"
+          aria-expanded={settingsOpen}
+          onClick={() => openSettings()}
+        >
+          <Settings className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+        </Button>
         <Button
           variant="ghost"
           size="icon"

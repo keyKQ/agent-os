@@ -1,9 +1,30 @@
-import { app, Menu, type MenuItemConstructorOptions } from 'electron'
+import { app, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { requestOpenSettings } from './ipc/app'
 
-/** Standard macOS menu bar. App-specific items get added here as features land. */
+const REPO_URL = 'https://github.com/use-agent-os/agent-os'
+
+/**
+ * Standard macOS menu bar. "Settings…" sits where every Mac app keeps it
+ * (app menu, ⌘,) and opens the renderer's Settings window over IPC.
+ */
 export function installAppMenu(): void {
   const template: MenuItemConstructorOptions[] = [
-    { role: 'appMenu' },
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { label: 'Settings…', accelerator: 'Command+,', click: () => requestOpenSettings() },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
     { role: 'fileMenu' },
     { role: 'editMenu' },
     { role: 'viewMenu' },
@@ -11,10 +32,13 @@ export function installAppMenu(): void {
     {
       role: 'help',
       submenu: [
+        { label: 'AgentOS on GitHub', click: () => void shell.openExternal(REPO_URL) },
         {
-          label: `AgentOS ${app.getVersion()}`,
-          enabled: false,
+          label: 'Report an Issue…',
+          click: () => void shell.openExternal(`${REPO_URL}/issues/new`),
         },
+        { type: 'separator' },
+        { label: `AgentOS ${app.getVersion()}`, enabled: false },
       ],
     },
   ]

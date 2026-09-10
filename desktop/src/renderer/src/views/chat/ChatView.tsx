@@ -32,9 +32,12 @@ import { Composer, type ComposerHandle } from '~/components/composer/Composer'
 import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionList'
 import { t } from '~/i18n'
+import { rememberLastSession } from '~/lib/last-session'
 import { ease, spring } from '~/lib/motion'
+import { useReplyDoneSignal } from '~/lib/use-notifications'
 import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
+import { useSettings } from '~/stores/settings'
 import { ProjectChip } from './ProjectChip'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
@@ -223,6 +226,13 @@ function ConnectedChat() {
     setLive(sessionKey, busy)
     return () => setLive(sessionKey, false)
   }, [sessionKey, busy, setLive])
+
+  // "Open at launch: Last session" reads this back (AppShell).
+  useEffect(() => {
+    if (paramKey) rememberLastSession(paramKey)
+  }, [paramKey])
+
+  const enterToSend = useSettings((s) => s.settings.general.enterToSend)
 
   // Session display name (sessions.resolve), re-read when the run settles.
   const [sessionName, setSessionName] = useState('')
@@ -502,6 +512,7 @@ function ConnectedChat() {
   )
 
   const title = sessionName || (docked ? sessionKey.split(':').slice(-1)[0] : t('chat.untitled'))
+  useReplyDoneSignal(sessionKey, busy, title ?? sessionKey)
 
   return (
     <div className="chat-desktop" data-docked={docked}>
@@ -580,6 +591,7 @@ function ConnectedChat() {
               onClearAll={pending.clearAll}
             />
             <Composer
+              enterToSend={enterToSend}
               onSend={onComposerSend}
               onValueChange={setComposerValue}
               onSlashKeyDown={onSlashKeyDown}

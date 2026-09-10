@@ -1,9 +1,10 @@
 import { jobs } from './en/jobs'
 import { projects } from './en/projects'
+import { settings } from './en/settings'
 import { shell } from './en/shell'
 import { theme } from './en/theme'
 
-const en = { ...shell, ...theme, ...jobs, ...projects } as const
+const en = { ...shell, ...theme, ...jobs, ...projects, ...settings } as const
 
 export type MessageKey = keyof typeof en
 

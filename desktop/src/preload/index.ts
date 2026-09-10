@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { ChooseFileOptions } from '@shared/app'
 import { IPC, type DesktopApi, type SettingsPatch } from '@shared/ipc'
 import type { GatewayStatus } from '@shared/gateway'
 import type { ResolvedTheme, ThemeSettings } from '@shared/theme'
@@ -13,10 +14,18 @@ function listen<T>(channel: string, listener: (payload: T) => void): () => void 
 const api: DesktopApi = {
   app: {
     version: () => ipcRenderer.invoke(IPC.app.version),
+    info: () => ipcRenderer.invoke(IPC.app.info),
+    openExternal: (url: string) => ipcRenderer.invoke(IPC.app.openExternal, url),
+    showItemInFolder: (path: string) => ipcRenderer.invoke(IPC.app.showItemInFolder, path),
+    openPath: (path: string) => ipcRenderer.invoke(IPC.app.openPath, path),
+    chooseFile: (options?: ChooseFileOptions) => ipcRenderer.invoke(IPC.app.chooseFile, options),
+    loginItem: () => ipcRenderer.invoke(IPC.app.loginItem),
   },
   settings: {
     get: () => ipcRenderer.invoke(IPC.settings.get),
     update: (patch: SettingsPatch) => ipcRenderer.invoke(IPC.settings.update, patch),
+    reset: () => ipcRenderer.invoke(IPC.settings.reset),
+    onOpenRequested: (listener) => listen<void>(IPC.settings.open, () => listener()),
   },
   theme: {
     set: (next: Partial<ThemeSettings>) => ipcRenderer.invoke(IPC.theme.set, next),
@@ -27,6 +36,7 @@ const api: DesktopApi = {
     status: () => ipcRenderer.invoke(IPC.gateway.status),
     start: () => ipcRenderer.invoke(IPC.gateway.start),
     stop: () => ipcRenderer.invoke(IPC.gateway.stop),
+    restart: () => ipcRenderer.invoke(IPC.gateway.restart),
     onChanged: (listener) => listen<GatewayStatus>(IPC.gateway.changed, listener),
   },
 }

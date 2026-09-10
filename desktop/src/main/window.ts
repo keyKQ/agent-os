@@ -6,7 +6,7 @@ import path from 'node:path'
  *  before React mounts is not a white flash in dark mode. */
 const BACKGROUND = { dark: '#060608', light: '#f4f5ee' }
 
-export function createMainWindow(): BrowserWindow {
+export function createMainWindow(opts: { reduceTransparency?: boolean } = {}): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -17,7 +17,8 @@ export function createMainWindow(): BrowserWindow {
     // Full-height translucent sidebar like Finder/Notes: the window blurs the
     // desktop behind it and the renderer keeps the sidebar column
     // semi-transparent (see tokens.css .mac-sidebar) while content stays opaque.
-    vibrancy: 'sidebar',
+    // "Reduce transparency" in Settings turns the effect off (applyVibrancy).
+    vibrancy: opts.reduceTransparency ? undefined : 'sidebar',
     visualEffectState: 'active',
     // Native traffic lights sit inside the sidebar's top padding (Sidebar.tsx).
     titleBarStyle: 'hiddenInset',
@@ -45,4 +46,12 @@ export function createMainWindow(): BrowserWindow {
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
   return win
+}
+
+/** Mirror the "Reduce transparency" setting onto every open window. */
+export function applyVibrancy(reduceTransparency: boolean): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue
+    win.setVibrancy(reduceTransparency ? null : 'sidebar')
+  }
 }

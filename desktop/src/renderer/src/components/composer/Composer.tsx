@@ -45,6 +45,11 @@ export interface ComposerProps {
   onPopPendingTail?: () => void
   onEnqueueCurrent?: () => void
   autoFocus?: boolean
+  /**
+   * Enter sends and Shift+Enter breaks the line (default). Off: Enter breaks
+   * the line and ⌘Enter sends. Settings > General.
+   */
+  enterToSend?: boolean
 }
 
 const MIN_TEXTAREA_HEIGHT = 26
@@ -73,6 +78,7 @@ export function Composer({
   onPopPendingTail,
   onEnqueueCurrent,
   autoFocus = true,
+  enterToSend = true,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -230,12 +236,16 @@ export function Composer({
           return
         }
       }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        doSend()
+      if (e.key === 'Enter') {
+        const sends = enterToSend ? !e.shiftKey && !e.metaKey : e.metaKey
+        if (sends) {
+          e.preventDefault()
+          doSend()
+        }
       }
     },
     [
+      enterToSend,
       busy,
       onAbort,
       cycleHistory,

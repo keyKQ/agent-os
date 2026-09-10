@@ -62,6 +62,22 @@ export const useTheme = create<ThemeState>((set, get) => ({
   },
 }))
 
+/**
+ * Re-paint from settings that changed outside this store (a reset). Main has
+ * already mirrored the new preference onto nativeTheme by the time the
+ * settings call resolves, so ask it what the OS resolves to now rather than
+ * trusting a matchMedia value that may still reflect the old forced source.
+ */
+export async function syncThemeFromSettings(theme: {
+  preference: ThemePreference
+  palette: PaletteId
+}): Promise<void> {
+  const resolvedFromMain = await desktopApi().theme.resolved()
+  const systemDark = theme.preference === 'system' ? resolvedFromMain === 'dark' : readSystemDark()
+  const next = { preference: theme.preference, palette: theme.palette, systemDark }
+  useTheme.setState({ ...next, resolved: paint(next) })
+}
+
 function readSystemDark(): boolean {
   try {
     return window.matchMedia('(prefers-color-scheme: dark)').matches

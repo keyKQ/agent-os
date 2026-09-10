@@ -1,9 +1,26 @@
+import type { AppInfo } from '@shared/app'
 import type { DesktopApi } from '@shared/ipc'
 import { STOPPED_GATEWAY, type GatewayStatus } from '@shared/gateway'
-import { DEFAULT_SETTINGS, normalizeSettings, type DesktopSettings } from '@shared/settings'
+import {
+  DEFAULT_SETTINGS,
+  mergeSettings,
+  normalizeSettings,
+  type DesktopSettings,
+} from '@shared/settings'
 import { resolveTheme, type ResolvedTheme, type ThemeSettings } from '@shared/theme'
 
 const FALLBACK_KEY = 'agentos-desktop.settings'
+
+const BROWSER_INFO: AppInfo = {
+  version: 'browser',
+  electron: '',
+  chrome: '',
+  node: '',
+  platform: 'browser',
+  arch: '',
+  packaged: false,
+  paths: { userData: '', settings: `localStorage:${FALLBACK_KEY}`, logs: '' },
+}
 
 /**
  * Browser/vitest stand-in for the preload bridge. Persists to localStorage so
@@ -38,18 +55,30 @@ function createFallbackApi(): DesktopApi {
       return false
     }
   }
+  const stoppedOnly = async (): Promise<GatewayStatus> => ({ ...STOPPED_GATEWAY })
+  const cannotControl = async (): Promise<GatewayStatus> => ({
+    ...STOPPED_GATEWAY,
+    state: 'error',
+    error: 'Gateway control is only available inside the desktop app.',
+  })
 
   return {
     app: {
-      version: async () => 'browser',
+      version: async () => BROWSER_INFO.version,
+      info: async () => structuredClone(BROWSER_INFO),
+      openExternal: async (url) => {
+        window.open(url, '_blank', 'noopener')
+      },
+      showItemInFolder: async () => {},
+      openPath: async () => 'Only available inside the desktop app.',
+      chooseFile: async () => null,
+      loginItem: async () => settings.general.openAtLogin,
     },
     settings: {
       get: async () => structuredClone(settings),
-      update: async (patch) =>
-        save({
-          theme: { ...settings.theme, ...(patch.theme ?? {}) },
-          gateway: { ...settings.gateway, ...(patch.gateway ?? {}) },
-        }),
+      update: async (patch) => save(mergeSettings(settings, patch)),
+      reset: async () => save(structuredClone(DEFAULT_SETTINGS)),
+      onOpenRequested: () => () => {},
     },
     theme: {
       set: async (next: Partial<ThemeSettings>) => {
@@ -65,13 +94,10 @@ function createFallbackApi(): DesktopApi {
       },
     },
     gateway: {
-      status: async (): Promise<GatewayStatus> => ({ ...STOPPED_GATEWAY }),
-      start: async (): Promise<GatewayStatus> => ({
-        ...STOPPED_GATEWAY,
-        state: 'error',
-        error: 'Gateway control is only available inside the desktop app.',
-      }),
-      stop: async (): Promise<GatewayStatus> => ({ ...STOPPED_GATEWAY }),
+      status: stoppedOnly,
+      start: cannotControl,
+      stop: stoppedOnly,
+      restart: cannotControl,
       onChanged: () => () => {},
     },
   }

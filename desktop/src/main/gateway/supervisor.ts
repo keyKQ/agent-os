@@ -140,6 +140,16 @@ export class GatewaySupervisor {
     return this.set({ state: 'running', pid: child.pid ?? null, url, error: null })
   }
 
+  /**
+   * Stop, then start again reading settings afresh, so a changed endpoint,
+   * mode or CLI path takes effect. An adopted (external) gateway is not ours
+   * to kill: restart then just re-probes the configured endpoint.
+   */
+  async restart(): Promise<GatewayStatus> {
+    await this.stop()
+    return this.start()
+  }
+
   async stop(): Promise<GatewayStatus> {
     this.startGeneration++
     const child = this.child

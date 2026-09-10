@@ -46,12 +46,27 @@ function saveOpenFolders(ids: ReadonlySet<string>): void {
   }
 }
 
+export const SETTINGS_SECTIONS = [
+  'general',
+  'appearance',
+  'gateway',
+  'models',
+  'notifications',
+  'shortcuts',
+  'advanced',
+  'about',
+] as const
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
+
 interface UiStore {
   sidebarOpen: boolean
   sidebarWidth: number
   sessionQuery: string
   /** The Scheduled jobs panel is a layer over the window, not a route. */
   jobsOpen: boolean
+  /** Settings is a window-sized sheet too; remembers the pane between opens. */
+  settingsOpen: boolean
+  settingsSection: SettingsSection
   /** Project folders currently disclosed in the sidebar. */
   openFolders: ReadonlySet<string>
   /** The inline "new project" row is showing in the sidebar. */
@@ -63,6 +78,10 @@ interface UiStore {
   openJobs(): void
   closeJobs(): void
   toggleJobs(): void
+  openSettings(section?: SettingsSection): void
+  closeSettings(): void
+  toggleSettings(): void
+  setSettingsSection(section: SettingsSection): void
   toggleFolder(id: string): void
   setFolderOpen(id: string, open: boolean): void
   startCreatingProject(): void
@@ -75,6 +94,8 @@ export const useUi = create<UiStore>((set) => ({
   sidebarWidth: loadWidth(),
   sessionQuery: '',
   jobsOpen: false,
+  settingsOpen: false,
+  settingsSection: 'general',
   openFolders: loadOpenFolders(),
   creatingProject: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -88,9 +109,20 @@ export const useUi = create<UiStore>((set) => ({
     set({ sidebarWidth: SIDEBAR_DEFAULT, sidebarOpen: true })
   },
   setSessionQuery: (sessionQuery) => set({ sessionQuery }),
-  openJobs: () => set({ jobsOpen: true }),
+  openJobs: () => set({ jobsOpen: true, settingsOpen: false }),
   closeJobs: () => set({ jobsOpen: false }),
   toggleJobs: () => set((s) => ({ jobsOpen: !s.jobsOpen })),
+  // Only one sheet at a time: opening Settings closes Jobs and vice versa.
+  openSettings: (section) =>
+    set((s) => ({
+      settingsOpen: true,
+      jobsOpen: false,
+      settingsSection: section ?? s.settingsSection,
+    })),
+  closeSettings: () => set({ settingsOpen: false }),
+  toggleSettings: () =>
+    set((s) => ({ settingsOpen: !s.settingsOpen, jobsOpen: s.settingsOpen ? s.jobsOpen : false })),
+  setSettingsSection: (settingsSection) => set({ settingsSection }),
   toggleFolder: (id) =>
     set((s) => {
       const next = new Set(s.openFolders)
