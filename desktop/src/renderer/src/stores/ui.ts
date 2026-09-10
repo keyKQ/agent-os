@@ -26,12 +26,36 @@ function saveWidth(width: number): void {
   }
 }
 
+const FOLDERS_KEY = 'agentos-desktop.openFolders'
+
+function loadOpenFolders(): ReadonlySet<string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(FOLDERS_KEY) || '[]')
+    if (Array.isArray(raw)) return new Set(raw.filter((x) => typeof x === 'string'))
+  } catch {
+    /* storage unavailable or corrupt */
+  }
+  return new Set()
+}
+
+function saveOpenFolders(ids: ReadonlySet<string>): void {
+  try {
+    localStorage.setItem(FOLDERS_KEY, JSON.stringify([...ids]))
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 interface UiStore {
   sidebarOpen: boolean
   sidebarWidth: number
   sessionQuery: string
   /** The Scheduled jobs panel is a layer over the window, not a route. */
   jobsOpen: boolean
+  /** Project folders currently disclosed in the sidebar. */
+  openFolders: ReadonlySet<string>
+  /** The inline "new project" row is showing in the sidebar. */
+  creatingProject: boolean
   toggleSidebar(): void
   setSidebarWidth(width: number): void
   resetSidebarWidth(): void
@@ -39,14 +63,20 @@ interface UiStore {
   openJobs(): void
   closeJobs(): void
   toggleJobs(): void
+  toggleFolder(id: string): void
+  setFolderOpen(id: string, open: boolean): void
+  startCreatingProject(): void
+  stopCreatingProject(): void
 }
 
-/** Chrome state. Only the sidebar width survives a relaunch. */
+/** Chrome state. The sidebar width and open folders survive a relaunch. */
 export const useUi = create<UiStore>((set) => ({
   sidebarOpen: true,
   sidebarWidth: loadWidth(),
   sessionQuery: '',
   jobsOpen: false,
+  openFolders: loadOpenFolders(),
+  creatingProject: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarWidth: (width) => {
     const clamped = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width)))
@@ -61,4 +91,23 @@ export const useUi = create<UiStore>((set) => ({
   openJobs: () => set({ jobsOpen: true }),
   closeJobs: () => set({ jobsOpen: false }),
   toggleJobs: () => set((s) => ({ jobsOpen: !s.jobsOpen })),
+  toggleFolder: (id) =>
+    set((s) => {
+      const next = new Set(s.openFolders)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      saveOpenFolders(next)
+      return { openFolders: next }
+    }),
+  setFolderOpen: (id, open) =>
+    set((s) => {
+      if (s.openFolders.has(id) === open) return s
+      const next = new Set(s.openFolders)
+      if (open) next.add(id)
+      else next.delete(id)
+      saveOpenFolders(next)
+      return { openFolders: next }
+    }),
+  startCreatingProject: () => set({ creatingProject: true, sidebarOpen: true }),
+  stopCreatingProject: () => set({ creatingProject: false }),
 }))

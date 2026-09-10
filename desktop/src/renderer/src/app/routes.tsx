@@ -1,5 +1,6 @@
 import { createHashRouter, Navigate } from 'react-router'
 import { ChatView } from '~/views/chat/ChatView'
+import { ProjectView } from '~/views/projects/ProjectView'
 import { SettingsView } from '~/views/settings/SettingsView'
 import { AppShell } from './AppShell'
 
@@ -13,6 +14,9 @@ import { AppShell } from './AppShell'
 //
 // Scheduled jobs is not a route: it is a panel over the window (AppShell),
 // so opening it never leaves the conversation underneath.
+//
+// A project is a page (`projects/:id`), reached from its folder in the
+// sidebar: its brief and the chats filed in it.
 export const router = createHashRouter([
   {
     path: '/',
@@ -20,6 +24,7 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <Navigate to="/sessions" replace /> },
       { path: 'sessions/:key?', Component: ChatView },
+      { path: 'projects/:id', Component: ProjectView },
       { path: 'settings', Component: SettingsView },
     ],
   },

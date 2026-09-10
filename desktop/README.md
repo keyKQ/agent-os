@@ -58,10 +58,13 @@ desktop/
             ├── views/jobs/   #   Scheduled jobs panel (a layer over the window, not a
             │                 #   route): job list + blueprints, detail pane, create/edit
             │                 #   sheet with the natural schedule builder
+            ├── views/projects/ # Project page (`/projects/:id`): renamable title,
+            │                 #   self-saving brief, the chats filed there
             ├── views/settings/
-            ├── components/   #   Sidebar (+ resizer, session list), Toolbar, composer/
+            ├── components/   #   Sidebar (+ resizer, project folders, session list),
+            │                 #   Toolbar, Menu, composer/
             ├── theme/        #   theme system (see below)
-            ├── stores/       #   zustand: gateway, sessions, live, settings, ui
+            ├── stores/       #   zustand: gateway, sessions, projects, live, settings, ui
             ├── lib/          #   desktop-api bridge, motion curves, relative time
             ├── i18n/         #   t() catalog for desktop-only copy
             └── assets/fonts/ #   Bricolage Grotesque (wordmark) + JetBrains Mono
@@ -140,3 +143,14 @@ postinstall), run `node node_modules/electron/install.js` once.
   Only the presentation is the desktop's: health buckets, the natural-language
   schedule builder (`views/jobs/logic.ts`), native time/date pickers, and the
   session picker fed by the sidebar's session list.
+- Projects are folders in the sidebar (Notes posture), not a page of their
+  own: each project is a disclosure row with its chats inside, "+" opens an
+  inline name row (Return creates, Escape discards), and a session dragged
+  onto a folder is filed there (onto the "Sessions" header, unfiled). A
+  folder's page (`views/projects/ProjectView.tsx`) has a title you click to
+  rename and a brief that saves itself after a pause, on blur, on ⌘S and on
+  leaving the page, with the gateway's compare-and-swap (`expectedUpdatedAt`)
+  behind every write. The chat header shows a project chip whose menu moves
+  the session between folders. All of it is the console's project model and
+  `projects.*` / `sessions.patch` RPCs (`@/views/projects/logic`); the desktop
+  owns only filing, disclosure state, and the autosave (`views/projects/logic.ts`).

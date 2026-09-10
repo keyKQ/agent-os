@@ -35,6 +35,7 @@ import { t } from '~/i18n'
 import { ease, spring } from '~/lib/motion'
 import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
+import { ProjectChip } from './ProjectChip'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -509,6 +510,7 @@ function ConnectedChat() {
           <h1 className="chat-desktop-header__title" title={sessionKey}>
             {title}
           </h1>
+          <ProjectChip sessionKey={sessionKey} />
           {runState.status !== 'idle' ? (
             <span className="chat-desktop-header__state" data-tone={runTone(runState.status)}>
               {runState.label}
