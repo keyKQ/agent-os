@@ -526,6 +526,11 @@
   width: 62%;
   height: 62%;
 }
+.prov-logo > .prov-logo__glyph {
+  width: 56%;
+  height: 56%;
+  color: var(--muted-foreground);
+}
 .prov-logo > img {
   width: 78%;
   height: 78%;

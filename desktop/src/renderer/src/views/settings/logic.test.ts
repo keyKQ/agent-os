@@ -14,6 +14,9 @@ import {
   providerDraft,
   providerNeedsKey,
   providerState,
+  customEndpointErrors,
+  customEndpointPatch,
+  customProviderSpec,
   routerDirty,
   routerDraft,
   safetyNetValid,
@@ -233,6 +236,47 @@ describe('provider form', () => {
     expect(pasted.apiKey).toBe('sk-1')
     expect(pasted).not.toHaveProperty('apiKeyEnv')
     expect(providerDirty(d, { ...d, apiKey: 'x' })).toBe(true)
+  })
+})
+
+describe('custom endpoint', () => {
+  const spec = customProviderSpec('Custom endpoint', 'need')
+  const base = providerDraft({}, spec)
+
+  it('requires an http(s) base URL and a model id', () => {
+    expect(customEndpointErrors(base)).toEqual({ baseUrl: 'invalid', model: 'missing' })
+    expect(customEndpointErrors({ ...base, baseUrl: 'localhost:8000', model: 'x' })).toEqual({
+      baseUrl: 'invalid',
+    })
+    expect(
+      customEndpointErrors({ ...base, baseUrl: 'http://localhost:8000/v1', model: 'x' }),
+    ).toEqual({})
+  })
+
+  it('clears a foreign key when switching in, keeps it when already active', () => {
+    const d = { ...base, baseUrl: 'http://h/v1', model: 'm' }
+    expect(customEndpointPatch(d, false)).toEqual({
+      patch: {
+        llm: {
+          provider: 'vllm',
+          base_url: 'http://h/v1',
+          model: 'm',
+          proxy: '',
+          api_key_env: '',
+          api_key: '',
+        },
+        agentos_router: { tier_profile: null },
+      },
+    })
+    expect(customEndpointPatch(d, true)).toEqual({
+      patch: {
+        llm: { provider: 'vllm', base_url: 'http://h/v1', model: 'm', proxy: '', api_key_env: '' },
+        agentos_router: { tier_profile: null },
+      },
+    })
+    expect(customEndpointPatch({ ...d, apiKey: ' k ' }, true).patch).toMatchObject({
+      llm: { api_key: 'k' },
+    })
   })
 })
 

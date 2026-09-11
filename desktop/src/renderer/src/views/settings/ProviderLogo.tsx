@@ -11,7 +11,9 @@ import volcengine from '~/assets/providers/volcengine.svg?raw'
 import zhipu from '~/assets/providers/zhipu.svg?raw'
 import opencap from '~/assets/providers/opencap.jpg'
 import surplus from '~/assets/providers/surplus.png'
+import { Plug } from 'lucide-react'
 import { cn } from '~/lib/utils'
+import { CUSTOM_PROVIDER_ID } from './logic'
 
 /**
  * Brand marks by provider id (Lobe Icons, see assets/providers/LICENSE.txt),
@@ -58,7 +60,7 @@ export function providerMonogram(label: string): string {
 }
 
 export function hasProviderMark(id: string): boolean {
-  return id in MARKS || id in RASTER
+  return id in MARKS || id in RASTER || id === CUSTOM_PROVIDER_ID
 }
 
 export function ProviderLogo({
@@ -72,6 +74,17 @@ export function ProviderLogo({
   size?: number
   className?: string
 }) {
+  if (id === CUSTOM_PROVIDER_ID) {
+    return (
+      <span
+        className={cn('prov-logo', className)}
+        style={{ width: size, height: size }}
+        aria-hidden
+      >
+        <Plug className="prov-logo__glyph" strokeWidth={1.75} />
+      </span>
+    )
+  }
   const raster = RASTER[id]
   if (raster) {
     return (

@@ -10,6 +10,10 @@ import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import { useGateway } from '~/stores/gateway'
 import {
+  customEndpointErrors,
+  customEndpointPatch,
+  customProviderSpec,
+  isCustomProvider,
   isThinkingLevel,
   modelOptions,
   providerConfigurePayload,
@@ -74,7 +78,16 @@ function ProvidersBody({
 }) {
   const rpc = useRpc()
   const config: SetupConfig = snapshot.config ?? {}
-  const providers = (snapshot.catalog?.providers ?? []).filter((p) => p.runtimeSupported)
+  const catalogProviders = (snapshot.catalog?.providers ?? []).filter((p) => p.runtimeSupported)
+  const providers = catalogProviders.some((p) => isCustomProvider(p.providerId))
+    ? catalogProviders
+    : [
+        ...catalogProviders,
+        customProviderSpec(
+          t('settings.providers.custom.label'),
+          t('settings.providers.custom.need'),
+        ),
+      ]
   const configured = configuredProvider(snapshot.status ?? {}, config)
   const restartGateway = useGateway((s) => s.restart)
   const [selected, setSelected] = useState(configured)
@@ -82,10 +95,15 @@ function ProvidersBody({
 
   const save = useMutation({
     mutationFn: (draft: ProviderDraft) =>
-      rpc.call<ConfigureResult>(
-        'onboarding.provider.configure',
-        withRevision(snapshot, providerConfigurePayload(draft)),
-      ),
+      isCustomProvider(draft.providerId)
+        ? rpc.call<ConfigureResult>(
+            'config.patch',
+            withRevision(snapshot, customEndpointPatch(draft, configured === draft.providerId)),
+          )
+        : rpc.call<ConfigureResult>(
+            'onboarding.provider.configure',
+            withRevision(snapshot, providerConfigurePayload(draft)),
+          ),
     onSuccess: async (res, draft) => {
       for (const w of res?.warnings ?? []) toast.warning(w)
       toast.success(
@@ -155,6 +173,8 @@ function ProvidersBody({
                   <span className="prov-tile__state">{t('settings.providers.state.saved')}</span>
                 ) : p.deployment === 'local' ? (
                   <span className="prov-tile__state">{t('settings.providers.state.local')}</span>
+                ) : isCustomProvider(p.providerId) ? (
+                  <span className="prov-tile__state">{t('settings.providers.custom.state')}</span>
                 ) : (
                   <span className="prov-tile__state" data-tone="dim">
                     {t('settings.providers.state.needsKey')}
@@ -224,14 +244,17 @@ function ProviderForm({
   onSave: (draft: ProviderDraft) => void
 }) {
   const rpc = useRpc()
-  const ids = { key: useId(), env: useId(), url: useId(), proxy: useId() }
+  const ids = { key: useId(), env: useId(), url: useId(), proxy: useId(), model: useId() }
   const saved = providerDraft(config, spec)
   const [draft, setDraft] = useState<ProviderDraft>(saved)
   const [showKey, setShowKey] = useState(false)
   const label = spec.label ?? spec.providerId
   const switching = spec.providerId !== configured
   const dirty = switching || providerDirty(saved, draft)
+  const custom = isCustomProvider(spec.providerId)
   const needsKey = providerNeedsKey(draft, spec, config)
+  const customErrors = custom ? customEndpointErrors(draft) : {}
+  const invalid = Boolean(customErrors.baseUrl || customErrors.model)
   const state = providerState(spec, config, configured)
   const hasStoredKey = state.active && Boolean(config.llm?.api_key)
   const hasEnvKey =
@@ -244,6 +267,7 @@ function ProviderForm({
     retry: false,
     queryFn: () => rpc.call<CatalogModel[]>('models.list', { provider: spec.providerId }),
   })
+  const modelListId = useId()
   const options = modelOptions(models.data ?? [], spec.providerId, draft.model)
   // A provider without a key has no live catalog: nothing to check the model against.
   const hasCatalog = (models.data?.length ?? 0) > 0
@@ -262,10 +286,12 @@ function ProviderForm({
       icon={<ProviderLogo id={spec.providerId} label={label} size={36} />}
       blurb={
         <>
-          {spec.deployment === 'local'
-            ? t('settings.providers.deployment.local')
-            : t('settings.providers.deployment.cloud')}
-          {spec.whatYouNeed?.length ? ` · ${spec.whatYouNeed.join(' ')}` : ''}
+          {custom
+            ? ''
+            : spec.deployment === 'local'
+              ? `${t('settings.providers.deployment.local')} `
+              : `${t('settings.providers.deployment.cloud')} `}
+          {spec.whatYouNeed?.join(' ') ?? ''}
         </>
       }
       action={
@@ -278,7 +304,13 @@ function ProviderForm({
           )}
         </span>
       }
-      footNote={switching ? t('settings.providers.switchNote') : undefined}
+      footNote={
+        switching
+          ? custom
+            ? t('settings.providers.custom.switchNote')
+            : t('settings.providers.switchNote')
+          : undefined
+      }
       foot={
         <>
           <Button
@@ -292,7 +324,7 @@ function ProviderForm({
           </Button>
           <Button
             variant="primary"
-            disabled={!dirty || saving || needsKey || disabled}
+            disabled={!dirty || saving || needsKey || invalid || disabled}
             onClick={() => onSave(draft)}
           >
             {switching ? `${t('settings.providers.switchTo')} ${label}` : t('settings.save')}
@@ -300,12 +332,42 @@ function ProviderForm({
         </>
       }
     >
-      {spec.requiresApiKey ? (
+      {custom ? (
+        <Row
+          label={t('settings.providers.baseUrl')}
+          htmlFor={ids.url}
+          help={
+            customErrors.baseUrl && draft.baseUrl ? (
+              <span className="stg-error">{t('settings.providers.custom.baseUrl.invalid')}</span>
+            ) : (
+              t('settings.providers.custom.baseUrl.help')
+            )
+          }
+          stack
+        >
+          <input
+            id={ids.url}
+            className="mac-input"
+            data-mono="true"
+            data-invalid={customErrors.baseUrl && draft.baseUrl ? 'true' : undefined}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="http://localhost:8000/v1"
+            value={draft.baseUrl}
+            disabled={disabled}
+            onChange={(e) => setDraft((d) => ({ ...d, baseUrl: e.target.value }))}
+          />
+        </Row>
+      ) : null}
+
+      {spec.requiresApiKey || custom ? (
         <Row
           label={t('settings.providers.key')}
           htmlFor={ids.key}
           help={
-            keyHelp ? (
+            custom && !keyHelp ? (
+              t('settings.providers.custom.key.help')
+            ) : keyHelp ? (
               <span className={needsKey ? 'stg-error' : undefined}>{keyHelp}</span>
             ) : undefined
           }
@@ -347,60 +409,100 @@ function ProviderForm({
         </Row>
       ) : null}
 
-      <Row
-        label={t('settings.providers.model')}
-        help={
-          <>
-            <span>{t('settings.providers.model.help')}</span>
-            {hasCatalog ? (
-              <span>
-                {models.data!.length} {t('settings.providers.catalog')}
-              </span>
-            ) : null}
-          </>
-        }
-        align="start"
-      >
-        <select
-          className="mac-select"
-          aria-label={t('settings.providers.model')}
-          value={draft.model}
-          disabled={disabled || models.isPending}
-          onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
+      {custom ? (
+        <Row
+          label={t('settings.providers.custom.model')}
+          htmlFor={ids.model}
+          help={
+            customErrors.model && draft.baseUrl.trim() ? (
+              <span className="stg-error">{t('settings.providers.custom.model.missing')}</span>
+            ) : (
+              t('settings.providers.custom.model.help')
+            )
+          }
         >
-          <option value="">{t('settings.providers.model.none')}</option>
-          {options.map((opt) => (
-            <option key={opt.id} value={opt.id} title={opt.title || undefined}>
-              {opt.custom && hasCatalog
-                ? `${opt.label}  (${t('settings.providers.model.custom')})`
-                : opt.label}
-            </option>
-          ))}
-        </select>
-      </Row>
+          <input
+            id={ids.model}
+            className="mac-input"
+            data-mono="true"
+            autoComplete="off"
+            spellCheck={false}
+            list={hasCatalog ? modelListId : undefined}
+            placeholder="llama-3.3-70b"
+            value={draft.model}
+            disabled={disabled}
+            onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
+          />
+          {hasCatalog ? (
+            <datalist id={modelListId}>
+              {options.map((opt) => (
+                <option key={opt.id} value={opt.id} />
+              ))}
+            </datalist>
+          ) : null}
+        </Row>
+      ) : null}
+
+      {!custom ? (
+        <Row
+          label={t('settings.providers.model')}
+          help={
+            <>
+              <span>{t('settings.providers.model.help')}</span>
+              {hasCatalog ? (
+                <span>
+                  {models.data!.length} {t('settings.providers.catalog')}
+                </span>
+              ) : null}
+            </>
+          }
+          align="start"
+        >
+          <select
+            className="mac-select"
+            aria-label={t('settings.providers.model')}
+            value={draft.model}
+            disabled={disabled || models.isPending}
+            onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
+          >
+            <option value="">{t('settings.providers.model.none')}</option>
+            {options.map((opt) => (
+              <option key={opt.id} value={opt.id} title={opt.title || undefined}>
+                {opt.custom && hasCatalog
+                  ? `${opt.label}  (${t('settings.providers.model.custom')})`
+                  : opt.label}
+              </option>
+            ))}
+          </select>
+        </Row>
+      ) : null}
 
       <details className="stg-details">
         <summary className="stg-row stg-details__summary">
           <span className="stg-row__label">
             <span>{t('settings.providers.connection')}</span>
             <span className="stg-row__help">
-              <Value>{draft.baseUrl || spec.defaultBaseUrl || '—'}</Value>
+              <Value>
+                {custom ? draft.proxy || '—' : draft.baseUrl || spec.defaultBaseUrl || '—'}
+              </Value>
             </span>
           </span>
         </summary>
-        <Row label={t('settings.providers.baseUrl')} htmlFor={ids.url} stack>
-          <input
-            id={ids.url}
-            className="mac-input"
-            data-mono="true"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={spec.defaultBaseUrl || ''}
-            value={draft.baseUrl}
-            disabled={disabled}
-            onChange={(e) => setDraft((d) => ({ ...d, baseUrl: e.target.value }))}
-          />
-        </Row>
+        {!custom ? (
+          <Row label={t('settings.providers.baseUrl')} htmlFor={ids.url} stack>
+            <input
+              id={ids.url}
+              className="mac-input"
+              data-mono="true"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={spec.defaultBaseUrl || ''}
+              value={draft.baseUrl}
+              disabled={disabled}
+              onChange={(e) => setDraft((d) => ({ ...d, baseUrl: e.target.value }))}
+            />
+          </Row>
+        ) : null}
         {spec.requiresApiKey ? (
           <Row
             label={t('settings.providers.keyEnv')}

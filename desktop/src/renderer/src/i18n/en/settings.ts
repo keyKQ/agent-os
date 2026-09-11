@@ -75,6 +75,18 @@ export const settings = {
   'settings.providers.model.none': 'Follow the default tier',
   'settings.providers.catalog': 'models available from this provider',
   'settings.providers.saved': 'Provider saved',
+  'settings.providers.custom.label': 'Custom endpoint',
+  'settings.providers.custom.need':
+    'Any OpenAI-compatible server: a base URL and a model id. A key only if the server wants one.',
+  'settings.providers.custom.state': 'OpenAI-compatible',
+  'settings.providers.custom.model': 'Model id',
+  'settings.providers.custom.model.help': 'Exactly as the server names it.',
+  'settings.providers.custom.model.missing': 'A model id is required.',
+  'settings.providers.custom.baseUrl.help': 'The /v1 root the server answers on.',
+  'settings.providers.custom.baseUrl.invalid': 'A URL starting with http:// or https://.',
+  'settings.providers.custom.key.help': 'Optional. Sent as a bearer token when set.',
+  'settings.providers.custom.switchNote':
+    'Every turn goes straight to this model; the Pilot Router has no profile for it.',
   'settings.providers.switchTo': 'Switch to',
   'settings.providers.switchNote':
     'Switching provider also switches the router profile to its tiers.',

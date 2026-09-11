@@ -182,6 +182,79 @@ export function providerDraft(config: SetupConfig, spec: ProviderSpec | undefine
   }
 }
 
+/**
+ * Any OpenAI-compatible server. The gateway's runtime registry knows this
+ * provider as `vllm` (openai_compat backend, no default URL, key optional)
+ * but its onboarding catalog does not list it, so the desktop adds the tile
+ * itself and writes it through `config.patch` instead of the guided RPC.
+ */
+export const CUSTOM_PROVIDER_ID = 'vllm'
+
+export function customProviderSpec(label: string, need: string): ProviderSpec {
+  return {
+    providerId: CUSTOM_PROVIDER_ID,
+    label,
+    runtimeSupported: true,
+    routerSupported: false,
+    requiresApiKey: false,
+    requiresBaseUrl: true,
+    envKey: '',
+    defaultBaseUrl: '',
+    defaultDirectModel: '',
+    deployment: 'custom',
+    whatYouNeed: [need],
+    fields: [],
+  }
+}
+
+export function isCustomProvider(id: string): boolean {
+  return id === CUSTOM_PROVIDER_ID
+}
+
+export interface CustomEndpointErrors {
+  baseUrl?: 'invalid'
+  model?: 'missing'
+}
+
+export function customEndpointErrors(draft: ProviderDraft): CustomEndpointErrors {
+  const errors: CustomEndpointErrors = {}
+  const url = draft.baseUrl.trim()
+  let ok = false
+  try {
+    const parsed = new URL(url)
+    ok = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    ok = false
+  }
+  if (!ok) errors.baseUrl = 'invalid'
+  if (!draft.model.trim()) errors.model = 'missing'
+  return errors
+}
+
+/**
+ * The `config.patch` payload for the custom endpoint. A typed key replaces
+ * the stored one; none typed keeps it while this provider is already
+ * active and clears it when switching in from another provider, so a key
+ * for one vendor is never sent to a stranger's server.
+ */
+export function customEndpointPatch(
+  draft: ProviderDraft,
+  alreadyActive: boolean,
+): Record<string, unknown> {
+  const llm: Record<string, unknown> = {
+    provider: CUSTOM_PROVIDER_ID,
+    base_url: draft.baseUrl.trim(),
+    model: draft.model.trim(),
+    proxy: draft.proxy.trim(),
+    api_key_env: '',
+  }
+  if (draft.apiKey.trim()) llm.api_key = draft.apiKey.trim()
+  else if (!alreadyActive) llm.api_key = ''
+  // The gateway refuses a tier profile that names another provider; there is
+  // none for a custom server, and its tiers are degraded to llm.model at boot.
+  return { patch: { llm, agentos_router: { tier_profile: null } } }
+}
+
 export interface ProviderState {
   /** The provider every turn goes through right now. */
   active: boolean

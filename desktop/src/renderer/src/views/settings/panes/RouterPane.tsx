@@ -100,7 +100,7 @@ function RouterBody({
   })
 
   if (!provider) return <Notice tone="info">{t('settings.router.noProvider')}</Notice>
-  if (!profile && spec && spec.routerSupported !== true) {
+  if (!profile && (!spec || spec.routerSupported !== true)) {
     return <Notice tone="info">{t('settings.router.directOnly')}</Notice>
   }
 
