@@ -388,14 +388,62 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Tables: a small inset panel like the code block, so a data table reads as
+   one object instead of loose lines. The table is its own scroll container
+   (marked emits a bare <table>, nothing to wrap), sized to its content and
+   never wider than the message; a genuinely wide one scrolls sideways
+   instead of crushing every column. Cells opt out of the message's
+   `overflow-wrap: anywhere`: a word or a figure ("Robinhood", "$30.6M") must
+   never split across lines, only the long prose column wraps at spaces. */
 .msg-body table {
-  border-collapse: collapse;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline);
   font-size: 13px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  scrollbar-width: thin;
 }
 .msg-body :is(th, td) {
-  padding: 4px 10px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--hairline);
   text-align: left;
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: keep-all;
+  hyphens: none;
+}
+.msg-body th {
+  padding-top: 6px;
+  padding-bottom: 6px;
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.msg-body tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--foreground) 2.5%, transparent);
+}
+.msg-body tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* Author-declared alignment (`|---:|`) survives; marked emits it inline. */
+.msg-body :is(th, td)[align='right'],
+.msg-body :is(th, td)[style*='text-align: right'] {
+  text-align: right;
+}
+.msg-body :is(th, td)[align='center'],
+.msg-body :is(th, td)[style*='text-align: center'] {
+  text-align: center;
 }
 .msg :is(.inline-code, .math-raw) {
   padding: 1px 5px;
