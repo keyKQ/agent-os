@@ -3,15 +3,78 @@ import { DEFAULT_SETTINGS, isValidHost, normalizeSettings } from '@shared/settin
 import {
   diagnosticsReport,
   draftFromGateway,
-  filterSections,
   formatUptime,
   gatewayDirty,
   gatewayDraftErrors,
   gatewayFromDraft,
   gatewayNeedsRestart,
   modelOptions,
-  routerTiers,
+  providerConfigurePayload,
+  providerDirty,
+  providerDraft,
+  providerNeedsKey,
+  routerDirty,
+  routerDraft,
+  safetyNetValid,
+  textTiers,
 } from './logic'
+import { isSettingsSection, settingsPath } from './sections'
+import type { Catalog, SetupConfig } from '@/views/setup/logic'
+
+const SPEC = {
+  providerId: 'opencap',
+  label: 'OpenCAP',
+  runtimeSupported: true,
+  routerSupported: true,
+  requiresApiKey: true,
+  envKey: 'OPENCAP_API_KEY',
+  defaultBaseUrl: 'https://gw.example/v1',
+  defaultDirectModel: 'gpt-5.6-luna',
+  fields: [],
+}
+const CONFIG: SetupConfig = {
+  llm: {
+    provider: 'opencap',
+    model: 'gpt-5.6-luna',
+    api_key: '[redacted]',
+    api_key_env: 'OPENCAP_API_KEY',
+    base_url: 'https://gw.example/v1',
+    proxy: '',
+    thinking: null,
+  },
+  agentos_router: {
+    enabled: true,
+    strategy: 'pilot-v1',
+    default_tier: 'c2',
+    judge_model: undefined,
+    judge_base_url: undefined,
+    translate_ceiling_enabled: false,
+    translate_ceiling_tier: 'c0',
+    pilot: { safety_net_threshold: 0.7 },
+    tiers: {
+      c1: { provider: 'opencap', model: 'custom-c1', thinking_level: 'low' },
+      image_model: { provider: 'opencap', model: 'gpt-5.6-luna', supports_image: true },
+    },
+  },
+}
+const CATALOG: Catalog = {
+  providers: [SPEC],
+  routerProfiles: {
+    defaultTier: 'c1',
+    profiles: [
+      {
+        providerId: 'opencap',
+        tiers: {
+          c0: { model: 'deepseek-v4-flash', thinkingLevel: 'high', description: 'fast' },
+          c1: { model: 'gpt-5.6-luna', thinkingLevel: 'high', description: 'balanced' },
+          c2: { model: 'glm-5.3', thinkingLevel: 'high', description: 'strong' },
+          c3: { model: 'claude-opus-5', thinkingLevel: 'high', description: 'frontier' },
+          image_model: { model: 'minimax-m3', thinkingLevel: 'medium', description: 'vision' },
+        },
+      },
+    ],
+  },
+}
 
 const GW = DEFAULT_SETTINGS.gateway
 
@@ -103,15 +166,90 @@ describe('models', () => {
     const opts = modelOptions(catalog, 'p', 'typed/by-hand')
     expect(opts[0]).toEqual({ id: 'typed/by-hand', label: 'typed/by-hand', custom: true })
   })
+})
 
-  it('reads router tiers from the config dict', () => {
+describe('provider form', () => {
+  it('seeds from the saved provider without the secret', () => {
+    const d = providerDraft(CONFIG, SPEC)
+    expect(d).toEqual({
+      providerId: 'opencap',
+      model: 'gpt-5.6-luna',
+      apiKey: '',
+      apiKeyEnv: 'OPENCAP_API_KEY',
+      baseUrl: 'https://gw.example/v1',
+      proxy: '',
+    })
+    expect(providerDirty(d, d)).toBe(false)
+  })
+
+  it('seeds a different provider from the catalog defaults', () => {
+    const d = providerDraft(CONFIG, { ...SPEC, providerId: 'openai', envKey: 'OPENAI_API_KEY' })
+    expect(d.apiKeyEnv).toBe('OPENAI_API_KEY')
+    expect(d.baseUrl).toBe('https://gw.example/v1')
+    expect(d.model).toBe('gpt-5.6-luna')
+    expect(providerNeedsKey(d, { ...SPEC, providerId: 'openai' }, CONFIG)).toBe(false)
     expect(
-      routerTiers({ c1: { model: 'x', thinking: 'low' }, c2: { model: 'y' }, bad: 'nope' }),
-    ).toEqual([
-      { tier: 'c1', model: 'x' },
-      { tier: 'c2', model: 'y' },
-    ])
-    expect(routerTiers(null)).toEqual([])
+      providerNeedsKey({ ...d, apiKeyEnv: '' }, { ...SPEC, providerId: 'openai' }, CONFIG),
+    ).toBe(true)
+  })
+
+  it('never sends both a pasted key and an env reference', () => {
+    const d = providerDraft(CONFIG, SPEC)
+    expect(providerConfigurePayload(d)).toEqual({
+      providerId: 'opencap',
+      model: 'gpt-5.6-luna',
+      baseUrl: 'https://gw.example/v1',
+      proxy: '',
+      apiKeyEnv: 'OPENCAP_API_KEY',
+    })
+    const pasted = providerConfigurePayload({ ...d, apiKey: ' sk-1 ' })
+    expect(pasted.apiKey).toBe('sk-1')
+    expect(pasted).not.toHaveProperty('apiKeyEnv')
+    expect(providerDirty(d, { ...d, apiKey: 'x' })).toBe(true)
+  })
+})
+
+describe('router form', () => {
+  it('lays saved tiers over the catalog profile, in ladder order', () => {
+    const d = routerDraft(CONFIG, CATALOG, 'opencap')
+    expect(d.mode).toBe('pilot-v1')
+    expect(d.defaultTier).toBe('c2')
+    expect(d.safetyNet).toBe('0.7')
+    expect(d.translateCeiling).toBe('off')
+    expect(d.tiers.map((r) => r.tier)).toEqual(['c0', 'c1', 'c2', 'c3', 'image_model'])
+    expect(d.tiers[1]).toMatchObject({ model: 'custom-c1', thinkingLevel: 'low' })
+    expect(d.tiers[0]).toMatchObject({ model: 'deepseek-v4-flash', description: 'fast' })
+    expect(d.tiers[4]).toMatchObject({ model: 'gpt-5.6-luna', supportsImage: true })
+    expect(textTiers(d)).toHaveLength(4)
+    expect(routerDirty(d, d)).toBe(false)
+    expect(routerDirty(d, { ...d, defaultTier: 'c1' })).toBe(true)
+  })
+
+  it('falls back to catalog defaults when nothing is saved', () => {
+    const d = routerDraft({}, CATALOG, 'opencap')
+    expect(d.mode).toBe('pilot-v1')
+    expect(d.defaultTier).toBe('c1')
+    expect(d.safetyNet).toBe('0.5')
+    expect(d.translateCeiling).toBe('c0')
+    expect(d.tiers).toHaveLength(5)
+    expect(routerDraft({}, CATALOG, 'nope').tiers).toEqual([])
+  })
+
+  it('validates the safety net as a 0..1 number', () => {
+    expect(safetyNetValid('0.5')).toBe(true)
+    expect(safetyNetValid('1')).toBe(true)
+    expect(safetyNetValid('1.2')).toBe(false)
+    expect(safetyNetValid('abc')).toBe(false)
+  })
+})
+
+describe('sections', () => {
+  it('maps ids to paths and back', () => {
+    expect(settingsPath()).toBe('/settings')
+    expect(settingsPath('models')).toBe('/settings')
+    expect(settingsPath('router')).toBe('/settings/router')
+    expect(isSettingsSection('router')).toBe(true)
+    expect(isSettingsSection('nope')).toBe(false)
   })
 })
 
@@ -133,15 +271,5 @@ describe('about + advanced', () => {
     expect(report).not.toContain('sekrit-token')
     expect(report).toContain('<redacted>')
     expect(report).toContain('pid 42')
-  })
-
-  it('filters sections by title or blurb', () => {
-    const sections = [
-      { id: 'general' as const, title: 'General', blurb: 'Launch and quit' },
-      { id: 'about' as const, title: 'About', blurb: 'Versions' },
-    ]
-    expect(filterSections(sections, 'quit').map((s) => s.id)).toEqual(['general'])
-    expect(filterSections(sections, 'ABOUT').map((s) => s.id)).toEqual(['about'])
-    expect(filterSections(sections, '  ')).toHaveLength(2)
   })
 })

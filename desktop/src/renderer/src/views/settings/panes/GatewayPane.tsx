@@ -6,7 +6,6 @@ import type { GatewaySettings } from '@shared/settings'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi, isDesktop } from '~/lib/desktop-api'
-import { cn } from '~/lib/utils'
 import { useGateway } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import {
@@ -17,14 +16,14 @@ import {
   gatewayNeedsRestart,
   type GatewayDraft,
 } from '../logic'
-import { Group, Notice, Row, Segmented, Value } from '../parts'
+import { Card, Head, Notice, Pill, Row, Segmented, Value, type Tone } from '../parts'
 
-const LIGHT: Record<GatewayState, string> = {
-  stopped: 'text-dim',
-  starting: 'text-warn',
-  running: 'text-ok',
-  stopping: 'text-warn',
-  error: 'text-danger',
+const TONE: Record<GatewayState, Tone | undefined> = {
+  stopped: undefined,
+  starting: 'warn',
+  running: 'ok',
+  stopping: 'warn',
+  error: 'danger',
 }
 
 export function GatewayPane() {
@@ -36,62 +35,44 @@ export function GatewayPane() {
   const needsRestart = gatewayNeedsRestart(saved, status)
   const running = status.state === 'running' || status.state === 'starting'
   const pulsing = status.state === 'starting' || status.state === 'stopping'
-  const managedProcess = status.pid !== null
 
   function copyUrl() {
     if (!status.url) return
     void navigator.clipboard?.writeText(status.url)
-    toast.success(t('settings.copied'), { id: 'prefs-copy' })
+    toast.success(t('settings.copied'), { id: 'stg-copy' })
   }
 
   return (
     <>
-      <Group
+      <Head title={t('settings.section.gateway')} blurb={t('settings.section.gateway.blurb')} />
+
+      {status.error ? (
+        <Notice tone="danger">
+          <span className="stg-value" style={{ whiteSpace: 'pre-wrap' }}>
+            {status.error}
+          </span>
+        </Notice>
+      ) : needsRestart ? (
+        <Notice
+          action={
+            <Button disabled={busy} onClick={() => void restart()}>
+              {t('settings.gateway.restartNow')}
+            </Button>
+          }
+        >
+          {t('settings.gateway.restartNeeded')}
+        </Notice>
+      ) : null}
+
+      <Card
         title={t('settings.gateway.status')}
-        after={
-          status.error ? (
-            <Notice tone="danger">
-              <span className="prefs-value" style={{ whiteSpace: 'pre-wrap' }}>
-                {status.error}
-              </span>
-            </Notice>
-          ) : needsRestart ? (
-            <Notice
-              action={
-                <Button disabled={busy} onClick={() => void restart()}>
-                  {t('settings.gateway.restartNow')}
-                </Button>
-              }
-            >
-              {t('settings.gateway.restartNeeded')}
-            </Notice>
-          ) : null
+        blurb={t('settings.gateway.status.blurb')}
+        action={
+          <Pill tone={TONE[status.state]} pulse={pulsing}>
+            {t(`gateway.state.${status.state}`)}
+          </Pill>
         }
       >
-        <Row label={t('settings.gateway.status')}>
-          <span className="prefs-state">
-            <span
-              className={cn('mac-light', LIGHT[status.state])}
-              data-pulse={pulsing}
-              aria-hidden
-            />
-            {t(`gateway.state.${status.state}`)}
-          </span>
-          {running ? (
-            <>
-              <Button disabled={busy} onClick={() => void restart()}>
-                {t('settings.gateway.restart')}
-              </Button>
-              <Button disabled={busy} onClick={() => void stop()}>
-                {t('settings.gateway.stop')}
-              </Button>
-            </>
-          ) : (
-            <Button variant="primary" disabled={busy || !isDesktop()} onClick={() => void start()}>
-              {t('settings.gateway.start')}
-            </Button>
-          )}
-        </Row>
         <Row label={t('settings.gateway.endpoint')}>
           <Value>{status.url ?? `http://${saved.host}:${saved.port}`}</Value>
           <Button
@@ -119,14 +100,30 @@ export function GatewayPane() {
             />
           </Button>
         </Row>
-        {status.state === 'running' ? (
-          <Row label={t('settings.gateway.pid')}>
-            <Value>
-              {managedProcess ? `pid ${status.pid}` : t('settings.gateway.pid.adopted')}
-            </Value>
-          </Row>
-        ) : null}
-      </Group>
+        <Row label={t('settings.gateway.pid')}>
+          <Value>
+            {status.state !== 'running'
+              ? '—'
+              : status.pid !== null
+                ? `pid ${status.pid}`
+                : t('settings.gateway.pid.adopted')}
+          </Value>
+          {running ? (
+            <>
+              <Button disabled={busy} onClick={() => void restart()}>
+                {t('settings.gateway.restart')}
+              </Button>
+              <Button disabled={busy} onClick={() => void stop()}>
+                {t('settings.gateway.stop')}
+              </Button>
+            </>
+          ) : (
+            <Button variant="primary" disabled={busy || !isDesktop()} onClick={() => void start()}>
+              {t('settings.gateway.start')}
+            </Button>
+          )}
+        </Row>
+      </Card>
 
       {/* Keyed on the saved value: a save or a reset re-seeds the form, while an
           unrelated settings change (a toolbar toggle) leaves an edit alone. */}
@@ -135,7 +132,7 @@ export function GatewayPane() {
         saved={saved}
         onSave={async (next) => {
           await update({ gateway: next })
-          toast.success(t('settings.gateway.saved'), { id: 'prefs-gateway' })
+          toast.success(t('settings.gateway.saved'), { id: 'stg-gateway' })
         }}
       />
     </>
@@ -166,21 +163,22 @@ function ConnectionForm({
   }
 
   return (
-    <Group
+    <Card
       title={t('settings.gateway.connection')}
-      after={
-        <div className="prefs-actions">
+      blurb={t('settings.gateway.connection.blurb')}
+      foot={
+        <>
           <Button disabled={!dirty} onClick={() => setDraft(draftFromGateway(saved))}>
-            {t('settings.gateway.revert')}
+            {t('settings.revert')}
           </Button>
           <Button
             variant="primary"
             disabled={!canSave}
             onClick={() => void onSave(gatewayFromDraft(draft))}
           >
-            {t('settings.gateway.save')}
+            {t('settings.save')}
           </Button>
-        </div>
+        </>
       }
     >
       <Row label={t('settings.gateway.mode')} help={t('settings.gateway.mode.help')}>
@@ -199,7 +197,7 @@ function ConnectionForm({
         htmlFor={ids.host}
         help={
           errors.host ? (
-            <span className="prefs-error">{t('settings.gateway.invalid.host')}</span>
+            <span className="stg-error">{t('settings.gateway.invalid.host')}</span>
           ) : undefined
         }
       >
@@ -220,7 +218,7 @@ function ConnectionForm({
         htmlFor={ids.port}
         help={
           errors.port ? (
-            <span className="prefs-error">{t('settings.gateway.invalid.port')}</span>
+            <span className="stg-error">{t('settings.gateway.invalid.port')}</span>
           ) : undefined
         }
       >
@@ -243,32 +241,34 @@ function ConnectionForm({
         help={t('settings.gateway.token.help')}
         align="start"
       >
-        <input
-          id={ids.token}
-          className="mac-input"
-          data-mono="true"
-          type={showToken ? 'text' : 'password'}
-          autoComplete="off"
-          spellCheck={false}
-          placeholder={t('settings.gateway.token.placeholder')}
-          value={draft.token}
-          onChange={(e) => setDraft((d) => ({ ...d, token: e.target.value }))}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={
-            showToken ? t('settings.gateway.token.hide') : t('settings.gateway.token.show')
-          }
-          aria-pressed={showToken}
-          onClick={() => setShowToken((v) => !v)}
-        >
-          {showToken ? (
-            <EyeOff className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          ) : (
-            <Eye className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          )}
-        </Button>
+        <span className="stg-input-wrap">
+          <input
+            id={ids.token}
+            className="mac-input"
+            data-mono="true"
+            type={showToken ? 'text' : 'password'}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={t('settings.gateway.token.placeholder')}
+            value={draft.token}
+            onChange={(e) => setDraft((d) => ({ ...d, token: e.target.value }))}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={
+              showToken ? t('settings.gateway.token.hide') : t('settings.gateway.token.show')
+            }
+            aria-pressed={showToken}
+            onClick={() => setShowToken((v) => !v)}
+          >
+            {showToken ? (
+              <EyeOff className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            ) : (
+              <Eye className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            )}
+          </Button>
+        </span>
       </Row>
       <Row
         label={t('settings.gateway.cli')}
@@ -294,6 +294,6 @@ function ConnectionForm({
           {t('settings.gateway.cli.choose')}
         </Button>
       </Row>
-    </Group>
+    </Card>
   )
 }

@@ -1,6 +1,6 @@
 import { t, type MessageKey } from '~/i18n'
 import { useSettings } from '~/stores/settings'
-import { Group } from '../parts'
+import { Card, Head } from '../parts'
 
 interface Shortcut {
   keys: readonly string[]
@@ -36,6 +36,7 @@ export function ShortcutsPane() {
 
   return (
     <>
+      <Head title={t('settings.section.shortcuts')} blurb={t('settings.section.shortcuts.blurb')} />
       <KeyGroup title={t('settings.shortcuts.app')} rows={APP} />
       <KeyGroup title={t('settings.shortcuts.chat')} rows={CHAT} />
       <KeyGroup title={t('settings.shortcuts.composer')} rows={composer} />
@@ -45,12 +46,12 @@ export function ShortcutsPane() {
 
 function KeyGroup({ title, rows }: { title: string; rows: readonly Shortcut[] }) {
   return (
-    <Group title={title}>
-      <div className="prefs-keys">
+    <Card title={title}>
+      <div className="stg-keys">
         {rows.map((row) => (
-          <div key={row.label} className="prefs-keys__row">
+          <div key={row.label} className="stg-keys__row">
             <span>{t(row.label)}</span>
-            <span className="prefs-keys__combo" aria-label={row.keys.join(' ')}>
+            <span className="stg-keys__combo" aria-label={row.keys.join(' ')}>
               {row.keys.map((k, i) => (
                 <kbd key={`${k}-${i}`} className="kbd">
                   {k}
@@ -60,6 +61,6 @@ function KeyGroup({ title, rows }: { title: string; rows: readonly Shortcut[] })
           </div>
         ))}
       </div>
-    </Group>
+    </Card>
   )
 }

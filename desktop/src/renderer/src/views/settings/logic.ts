@@ -6,7 +6,8 @@ import {
 } from '@shared/settings'
 import type { GatewayStatus } from '@shared/gateway'
 import type { AppInfo } from '@shared/app'
-import type { SettingsSection } from '~/stores/ui'
+import type { Catalog, ProviderSpec, RouterMode, SetupConfig, TierSpec } from '@/views/setup/logic'
+import { mergeTiers, routerMode, TEXT_TIERS } from '@/views/setup/logic'
 
 /* ── Gateway form ───────────────────────────────────────────────────────── */
 
@@ -65,10 +66,9 @@ export function gatewayDirty(saved: GatewaySettings, draft: GatewayDraft): boole
 }
 
 /**
- * The running gateway was started from a different endpoint or mode than the
- * saved settings describe. Token and CLI path changes matter too, but only a
- * managed gateway is ours to restart; for an external one the endpoint is
- * the whole story.
+ * The running gateway was started from a different endpoint than the saved
+ * settings describe. Only the endpoint is checked: token and CLI path
+ * changes matter too, but only a managed gateway is ours to restart.
  */
 export function gatewayNeedsRestart(saved: GatewaySettings, status: GatewayStatus): boolean {
   if (status.state !== 'running' && status.state !== 'starting') return false
@@ -76,7 +76,7 @@ export function gatewayNeedsRestart(saved: GatewaySettings, status: GatewayStatu
   return status.url !== `http://${saved.host}:${saved.port}`
 }
 
-/* ── Models ─────────────────────────────────────────────────────────────── */
+/* ── Provider (Models pane) ─────────────────────────────────────────────── */
 
 export const THINKING_LEVELS = [
   'off',
@@ -107,9 +107,9 @@ export interface ModelOption {
 }
 
 /**
- * The picker lists the active provider's models, catalog order, and keeps the
- * configured model selectable even when the catalog does not know it (a
- * model typed into config.toml, or a provider whose catalog is offline).
+ * A model picker's options: the provider's catalog, in catalog order, plus
+ * the configured model when the catalog does not know it (typed into
+ * config.toml, or a provider whose catalog is offline).
  */
 export function modelOptions(
   models: readonly CatalogModel[],
@@ -128,18 +128,154 @@ export function modelOptions(
   return out
 }
 
-/** Read `agentos_router.tiers` (a dict of tier -> {model, ...}) into rows. */
-export function routerTiers(raw: unknown): { tier: string; model: string }[] {
-  if (!raw || typeof raw !== 'object') return []
-  return Object.entries(raw as Record<string, unknown>)
-    .map(([tier, cfg]) => ({
+/** The provider form. Secrets are never seeded: a blank key means "keep". */
+export interface ProviderDraft {
+  providerId: string
+  model: string
+  apiKey: string
+  apiKeyEnv: string
+  baseUrl: string
+  proxy: string
+}
+
+export function providerDraft(config: SetupConfig, spec: ProviderSpec | undefined): ProviderDraft {
+  const llm = config.llm || {}
+  const providerId = spec?.providerId ?? ''
+  const own = llm.provider === providerId
+  const field = (name: string) => spec?.fields?.find((f) => f.name === name)
+  return {
+    providerId,
+    model: own
+      ? String(llm.model || '')
+      : String(spec?.defaultDirectModel || field('model')?.default || ''),
+    apiKey: '',
+    apiKeyEnv: own
+      ? String(llm.api_key_env || '')
+      : String(spec?.envKey || field('api_key_env')?.default || ''),
+    baseUrl: own
+      ? String(llm.base_url || '')
+      : String(spec?.defaultBaseUrl || field('base_url')?.default || ''),
+    proxy: own ? String(llm.proxy || '') : '',
+  }
+}
+
+/**
+ * The `onboarding.provider.configure` payload. A pasted key is the explicit
+ * credential source, so the env reference is dropped alongside it (the
+ * gateway rejects both at once). Blank strings are sent for base URL and
+ * proxy so a cleared field clears the config.
+ */
+export function providerConfigurePayload(draft: ProviderDraft): Record<string, unknown> {
+  const params: Record<string, unknown> = {
+    providerId: draft.providerId,
+    model: draft.model.trim(),
+    baseUrl: draft.baseUrl.trim(),
+    proxy: draft.proxy.trim(),
+  }
+  if (draft.apiKey.trim()) params.apiKey = draft.apiKey.trim()
+  else if (draft.apiKeyEnv.trim()) params.apiKeyEnv = draft.apiKeyEnv.trim()
+  return params
+}
+
+export function providerDirty(saved: ProviderDraft, draft: ProviderDraft): boolean {
+  return (
+    saved.providerId !== draft.providerId ||
+    saved.model.trim() !== draft.model.trim() ||
+    draft.apiKey.trim() !== '' ||
+    saved.apiKeyEnv.trim() !== draft.apiKeyEnv.trim() ||
+    saved.baseUrl.trim() !== draft.baseUrl.trim() ||
+    saved.proxy.trim() !== draft.proxy.trim()
+  )
+}
+
+/** A provider needs a key it does not have yet: switching to it, or none saved. */
+export function providerNeedsKey(
+  draft: ProviderDraft,
+  spec: ProviderSpec | undefined,
+  config: SetupConfig,
+): boolean {
+  if (!spec?.requiresApiKey) return false
+  if (draft.apiKey.trim()) return false
+  const llm = config.llm || {}
+  const own = llm.provider === draft.providerId
+  const hasSaved = own && (Boolean(llm.api_key) || Boolean(llm.api_key_env))
+  return !hasSaved && !draft.apiKeyEnv.trim()
+}
+
+/* ── Router pane ────────────────────────────────────────────────────────── */
+
+export const TIER_ORDER = [...TEXT_TIERS, 'image_model'] as const
+export type TierName = (typeof TIER_ORDER)[number]
+
+export const ROUTER_THINKING = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+
+export interface TierRow {
+  tier: TierName
+  model: string
+  thinkingLevel: string
+  supportsImage: boolean
+  /** From the catalog profile: what this rung is for. */
+  description: string
+}
+
+export interface RouterDraft {
+  mode: RouterMode
+  defaultTier: string
+  judgeModel: string
+  safetyNet: string
+  translateCeiling: string // 'off' | tier
+  tiers: TierRow[]
+}
+
+/**
+ * Seed the router form from the saved config laid over the catalog profile
+ * for the active provider, the same merge the console's setup does. Only the
+ * text tiers and the image row are editable; the image row only exists when
+ * the profile defines one.
+ */
+export function routerDraft(config: SetupConfig, catalog: Catalog, provider: string): RouterDraft {
+  const router = config.agentos_router || {}
+  const profile = (catalog.routerProfiles?.profiles || []).find((p) => p.providerId === provider)
+  const merged = mergeTiers(profile?.tiers, router.tiers)
+  const tiers: TierRow[] = []
+  for (const tier of TIER_ORDER) {
+    const spec: TierSpec | undefined = merged[tier]
+    if (!spec) continue
+    const fromProfile = profile?.tiers?.[tier]
+    tiers.push({
       tier,
-      model:
-        cfg && typeof cfg === 'object' && typeof (cfg as { model?: unknown }).model === 'string'
-          ? ((cfg as { model: string }).model ?? '')
-          : '',
-    }))
-    .filter((row) => row.model)
+      model: String(spec.model || ''),
+      thinkingLevel: String(spec.thinkingLevel || spec.thinking_level || ''),
+      supportsImage: tier === 'image_model' || Boolean(spec.supportsImage ?? spec.supports_image),
+      description: String(spec.description || fromProfile?.description || ''),
+    })
+  }
+  return {
+    mode: routerMode(router),
+    defaultTier: router.default_tier || catalog.routerProfiles?.defaultTier || 'c1',
+    judgeModel: router.judge_model || '',
+    safetyNet:
+      router.pilot?.safety_net_threshold != null
+        ? String(router.pilot.safety_net_threshold)
+        : '0.5',
+    translateCeiling:
+      router.translate_ceiling_enabled === false ? 'off' : router.translate_ceiling_tier || 'c0',
+    tiers,
+  }
+}
+
+export function routerDirty(saved: RouterDraft, draft: RouterDraft): boolean {
+  return JSON.stringify(saved) !== JSON.stringify(draft)
+}
+
+/** The tiers a turn can be routed to, in cost order, for the default picker. */
+export function textTiers(draft: RouterDraft): TierRow[] {
+  return draft.tiers.filter((row) => row.tier !== 'image_model')
+}
+
+export function safetyNetValid(raw: string): boolean {
+  const n = Number.parseFloat(raw)
+  return Number.isFinite(n) && n >= 0 && n <= 1
 }
 
 /* ── About ──────────────────────────────────────────────────────────────── */
@@ -186,18 +322,4 @@ export function diagnosticsReport(input: {
   if (gateway.error) lines.push(`gateway error: ${gateway.error}`)
   lines.push('', 'settings:', JSON.stringify(redacted, null, 2))
   return lines.join('\n')
-}
-
-/* ── Navigation ─────────────────────────────────────────────────────────── */
-
-/** Sections whose title or blurb contains the query (case-insensitive). */
-export function filterSections<T extends { id: SettingsSection; title: string; blurb: string }>(
-  sections: readonly T[],
-  query: string,
-): T[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return [...sections]
-  return sections.filter(
-    (s) => s.title.toLowerCase().includes(q) || s.blurb.toLowerCase().includes(q),
-  )
 }

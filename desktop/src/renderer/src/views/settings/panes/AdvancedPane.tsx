@@ -3,7 +3,6 @@ import { useEffect, useId, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { ModalShell } from '@/components/ModalShell'
-import { useConnection } from '@/stores/connection'
 import type { AppInfo } from '@shared/app'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -12,18 +11,16 @@ import { useGateway } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { syncThemeFromSettings } from '~/theme/theme-store'
 import { diagnosticsReport } from '../logic'
-import { Group, Row } from '../parts'
+import { Card, Head, Row } from '../parts'
+import { useConfigSnapshot } from '../use-snapshot'
 
-interface Snapshot {
-  configPath?: string
-}
 interface StatusResult {
   version?: string
 }
 
 export function AdvancedPane() {
   const rpc = useRpc()
-  const connected = useConnection((s) => s.state === 'connected')
+  const { connected, snapshot } = useConfigSnapshot()
   const settings = useSettings((s) => s.settings)
   const reset = useSettings((s) => s.reset)
   const gateway = useGateway((s) => s.status)
@@ -42,20 +39,12 @@ export function AdvancedPane() {
     }
   }, [])
 
-  const snapshot = useQuery({
-    queryKey: ['prefs', 'snapshot'],
-    enabled: connected,
-    queryFn: async () => {
-      await rpc.waitForConnection()
-      return rpc.call<Snapshot>('config.snapshot')
-    },
-  })
   const status = useQuery({
-    queryKey: ['prefs', 'status'],
+    queryKey: ['settings', 'status'],
     enabled: connected,
     queryFn: () => rpc.call<StatusResult>('status'),
   })
-  const configPath = snapshot.data?.configPath ?? null
+  const configPath = snapshot?.configPath ?? null
   const desktop = isDesktop()
 
   async function copyDiagnostics() {
@@ -67,22 +56,24 @@ export function AdvancedPane() {
       configPath,
     })
     await navigator.clipboard?.writeText(text)
-    toast.success(t('settings.copied'), { id: 'prefs-copy' })
+    toast.success(t('settings.copied'), { id: 'stg-copy' })
   }
 
   async function doReset() {
     await reset()
     await syncThemeFromSettings(useSettings.getState().settings.theme)
     setConfirming(false)
-    toast.success(t('settings.advanced.resetDone'), { id: 'prefs-reset' })
+    toast.success(t('settings.advanced.resetDone'), { id: 'stg-reset' })
   }
 
   return (
     <>
-      <Group title={t('settings.advanced.files')}>
+      <Head title={t('settings.section.advanced')} blurb={t('settings.section.advanced.blurb')} />
+
+      <Card title={t('settings.advanced.files')}>
         <Row
           label={t('settings.advanced.settingsFile')}
-          help={<code className="prefs-path">{info?.paths.settings ?? '…'}</code>}
+          help={<code className="stg-path">{info?.paths.settings ?? '…'}</code>}
         >
           <Button
             disabled={!desktop || !info}
@@ -93,7 +84,7 @@ export function AdvancedPane() {
         </Row>
         <Row
           label={t('settings.advanced.logs')}
-          help={<code className="prefs-path">{info?.paths.logs ?? '…'}</code>}
+          help={<code className="stg-path">{info?.paths.logs ?? '…'}</code>}
         >
           <Button
             disabled={!desktop || !info}
@@ -106,7 +97,7 @@ export function AdvancedPane() {
           label={t('settings.advanced.gatewayConfig')}
           help={
             <>
-              <code className="prefs-path">
+              <code className="stg-path">
                 {configPath ?? t('settings.advanced.gatewayConfig.unknown')}
               </code>
               <span>{t('settings.advanced.gatewayConfig.help')}</span>
@@ -126,24 +117,24 @@ export function AdvancedPane() {
             {t('settings.open')}
           </Button>
         </Row>
-      </Group>
+      </Card>
 
-      <Group title={t('settings.advanced.diagnostics')}>
+      <Card title={t('settings.advanced.diagnostics')}>
         <Row
           label={t('settings.advanced.copyDiagnostics')}
           help={t('settings.advanced.copyDiagnostics.help')}
         >
           <Button onClick={() => void copyDiagnostics()}>{t('settings.copy')}</Button>
         </Row>
-      </Group>
+      </Card>
 
-      <Group title={t('settings.advanced.reset')}>
+      <Card title={t('settings.advanced.reset')}>
         <Row label={t('settings.advanced.resetAll')} help={t('settings.advanced.resetAll.help')}>
           <Button variant="danger" onClick={() => setConfirming(true)}>
             {t('settings.advanced.resetConfirm.confirm')}
           </Button>
         </Row>
-      </Group>
+      </Card>
 
       {confirming ? (
         <ResetConfirm onCancel={() => setConfirming(false)} onConfirm={() => void doReset()} />
@@ -161,12 +152,12 @@ function ResetConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm
       labelledBy={titleId}
       describedBy={bodyId}
       onClose={onCancel}
-      overlayClassName="prefs-confirm__overlay"
-      className="prefs-confirm"
+      overlayClassName="stg-confirm__overlay"
+      className="stg-confirm"
     >
       <h2 id={titleId}>{t('settings.advanced.resetConfirm.title')}</h2>
       <p id={bodyId}>{t('settings.advanced.resetConfirm.body')}</p>
-      <div className="prefs-confirm__actions">
+      <div className="stg-confirm__actions">
         <Button onClick={onCancel}>{t('settings.advanced.resetConfirm.cancel')}</Button>
         <Button variant="danger" onClick={onConfirm}>
           {t('settings.advanced.resetConfirm.confirm')}

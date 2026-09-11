@@ -7,58 +7,70 @@ import { useTheme } from './theme-store'
 
 const MODE_ICON: Record<ThemePreference, LucideIcon> = { system: Monitor, light: Sun, dark: Moon }
 
-/** Appearance group for Settings, laid out like System Settings > Appearance. */
+/** Appearance group, framed like a System Settings group. */
 export function ThemePicker() {
-  const { preference, palette, resolved, setPreference, setPalette } = useTheme()
-
   return (
     <section aria-labelledby="theme-heading">
       <h2 id="theme-heading" className="mac-group-title">
         {t('theme.section')}
       </h2>
       <div className="mac-group">
-        <div className="mac-group-row">
-          <div>
-            <div>{t('theme.mode')}</div>
-            <div className="mac-help">{t(`theme.resolved.${resolved}`)}</div>
-          </div>
-          <div role="radiogroup" aria-label={t('theme.mode')} className="mac-segmented">
-            {THEME_PREFERENCES.map((mode) => {
-              const Icon = MODE_ICON[mode]
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  role="radio"
-                  aria-checked={mode === preference}
-                  className="mac-segment"
-                  onClick={() => void setPreference(mode)}
-                >
-                  <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
-                  {t(`theme.mode.${mode}`)}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-        <div className="mac-group-row items-start">
-          <div className="pt-1.5">
-            <div>{t('theme.palette')}</div>
-            <div className="mac-help">{t('theme.palette.help')}</div>
-          </div>
-          <div role="radiogroup" aria-label={t('theme.palette')} className="flex gap-3">
-            {PALETTE_IDS.map((id) => (
-              <PaletteSwatch
-                key={id}
-                id={id}
-                active={id === palette}
-                onSelect={() => void setPalette(id)}
-              />
-            ))}
-          </div>
-        </div>
+        <ThemeRows />
       </div>
     </section>
+  )
+}
+
+/**
+ * The two rows (mode, palette) without a frame, so a host can lay them into
+ * its own card. `rowClass` names the host's row recipe.
+ */
+export function ThemeRows({ rowClass = 'mac-group-row' }: { rowClass?: string }) {
+  const { preference, palette, resolved, setPreference, setPalette } = useTheme()
+
+  return (
+    <>
+      <div className={rowClass}>
+        <div>
+          <div>{t('theme.mode')}</div>
+          <div className="mac-help">{t(`theme.resolved.${resolved}`)}</div>
+        </div>
+        <div role="radiogroup" aria-label={t('theme.mode')} className="mac-segmented">
+          {THEME_PREFERENCES.map((mode) => {
+            const Icon = MODE_ICON[mode]
+            return (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={mode === preference}
+                className="mac-segment"
+                onClick={() => void setPreference(mode)}
+              >
+                <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
+                {t(`theme.mode.${mode}`)}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+      <div className={cn(rowClass, 'items-start')}>
+        <div className="pt-1.5">
+          <div>{t('theme.palette')}</div>
+          <div className="mac-help">{t('theme.palette.help')}</div>
+        </div>
+        <div role="radiogroup" aria-label={t('theme.palette')} className="flex gap-3">
+          {PALETTE_IDS.map((id) => (
+            <PaletteSwatch
+              key={id}
+              id={id}
+              active={id === palette}
+              onSelect={() => void setPalette(id)}
+            />
+          ))}
+        </div>
+      </div>
+    </>
   )
 }
 

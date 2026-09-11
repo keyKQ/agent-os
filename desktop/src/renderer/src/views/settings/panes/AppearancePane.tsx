@@ -2,8 +2,8 @@ import { TEXT_SIZES } from '@shared/settings'
 import { Switch } from '~/components/ui/switch'
 import { t } from '~/i18n'
 import { useSettings } from '~/stores/settings'
-import { ThemePicker } from '~/theme/ThemePicker'
-import { Group, Row, Segmented } from '../parts'
+import { ThemeRows } from '~/theme/ThemePicker'
+import { Card, Head, Row, Segmented } from '../parts'
 
 export function AppearancePane() {
   const appearance = useSettings((s) => s.settings.appearance)
@@ -11,9 +11,15 @@ export function AppearancePane() {
 
   return (
     <>
-      <ThemePicker />
+      <Head
+        title={t('settings.section.appearance')}
+        blurb={t('settings.section.appearance.blurb')}
+      />
+      <Card title={t('theme.section')}>
+        <ThemeRows rowClass="stg-row" />
+      </Card>
 
-      <Group title={t('settings.appearance.window')}>
+      <Card title={t('settings.appearance.window')}>
         <Row
           label={t('settings.appearance.textSize')}
           help={t('settings.appearance.textSize.help')}
@@ -40,7 +46,7 @@ export function AppearancePane() {
             }
           />
         </Row>
-      </Group>
+      </Card>
     </>
   )
 }

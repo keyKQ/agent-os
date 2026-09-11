@@ -1,9 +1,12 @@
 import { LayoutPanelLeft, PanelRight, Settings, Volume2, VolumeX } from 'lucide-react'
+import { useLocation, useNavigate } from 'react-router'
+import { isSettingsRoute } from '~/app/AppShell'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { ThemeToggle } from '~/theme/ThemeToggle'
+import { settingsPath } from '~/views/settings/sections'
 
 /**
  * Content-column toolbar. Left side stays empty on purpose (the wordmark or
@@ -13,8 +16,10 @@ import { ThemeToggle } from '~/theme/ThemeToggle'
 export function Toolbar() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const sidebarOpen = useUi((s) => s.sidebarOpen)
-  const settingsOpen = useUi((s) => s.settingsOpen)
-  const openSettings = useUi((s) => s.openSettings)
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const returnTo = useUi((s) => s.settingsReturnTo)
+  const settingsOpen = isSettingsRoute(pathname)
   const sound = useSettings((s) => s.settings.notifications.sound)
   const update = useSettings((s) => s.update)
   const soundLabel = sound ? t('toolbar.sound.on') : t('toolbar.sound.off')
@@ -78,9 +83,8 @@ export function Toolbar() {
           size="icon"
           aria-label={t('toolbar.settings')}
           title={`${t('toolbar.settings')} (⌘,)`}
-          aria-haspopup="dialog"
-          aria-expanded={settingsOpen}
-          onClick={() => openSettings()}
+          aria-pressed={settingsOpen}
+          onClick={() => void navigate(settingsOpen ? returnTo || '/sessions' : settingsPath())}
         >
           <Settings className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
         </Button>

@@ -8,7 +8,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { formatUptime } from '../logic'
-import { Group, Notice, Row, Value } from '../parts'
+import { Card, Head, Notice, Row, Value } from '../parts'
 
 const REPO = 'https://github.com/use-agent-os/agent-os'
 const LINKS = [
@@ -47,7 +47,7 @@ export function AboutPane() {
   }, [])
 
   const status = useQuery({
-    queryKey: ['prefs', 'status'],
+    queryKey: ['settings', 'status'],
     enabled: connected,
     refetchInterval: 30_000,
     queryFn: () => rpc.call<StatusResult>('status'),
@@ -60,13 +60,14 @@ export function AboutPane() {
 
   return (
     <>
-      <div className="prefs-hero">
-        <div className="prefs-hero__mark" aria-hidden>
+      <Head title={t('settings.section.about')} />
+      <div className="stg-hero">
+        <div className="stg-hero__mark" aria-hidden>
           <span className="font-display text-2xl font-[640] tracking-tight">A</span>
         </div>
         <div>
-          <div className="prefs-hero__name">{t('settings.about.app')}</div>
-          <div className="prefs-hero__meta">
+          <div className="stg-hero__name">{t('settings.about.app')}</div>
+          <div className="stg-hero__meta">
             {t('settings.about.version')} {info?.version ?? '…'}
             {info && !info.packaged ? ` · ${t('settings.about.dev')}` : ''}
             {' · '}
@@ -75,7 +76,21 @@ export function AboutPane() {
         </div>
       </div>
 
-      <Group title={t('settings.about.gateway')}>
+      <Card
+        title={t('settings.about.gateway')}
+        action={
+          <Button disabled={!connected || updates.isPending} onClick={() => updates.mutate()}>
+            {updates.isPending ? (
+              <>
+                <LoaderCircle className="stg-spin size-3.5" strokeWidth={1.75} aria-hidden />
+                {t('settings.about.checking')}
+              </>
+            ) : (
+              t('settings.about.check')
+            )}
+          </Button>
+        }
+      >
         <Row label={t('settings.about.gatewayVersion')}>
           <Value>{connected ? (status.data?.version ?? '…') : '—'}</Value>
         </Row>
@@ -85,57 +100,39 @@ export function AboutPane() {
         <Row label={t('settings.about.sessions')}>
           <Value>{connected && status.data ? String(status.data.active_sessions ?? 0) : '—'}</Value>
         </Row>
-      </Group>
+      </Card>
 
-      <Group
-        title={t('settings.about.updates')}
-        after={
-          updates.data ? (
-            updates.data.status === 'outdated' ? (
-              <Notice
-                action={
-                  <Button onClick={() => open(`${REPO}/releases`)}>
-                    {t('settings.about.releases')}
-                  </Button>
-                }
-              >
-                {t('settings.about.outdated')} <b>{updates.data.latest}</b>.{' '}
-                {t('settings.about.howToUpdate')}
-              </Notice>
-            ) : updates.data.status === 'up-to-date' ? (
-              <Notice tone="ok">{t('settings.about.upToDate')}</Notice>
-            ) : (
-              <Notice tone="info">{t('settings.about.offline')}</Notice>
-            )
-          ) : updates.isError ? (
-            <Notice tone="info">{t('settings.about.offline')}</Notice>
-          ) : null
-        }
-      >
-        <Row label={t('settings.about.check')} help={connected ? undefined : t('settings.offline')}>
-          <Button disabled={!connected || updates.isPending} onClick={() => updates.mutate()}>
-            {updates.isPending ? (
-              <>
-                <LoaderCircle className="prefs-spin size-3.5" strokeWidth={1.75} aria-hidden />
-                {t('settings.about.checking')}
-              </>
-            ) : (
-              t('settings.about.check')
-            )}
-          </Button>
-        </Row>
-      </Group>
+      {updates.data ? (
+        updates.data.status === 'outdated' ? (
+          <Notice
+            action={
+              <Button onClick={() => open(`${REPO}/releases`)}>
+                {t('settings.about.releases')}
+              </Button>
+            }
+          >
+            {t('settings.about.outdated')} <b>{updates.data.latest}</b>.{' '}
+            {t('settings.about.howToUpdate')}
+          </Notice>
+        ) : updates.data.status === 'up-to-date' ? (
+          <Notice tone="ok">{t('settings.about.upToDate')}</Notice>
+        ) : (
+          <Notice tone="info">{t('settings.about.offline')}</Notice>
+        )
+      ) : updates.isError ? (
+        <Notice tone="info">{t('settings.about.offline')}</Notice>
+      ) : null}
 
-      <Group title={t('settings.about.runtime')}>
+      <Card title={t('settings.about.runtime')}>
         <Row label={t('settings.about.electron')}>
           <Value>{info?.electron || '—'}</Value>
         </Row>
         <Row label={t('settings.about.chrome')}>
           <Value>{info?.chrome || '—'}</Value>
         </Row>
-      </Group>
+      </Card>
 
-      <Group title={t('settings.about.links')}>
+      <Card title={t('settings.about.links')}>
         {LINKS.map((link) => (
           <Row key={link.url} label={t(link.label)}>
             <Button
@@ -153,7 +150,7 @@ export function AboutPane() {
             </Button>
           </Row>
         ))}
-      </Group>
+      </Card>
     </>
   )
 }

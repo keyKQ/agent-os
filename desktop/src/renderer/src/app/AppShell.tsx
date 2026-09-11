@@ -12,13 +12,13 @@ import { bindGatewayEvents } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { JobsPanel } from '~/views/jobs/JobsPanel'
-import { SettingsPanel } from '~/views/settings/SettingsPanel'
+import { settingsPath } from '~/views/settings/sections'
 
 /** Window chrome: translucent full-height sidebar, then toolbar + routed content. */
 export function AppShell() {
   useEffect(() => bindGatewayEvents(), [])
+  useSettingsEntry()
   useShellShortcuts()
-  useOpenSettingsFromMenu()
   useLaunchView()
   useApprovalSignal()
 
@@ -33,8 +33,35 @@ export function AppShell() {
       </div>
       {/* Layers over the whole window, whichever route is showing. */}
       <JobsPanel />
-      <SettingsPanel />
     </div>
+  )
+}
+
+export function isSettingsRoute(pathname: string): boolean {
+  return pathname === '/settings' || pathname.startsWith('/settings/')
+}
+
+/**
+ * Settings is a route. Entering it from anywhere records where "Done" should
+ * return to; the app menu's "Settings…" (⌘, at the OS level) arrives over IPC.
+ */
+function useSettingsEntry() {
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const setReturnTo = useUi((s) => s.setSettingsReturnTo)
+  const last = useRef(pathname)
+  useEffect(() => {
+    if (isSettingsRoute(pathname) && !isSettingsRoute(last.current)) setReturnTo(last.current)
+    last.current = pathname
+  }, [pathname, setReturnTo])
+  useEffect(
+    () =>
+      desktopApi().settings.onOpenRequested(() => {
+        if (!isSettingsRoute(window.location.hash.replace(/^#/, ''))) {
+          void navigate(settingsPath())
+        }
+      }),
+    [navigate],
   )
 }
 
@@ -42,7 +69,8 @@ export function AppShell() {
  *  registry so they show in its cheat sheet and respect open overlays. */
 function useShellShortcuts() {
   const navigate = useNavigate()
-  const toggleSettings = useUi((s) => s.toggleSettings)
+  const { pathname } = useLocation()
+  const returnTo = useUi((s) => s.settingsReturnTo)
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const category = t('settings.shortcuts.app')
 
@@ -56,7 +84,7 @@ function useShellShortcuts() {
     },
     (e) => {
       e.preventDefault()
-      toggleSettings()
+      void navigate(isSettingsRoute(pathname) ? returnTo || '/sessions' : settingsPath())
     },
   )
   useKeyboardShortcut(
@@ -83,12 +111,6 @@ function useShellShortcuts() {
       toggleSidebar()
     },
   )
-}
-
-/** The app menu's "Settings…" item arrives over IPC. */
-function useOpenSettingsFromMenu() {
-  const openSettings = useUi((s) => s.openSettings)
-  useEffect(() => desktopApi().settings.onOpenRequested(() => openSettings()), [openSettings])
 }
 
 /**

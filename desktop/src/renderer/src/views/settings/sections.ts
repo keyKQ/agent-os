@@ -1,0 +1,34 @@
+/**
+ * The settings rail. Two facts per section: its id (the URL segment) and the
+ * group it sits under. Copy lives in i18n (`settings.section.<id>`).
+ */
+export const SETTINGS_SECTIONS = [
+  'models',
+  'router',
+  'gateway',
+  'appearance',
+  'behaviour',
+  'shortcuts',
+  'advanced',
+  'about',
+] as const
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
+
+export const SETTINGS_GROUPS: readonly {
+  id: 'agent' | 'app' | 'more'
+  sections: SettingsSection[]
+}[] = [
+  { id: 'agent', sections: ['models', 'router'] },
+  { id: 'app', sections: ['gateway', 'appearance', 'behaviour', 'shortcuts'] },
+  { id: 'more', sections: ['advanced', 'about'] },
+]
+
+export const DEFAULT_SECTION: SettingsSection = 'models'
+
+export function isSettingsSection(value: unknown): value is SettingsSection {
+  return typeof value === 'string' && (SETTINGS_SECTIONS as readonly string[]).includes(value)
+}
+
+export function settingsPath(section?: SettingsSection): string {
+  return section && section !== DEFAULT_SECTION ? `/settings/${section}` : '/settings'
+}
