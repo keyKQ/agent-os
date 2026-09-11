@@ -61,7 +61,7 @@ desktop/
             ├── views/projects/ # Project page (`/projects/:id`): renamable title,
             │                 #   self-saving brief, the chats filed there
             ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
-            │                 #   per section (models, router, gateway, appearance,
+            │                 #   per section (providers, router, gateway, appearance,
             │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
             ├── components/   #   Sidebar (+ resizer, project folders, session list),
             │                 #   Toolbar, Menu, composer/

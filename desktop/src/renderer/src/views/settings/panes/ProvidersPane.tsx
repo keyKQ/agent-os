@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Eye, EyeOff, LoaderCircle } from 'lucide-react'
+import { Check, Eye, EyeOff, LoaderCircle } from 'lucide-react'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
@@ -7,6 +7,7 @@ import { configuredProvider, type ProviderSpec, type SetupConfig } from '@/views
 import type { SettingsSnapshot } from '@/views/settings/snapshot'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { cn } from '~/lib/utils'
 import { useGateway } from '~/stores/gateway'
 import {
   isThinkingLevel,
@@ -15,11 +16,13 @@ import {
   providerDirty,
   providerDraft,
   providerNeedsKey,
+  providerState,
   THINKING_LEVELS,
   type CatalogModel,
   type ProviderDraft,
 } from '../logic'
 import { Card, Head, Notice, Pill, Row, Value } from '../parts'
+import { ProviderLogo } from '../ProviderLogo'
 import { useConfigSnapshot, withRevision } from '../use-snapshot'
 
 interface ConfigureResult {
@@ -35,39 +38,34 @@ function errorText(err: unknown): string {
 }
 
 /**
- * Provider and default model, written through the same guided RPCs the web
- * console's setup uses (`onboarding.provider.configure`, `config.set`), with
- * the snapshot revision on every write.
+ * Who answers: a grid of every runtime-supported provider from the catalog,
+ * one active at a time, and the selected one's credentials, connection and
+ * default model underneath. Written through `onboarding.provider.configure`
+ * with the snapshot revision, exactly as the console's setup does.
  */
-export function ModelsPane() {
+export function ProvidersPane() {
   const { connected, query, snapshot, reload } = useConfigSnapshot()
 
   return (
     <>
-      <Head title={t('settings.section.models')} blurb={t('settings.section.models.blurb')} />
+      <Head title={t('settings.section.providers')} blurb={t('settings.section.providers.blurb')} />
       {!connected ? (
         <Notice tone="info">{t('settings.offline')}</Notice>
       ) : query.isError ? (
         <Notice tone="danger">{t('settings.loadFailed')}</Notice>
       ) : !snapshot ? (
-        <Loading />
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <LoaderCircle className="stg-spin size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('settings.loading')}
+        </div>
       ) : (
-        <ModelsBody snapshot={snapshot} reload={reload} />
+        <ProvidersBody snapshot={snapshot} reload={reload} />
       )}
     </>
   )
 }
 
-function Loading() {
-  return (
-    <div className="flex items-center gap-2 text-muted-foreground">
-      <LoaderCircle className="stg-spin size-3.5" strokeWidth={1.75} aria-hidden />
-      {t('settings.loading')}
-    </div>
-  )
-}
-
-function ModelsBody({
+function ProvidersBody({
   snapshot,
   reload,
 }: {
@@ -79,6 +77,8 @@ function ModelsBody({
   const providers = (snapshot.catalog?.providers ?? []).filter((p) => p.runtimeSupported)
   const configured = configuredProvider(snapshot.status ?? {}, config)
   const restartGateway = useGateway((s) => s.restart)
+  const [selected, setSelected] = useState(configured)
+  const selectedSpec = providers.find((p) => p.providerId === selected)
 
   const save = useMutation({
     mutationFn: (draft: ProviderDraft) =>
@@ -86,12 +86,13 @@ function ModelsBody({
         'onboarding.provider.configure',
         withRevision(snapshot, providerConfigurePayload(draft)),
       ),
-    onSuccess: async (res) => {
+    onSuccess: async (res, draft) => {
       for (const w of res?.warnings ?? []) toast.warning(w)
       toast.success(
-        res?.restartRequired ? t('settings.restartRequired') : t('settings.models.saved'),
+        res?.restartRequired ? t('settings.restartRequired') : t('settings.providers.saved'),
         { id: 'stg-provider' },
       )
+      setSelected(draft.providerId)
       await reload()
     },
     onError: (err) =>
@@ -112,6 +113,7 @@ function ModelsBody({
   })
 
   const thinking = isThinkingLevel(config.llm?.thinking) ? config.llm.thinking : ''
+  const blocked = Boolean(snapshot.writeBlocked)
 
   return (
     <>
@@ -127,17 +129,59 @@ function ModelsBody({
         </Notice>
       ) : null}
 
-      {/* Keyed on the saved provider + revision so a save re-seeds the form. */}
-      <ProviderCard
-        key={`${configured}:${snapshot.revision ?? ''}`}
-        config={config}
-        providers={providers}
-        configured={configured}
-        keyDetail={snapshot.status?.sectionDetails?.llm?.detail}
-        saving={save.isPending}
-        disabled={Boolean(snapshot.writeBlocked)}
-        onSave={(draft) => save.mutate(draft)}
-      />
+      <div className="prov-grid" role="radiogroup" aria-label={t('settings.providers.pick')}>
+        {providers.map((p) => {
+          const state = providerState(p, config, configured)
+          const isSelected = p.providerId === selected
+          return (
+            <button
+              key={p.providerId}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              className={cn('prov-tile app-no-drag')}
+              data-active={state.active ? 'true' : undefined}
+              onClick={() => setSelected(p.providerId)}
+            >
+              <ProviderLogo id={p.providerId} label={p.label ?? p.providerId} />
+              <span className="prov-tile__name">{p.label ?? p.providerId}</span>
+              <span className="prov-tile__meta">
+                {state.active ? (
+                  <span className="prov-tile__state" data-tone="ok">
+                    <Check className="size-3" strokeWidth={2.5} aria-hidden />
+                    {t('settings.providers.state.active')}
+                  </span>
+                ) : state.profile ? (
+                  <span className="prov-tile__state">{t('settings.providers.state.saved')}</span>
+                ) : p.deployment === 'local' ? (
+                  <span className="prov-tile__state">{t('settings.providers.state.local')}</span>
+                ) : (
+                  <span className="prov-tile__state" data-tone="dim">
+                    {t('settings.providers.state.needsKey')}
+                  </span>
+                )}
+                {p.routerSupported ? (
+                  <span className="prov-tile__tag">{t('settings.providers.state.router')}</span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {selectedSpec ? (
+        // Keyed on the selection + revision so a save or a switch re-seeds the form.
+        <ProviderForm
+          key={`${selectedSpec.providerId}:${snapshot.revision ?? ''}`}
+          config={config}
+          spec={selectedSpec}
+          configured={configured}
+          keyDetail={snapshot.status?.sectionDetails?.llm?.detail}
+          saving={save.isPending}
+          disabled={blocked}
+          onSave={(draft) => save.mutate(draft)}
+        />
+      ) : null}
 
       <Card title={t('settings.models.thinking')} blurb={t('settings.models.thinking.help')}>
         <Row label={t('settings.models.thinking')}>
@@ -146,7 +190,7 @@ function ModelsBody({
             data-compact="true"
             aria-label={t('settings.models.thinking')}
             value={thinking}
-            disabled={setThinking.isPending || Boolean(snapshot.writeBlocked)}
+            disabled={setThinking.isPending || blocked}
             onChange={(e) => setThinking.mutate(e.target.value || null)}
           >
             <option value="">{t('settings.models.thinking.auto')}</option>
@@ -162,9 +206,9 @@ function ModelsBody({
   )
 }
 
-function ProviderCard({
+function ProviderForm({
   config,
-  providers,
+  spec,
   configured,
   keyDetail,
   saving,
@@ -172,7 +216,7 @@ function ProviderCard({
   onSave,
 }: {
   config: SetupConfig
-  providers: ProviderSpec[]
+  spec: ProviderSpec
   configured: string
   keyDetail?: string
   saving: boolean
@@ -180,61 +224,65 @@ function ProviderCard({
   onSave: (draft: ProviderDraft) => void
 }) {
   const rpc = useRpc()
-  const ids = { provider: useId(), key: useId(), env: useId(), url: useId(), proxy: useId() }
-  const specFor = (id: string) => providers.find((p) => p.providerId === id)
-  const [draft, setDraft] = useState<ProviderDraft>(() =>
-    providerDraft(config, specFor(configured)),
-  )
+  const ids = { key: useId(), env: useId(), url: useId(), proxy: useId() }
+  const saved = providerDraft(config, spec)
+  const [draft, setDraft] = useState<ProviderDraft>(saved)
   const [showKey, setShowKey] = useState(false)
-  const spec = specFor(draft.providerId)
-  const saved = providerDraft(config, specFor(configured))
-  const dirty = providerDirty(saved, draft)
-  const switching = draft.providerId !== configured
+  const label = spec.label ?? spec.providerId
+  const switching = spec.providerId !== configured
+  const dirty = switching || providerDirty(saved, draft)
   const needsKey = providerNeedsKey(draft, spec, config)
-  const own = config.llm?.provider === draft.providerId
-  const hasStoredKey = own && Boolean(config.llm?.api_key)
-  const hasEnvKey = own && Boolean(config.llm?.api_key_env) && !config.llm?.api_key
+  const state = providerState(spec, config, configured)
+  const hasStoredKey = state.active && Boolean(config.llm?.api_key)
+  const hasEnvKey =
+    (state.active && Boolean(config.llm?.api_key_env) && !config.llm?.api_key) ||
+    (!state.active && Boolean(state.profile?.api_key_env))
 
   const models = useQuery({
-    queryKey: ['settings', 'models', draft.providerId],
-    enabled: Boolean(draft.providerId),
+    queryKey: ['settings', 'models', spec.providerId],
     staleTime: 60_000,
     retry: false,
-    queryFn: () => rpc.call<CatalogModel[]>('models.list', { provider: draft.providerId }),
+    queryFn: () => rpc.call<CatalogModel[]>('models.list', { provider: spec.providerId }),
   })
-  const options = modelOptions(models.data ?? [], draft.providerId, draft.model)
-
-  function pickProvider(id: string) {
-    setDraft(providerDraft(config, specFor(id)))
-    setShowKey(false)
-  }
+  const options = modelOptions(models.data ?? [], spec.providerId, draft.model)
+  // A provider without a key has no live catalog: nothing to check the model against.
+  const hasCatalog = (models.data?.length ?? 0) > 0
 
   const keyHelp = needsKey
-    ? t('settings.models.key.missing')
+    ? t('settings.providers.key.missing')
     : hasEnvKey
-      ? `${t('settings.models.key.env')} ${keyDetail ?? ''}`.trim()
+      ? `${t('settings.providers.key.env')} ${state.active ? (keyDetail ?? '') : ''}`.trim()
       : hasStoredKey
-        ? t('settings.models.key.saved')
+        ? t('settings.providers.key.saved')
         : undefined
 
   return (
     <Card
-      title={t('settings.models.provider')}
-      blurb={t('settings.models.provider.blurb')}
-      action={
-        spec ? (
-          spec.routerSupported ? (
-            <Pill tone="ok">{t('settings.models.provider.routerOk')}</Pill>
-          ) : (
-            <Pill>{t('settings.models.provider.directOnly')}</Pill>
-          )
-        ) : null
+      title={label}
+      icon={<ProviderLogo id={spec.providerId} label={label} size={36} />}
+      blurb={
+        <>
+          {spec.deployment === 'local'
+            ? t('settings.providers.deployment.local')
+            : t('settings.providers.deployment.cloud')}
+          {spec.whatYouNeed?.length ? ` · ${spec.whatYouNeed.join(' ')}` : ''}
+        </>
       }
-      footNote={switching ? t('settings.models.switchNote') : undefined}
+      action={
+        <span className="flex items-center gap-2">
+          {state.active ? <Pill tone="ok">{t('settings.providers.state.active')}</Pill> : null}
+          {spec.routerSupported ? (
+            <Pill tone="primary">{t('settings.providers.routerOk')}</Pill>
+          ) : (
+            <Pill>{t('settings.providers.directOnly')}</Pill>
+          )}
+        </span>
+      }
+      footNote={switching ? t('settings.providers.switchNote') : undefined}
       foot={
         <>
           <Button
-            disabled={!dirty || saving}
+            disabled={!providerDirty(saved, draft) || saving}
             onClick={() => {
               setDraft(saved)
               setShowKey(false)
@@ -244,34 +292,17 @@ function ProviderCard({
           </Button>
           <Button
             variant="primary"
-            disabled={!dirty || saving || needsKey || disabled || !draft.providerId}
+            disabled={!dirty || saving || needsKey || disabled}
             onClick={() => onSave(draft)}
           >
-            {t('settings.save')}
+            {switching ? `${t('settings.providers.switchTo')} ${label}` : t('settings.save')}
           </Button>
         </>
       }
     >
-      <Row label={t('settings.models.provider.pick')} htmlFor={ids.provider}>
-        <select
-          id={ids.provider}
-          className="mac-select"
-          value={draft.providerId}
-          disabled={disabled}
-          onChange={(e) => pickProvider(e.target.value)}
-        >
-          {!draft.providerId ? <option value="">—</option> : null}
-          {providers.map((p) => (
-            <option key={p.providerId} value={p.providerId}>
-              {p.label ?? p.providerId}
-            </option>
-          ))}
-        </select>
-      </Row>
-
-      {spec?.requiresApiKey ? (
+      {spec.requiresApiKey ? (
         <Row
-          label={t('settings.models.key')}
+          label={t('settings.providers.key')}
           htmlFor={ids.key}
           help={
             keyHelp ? (
@@ -290,8 +321,8 @@ function ProviderCard({
               spellCheck={false}
               placeholder={
                 hasStoredKey || hasEnvKey
-                  ? t('settings.models.key.placeholder.saved')
-                  : t('settings.models.key.placeholder.new')
+                  ? t('settings.providers.key.placeholder.saved')
+                  : t('settings.providers.key.placeholder.new')
               }
               value={draft.apiKey}
               disabled={disabled}
@@ -300,7 +331,9 @@ function ProviderCard({
             <Button
               variant="ghost"
               size="icon"
-              aria-label={showKey ? t('settings.models.key.hide') : t('settings.models.key.show')}
+              aria-label={
+                showKey ? t('settings.providers.key.hide') : t('settings.providers.key.show')
+              }
               aria-pressed={showKey}
               onClick={() => setShowKey((v) => !v)}
             >
@@ -315,13 +348,13 @@ function ProviderCard({
       ) : null}
 
       <Row
-        label={t('settings.models.model')}
+        label={t('settings.providers.model')}
         help={
           <>
-            <span>{t('settings.models.model.help')}</span>
-            {models.data ? (
+            <span>{t('settings.providers.model.help')}</span>
+            {hasCatalog ? (
               <span>
-                {models.data.length} {t('settings.models.catalog')}
+                {models.data!.length} {t('settings.providers.catalog')}
               </span>
             ) : null}
           </>
@@ -330,15 +363,17 @@ function ProviderCard({
       >
         <select
           className="mac-select"
-          aria-label={t('settings.models.model')}
+          aria-label={t('settings.providers.model')}
           value={draft.model}
           disabled={disabled || models.isPending}
           onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
         >
-          <option value="">{t('settings.models.model.none')}</option>
+          <option value="">{t('settings.providers.model.none')}</option>
           {options.map((opt) => (
             <option key={opt.id} value={opt.id}>
-              {opt.custom ? `${opt.label}  (${t('settings.models.model.custom')})` : opt.label}
+              {opt.custom && hasCatalog
+                ? `${opt.label}  (${t('settings.providers.model.custom')})`
+                : opt.label}
             </option>
           ))}
         </select>
@@ -347,29 +382,29 @@ function ProviderCard({
       <details className="stg-details">
         <summary className="stg-row stg-details__summary">
           <span className="stg-row__label">
-            <span>{t('settings.models.connection')}</span>
+            <span>{t('settings.providers.connection')}</span>
             <span className="stg-row__help">
-              <Value>{draft.baseUrl || spec?.defaultBaseUrl || '—'}</Value>
+              <Value>{draft.baseUrl || spec.defaultBaseUrl || '—'}</Value>
             </span>
           </span>
         </summary>
-        <Row label={t('settings.models.baseUrl')} htmlFor={ids.url} stack>
+        <Row label={t('settings.providers.baseUrl')} htmlFor={ids.url} stack>
           <input
             id={ids.url}
             className="mac-input"
             data-mono="true"
             autoComplete="off"
             spellCheck={false}
-            placeholder={spec?.defaultBaseUrl || ''}
+            placeholder={spec.defaultBaseUrl || ''}
             value={draft.baseUrl}
             disabled={disabled}
             onChange={(e) => setDraft((d) => ({ ...d, baseUrl: e.target.value }))}
           />
         </Row>
-        {spec?.requiresApiKey ? (
+        {spec.requiresApiKey ? (
           <Row
-            label={t('settings.models.keyEnv')}
-            help={t('settings.models.keyEnv.help')}
+            label={t('settings.providers.keyEnv')}
+            help={t('settings.providers.keyEnv.help')}
             htmlFor={ids.env}
           >
             <input
@@ -386,8 +421,8 @@ function ProviderCard({
           </Row>
         ) : null}
         <Row
-          label={t('settings.models.proxy')}
-          help={t('settings.models.proxy.help')}
+          label={t('settings.providers.proxy')}
+          help={t('settings.providers.proxy.help')}
           htmlFor={ids.proxy}
         >
           <input

@@ -138,25 +138,59 @@ export interface ProviderDraft {
   proxy: string
 }
 
+/** A provider used before: the gateway keeps its model/env/base URL (never a key). */
+export interface ProviderProfile {
+  model?: string
+  api_key_env?: string
+  base_url?: string
+  proxy?: string
+}
+
+export function providerProfile(config: SetupConfig, providerId: string): ProviderProfile | null {
+  const profiles = (config as { provider_profiles?: Record<string, ProviderProfile> })
+    .provider_profiles
+  const profile = profiles?.[providerId]
+  return profile && typeof profile === 'object' ? profile : null
+}
+
+/**
+ * Seed the form: the live config for the active provider, the saved profile
+ * for one used before, the catalog defaults otherwise. The key is never
+ * seeded; blank means "keep what is stored".
+ */
 export function providerDraft(config: SetupConfig, spec: ProviderSpec | undefined): ProviderDraft {
   const llm = config.llm || {}
   const providerId = spec?.providerId ?? ''
   const own = llm.provider === providerId
+  const profile = own ? null : providerProfile(config, providerId)
   const field = (name: string) => spec?.fields?.find((f) => f.name === name)
+  const fallbackModel = String(spec?.defaultDirectModel || field('model')?.default || '')
+  const fallbackEnv = String(spec?.envKey || field('api_key_env')?.default || '')
+  const fallbackUrl = String(spec?.defaultBaseUrl || field('base_url')?.default || '')
   return {
     providerId,
-    model: own
-      ? String(llm.model || '')
-      : String(spec?.defaultDirectModel || field('model')?.default || ''),
+    model: own ? String(llm.model || '') : String(profile?.model || fallbackModel),
     apiKey: '',
-    apiKeyEnv: own
-      ? String(llm.api_key_env || '')
-      : String(spec?.envKey || field('api_key_env')?.default || ''),
-    baseUrl: own
-      ? String(llm.base_url || '')
-      : String(spec?.defaultBaseUrl || field('base_url')?.default || ''),
-    proxy: own ? String(llm.proxy || '') : '',
+    apiKeyEnv: own ? String(llm.api_key_env || '') : String(profile?.api_key_env || fallbackEnv),
+    baseUrl: own ? String(llm.base_url || '') : String(profile?.base_url || fallbackUrl),
+    proxy: own ? String(llm.proxy || '') : String(profile?.proxy || ''),
   }
+}
+
+export interface ProviderState {
+  /** The provider every turn goes through right now. */
+  active: boolean
+  /** Used before: switching back restores model/env/base URL. */
+  profile: ProviderProfile | null
+}
+
+export function providerState(
+  spec: ProviderSpec,
+  config: SetupConfig,
+  configured: string,
+): ProviderState {
+  const active = spec.providerId === configured
+  return { active, profile: active ? null : providerProfile(config, spec.providerId) }
 }
 
 /**

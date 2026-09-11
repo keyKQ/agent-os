@@ -3,7 +3,7 @@
  * group it sits under. Copy lives in i18n (`settings.section.<id>`).
  */
 export const SETTINGS_SECTIONS = [
-  'models',
+  'providers',
   'router',
   'gateway',
   'appearance',
@@ -18,12 +18,12 @@ export const SETTINGS_GROUPS: readonly {
   id: 'agent' | 'app' | 'more'
   sections: SettingsSection[]
 }[] = [
-  { id: 'agent', sections: ['models', 'router'] },
+  { id: 'agent', sections: ['providers', 'router'] },
   { id: 'app', sections: ['gateway', 'appearance', 'behaviour', 'shortcuts'] },
   { id: 'more', sections: ['advanced', 'about'] },
 ]
 
-export const DEFAULT_SECTION: SettingsSection = 'models'
+export const DEFAULT_SECTION: SettingsSection = 'providers'
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return typeof value === 'string' && (SETTINGS_SECTIONS as readonly string[]).includes(value)

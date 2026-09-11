@@ -13,6 +13,7 @@ import {
   providerDirty,
   providerDraft,
   providerNeedsKey,
+  providerState,
   routerDirty,
   routerDraft,
   safetyNetValid,
@@ -191,6 +192,27 @@ describe('provider form', () => {
     expect(
       providerNeedsKey({ ...d, apiKeyEnv: '' }, { ...SPEC, providerId: 'openai' }, CONFIG),
     ).toBe(true)
+  })
+
+  it('seeds a provider used before from its saved profile', () => {
+    const openaiProfile = {
+      model: 'gpt-5.6-terra',
+      api_key_env: 'MY_OPENAI_KEY',
+      base_url: 'https://x/v1',
+    }
+    const config: SetupConfig = { ...CONFIG, provider_profiles: { openai: openaiProfile } }
+    const spec = { ...SPEC, providerId: 'openai', envKey: 'OPENAI_API_KEY' }
+    const d = providerDraft(config, spec)
+    expect(d).toMatchObject({
+      model: 'gpt-5.6-terra',
+      apiKeyEnv: 'MY_OPENAI_KEY',
+      baseUrl: 'https://x/v1',
+    })
+    expect(providerState(spec, config, 'opencap')).toEqual({
+      active: false,
+      profile: openaiProfile,
+    })
+    expect(providerState(SPEC, config, 'opencap')).toEqual({ active: true, profile: null })
   })
 
   it('never sends both a pasted key and an env reference', () => {

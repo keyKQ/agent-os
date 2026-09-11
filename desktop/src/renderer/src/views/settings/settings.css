@@ -425,6 +425,141 @@
   color: var(--muted-foreground);
 }
 
+/* ── Providers: the picker grid ──────────────────────────────────────────── */
+
+.prov-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 10px;
+}
+.prov-tile {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: var(--radius-surface);
+  text-align: left;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  box-shadow: 0 0 0 0.5px var(--hairline);
+  transition:
+    background-color 100ms ease-out,
+    box-shadow 100ms ease-out,
+    transform 100ms ease-out;
+}
+.prov-tile:hover {
+  background: color-mix(in srgb, var(--card) 100%, transparent);
+  box-shadow: 0 0 0 0.5px var(--border);
+}
+.prov-tile:active {
+  transform: scale(0.99);
+}
+.prov-tile[aria-checked='true'] {
+  background: color-mix(in srgb, var(--primary) 7%, var(--card));
+  box-shadow:
+    0 0 0 1.5px var(--primary),
+    0 6px 18px color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.prov-tile:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.prov-tile > .prov-logo {
+  grid-row: 1 / span 2;
+}
+.prov-tile__name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.prov-tile__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.prov-tile__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.prov-tile__state[data-tone='ok'] {
+  color: var(--ok);
+  font-weight: 500;
+}
+.prov-tile__state[data-tone='dim'] {
+  color: var(--dim);
+}
+.prov-tile__tag {
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 16px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* Brand mark: a rounded plate so colour and mono logos sit at one weight. */
+.prov-logo {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.prov-logo > svg {
+  width: 62%;
+  height: 62%;
+}
+.prov-logo > img {
+  width: 78%;
+  height: 78%;
+  object-fit: contain;
+}
+.prov-logo--bleed {
+  overflow: hidden;
+  background: none;
+  box-shadow: none;
+}
+.prov-logo--bleed > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.prov-logo--mono {
+  font-family: var(--font-display);
+  font-weight: 640;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+  color: hsl(var(--hue) 70% 78%);
+  background: hsl(var(--hue) 55% 30% / 0.55);
+  box-shadow: inset 0 0 0 0.5px hsl(var(--hue) 60% 60% / 0.35);
+}
+:root[data-theme='light'] .prov-logo--mono {
+  color: hsl(var(--hue) 55% 28%);
+  background: hsl(var(--hue) 70% 88%);
+}
+.prov-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 /* ── Router: the tier ladder ─────────────────────────────────────────────── */
 
 .stg-tiers {

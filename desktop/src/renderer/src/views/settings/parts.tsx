@@ -20,6 +20,7 @@ export function Head({ title, blurb }: { title: string; blurb?: string }) {
 export function Card({
   title,
   blurb,
+  icon,
   action,
   children,
   foot,
@@ -27,6 +28,8 @@ export function Card({
 }: {
   title?: string
   blurb?: ReactNode
+  /** Left of the title: a brand mark. */
+  icon?: ReactNode
   /** Top-right of the head: a pill, a button. */
   action?: ReactNode
   children: ReactNode
@@ -39,9 +42,12 @@ export function Card({
     <section className="stg-card" aria-label={title}>
       {title ? (
         <div className="stg-card__head">
-          <div>
-            <h2>{title}</h2>
-            {blurb ? <p>{blurb}</p> : null}
+          <div className={icon ? 'prov-head' : undefined}>
+            {icon}
+            <div>
+              <h2>{title}</h2>
+              {blurb ? <p>{blurb}</p> : null}
+            </div>
           </div>
           {action}
         </div>

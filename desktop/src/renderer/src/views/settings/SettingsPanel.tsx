@@ -10,13 +10,13 @@ import { AdvancedPane } from './panes/AdvancedPane'
 import { AppearancePane } from './panes/AppearancePane'
 import { BehaviourPane } from './panes/BehaviourPane'
 import { GatewayPane } from './panes/GatewayPane'
-import { ModelsPane } from './panes/ModelsPane'
+import { ProvidersPane } from './panes/ProvidersPane'
 import { RouterPane } from './panes/RouterPane'
 import { ShortcutsPane } from './panes/ShortcutsPane'
 import { SETTINGS_GROUPS, type SettingsSection } from './sections'
 
 const PANE: Record<SettingsSection, () => React.JSX.Element> = {
-  models: ModelsPane,
+  providers: ProvidersPane,
   router: RouterPane,
   gateway: GatewayPane,
   appearance: AppearancePane,
