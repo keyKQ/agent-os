@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, nativeTheme } from 'electron'
 import { IPC } from '@shared/ipc'
 import { normalizeThemeSettings, type ResolvedTheme, type ThemeSettings } from '@shared/theme'
 import type { SettingsStore } from '../settings/store'
+import { applyPageBackground } from '../window'
 
 /**
  * Theme bridge. The preference lives in settings; main mirrors it onto
@@ -25,6 +26,9 @@ export function registerThemeIpc(settings: SettingsStore): void {
 
   nativeTheme.on('updated', () => {
     const resolved = currentResolved()
+    // Only matters with vibrancy off (the page is transparent otherwise), but
+    // it is cheap and keeps the opaque ground in step with the appearance.
+    applyPageBackground(settings.get().appearance.reduceTransparency)
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(IPC.theme.changed, resolved)
     }
