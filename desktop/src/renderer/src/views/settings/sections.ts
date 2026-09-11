@@ -1,5 +1,5 @@
 /**
- * The settings rail. Two facts per section: its id (the URL segment) and the
+ * The settings rail. Two facts per section: its id and the
  * group it sits under. Copy lives in i18n (`settings.section.<id>`).
  */
 export const SETTINGS_SECTIONS = [
@@ -27,8 +27,4 @@ export const DEFAULT_SECTION: SettingsSection = 'models'
 
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return typeof value === 'string' && (SETTINGS_SECTIONS as readonly string[]).includes(value)
-}
-
-export function settingsPath(section?: SettingsSection): string {
-  return section && section !== DEFAULT_SECTION ? `/settings/${section}` : '/settings'
 }

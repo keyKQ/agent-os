@@ -60,7 +60,7 @@ desktop/
             │                 #   sheet with the natural schedule builder
             ├── views/projects/ # Project page (`/projects/:id`): renamable title,
             │                 #   self-saving brief, the chats filed there
-            ├── views/settings/ # Settings page: SettingsPage (rail + section), one pane
+            ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
             │                 #   per section (models, router, gateway, appearance,
             │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
             ├── components/   #   Sidebar (+ resizer, project folders, session list),
@@ -104,11 +104,11 @@ Appearance, mode segmented control + palette cards).
 
 ## Settings
 
-Settings is a page in the content column (`/settings/:section?`), not a
-sheet: a quiet rail of sections on the left, the chosen one on the right as
-soft cards, "Done" returning to the route it was opened from. Reached from
-the toolbar gear, ⌘, or the app menu's "Settings…" (main pushes
-`settings:open`). App preferences persist to `settings.json` through
+Settings is a sheet over the window, the Scheduled jobs posture: a quiet
+rail of sections on the left, the chosen one on the right as soft cards,
+Escape or "Done" to leave, the section remembered between opens (the
+`settingsOpen` / `settingsSection` flags in `stores/ui.ts`). Reached from the
+toolbar gear, ⌘, or the app menu's "Settings…" (main pushes `settings:open`). App preferences persist to `settings.json` through
 `settings:update`; `shared/settings.ts` owns that schema. The two agent
 sections edit the **gateway's** configuration instead, through the same
 guided RPCs the web console's setup uses, with the `config.snapshot`

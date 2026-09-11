@@ -18,7 +18,7 @@ import {
   safetyNetValid,
   textTiers,
 } from './logic'
-import { isSettingsSection, settingsPath } from './sections'
+import { isSettingsSection, SETTINGS_GROUPS, SETTINGS_SECTIONS } from './sections'
 import type { Catalog, SetupConfig } from '@/views/setup/logic'
 
 const SPEC = {
@@ -244,10 +244,10 @@ describe('router form', () => {
 })
 
 describe('sections', () => {
-  it('maps ids to paths and back', () => {
-    expect(settingsPath()).toBe('/settings')
-    expect(settingsPath('models')).toBe('/settings')
-    expect(settingsPath('router')).toBe('/settings/router')
+  it('lists every section exactly once across the rail groups', () => {
+    const inGroups = SETTINGS_GROUPS.flatMap((g) => g.sections)
+    expect([...inGroups].sort()).toEqual([...SETTINGS_SECTIONS].sort())
+    expect(new Set(inGroups).size).toBe(inGroups.length)
     expect(isSettingsSection('router')).toBe(true)
     expect(isSettingsSection('nope')).toBe(false)
   })

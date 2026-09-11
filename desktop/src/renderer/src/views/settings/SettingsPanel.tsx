@@ -1,6 +1,6 @@
 import './settings.css'
-import { useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useEffect, useId } from 'react'
+import { ModalShell } from '@/components/ModalShell'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useSettings } from '~/stores/settings'
@@ -13,13 +13,7 @@ import { GatewayPane } from './panes/GatewayPane'
 import { ModelsPane } from './panes/ModelsPane'
 import { RouterPane } from './panes/RouterPane'
 import { ShortcutsPane } from './panes/ShortcutsPane'
-import {
-  DEFAULT_SECTION,
-  isSettingsSection,
-  SETTINGS_GROUPS,
-  settingsPath,
-  type SettingsSection,
-} from './sections'
+import { SETTINGS_GROUPS, type SettingsSection } from './sections'
 
 const PANE: Record<SettingsSection, () => React.JSX.Element> = {
   models: ModelsPane,
@@ -33,18 +27,35 @@ const PANE: Record<SettingsSection, () => React.JSX.Element> = {
 }
 
 /**
- * Settings as a page in the content column (`/settings/:section?`): a rail
- * of sections on the left, the chosen one on the right. "Done" returns to
- * wherever the user came from (AppShell records it when settings opens).
+ * Settings as a sheet over the window, the way Scheduled jobs sits over the
+ * document: a rail of sections on the left, the chosen one on the right,
+ * Escape or Done to leave. Opened from the toolbar gear, ⌘, or the app
+ * menu; it reads the `settingsOpen` flag from the UI store.
  */
-export function SettingsPage() {
-  const { section: param } = useParams()
-  const navigate = useNavigate()
-  const section: SettingsSection = isSettingsSection(param) ? param : DEFAULT_SECTION
-  const load = useSettings((s) => s.load)
-  const returnTo = useUi((s) => s.settingsReturnTo)
+export function SettingsPanel() {
+  const open = useUi((s) => s.settingsOpen)
+  const close = useUi((s) => s.closeSettings)
+  const titleId = useId()
+  if (!open) return null
+  return (
+    <ModalShell
+      role="dialog"
+      labelledBy={titleId}
+      onClose={close}
+      overlayClassName="stg__overlay"
+      className="stg-sheet"
+    >
+      <SettingsBody titleId={titleId} onClose={close} />
+    </ModalShell>
+  )
+}
 
-  // Re-read from disk on entry: main may have mirrored OS state meanwhile.
+function SettingsBody({ titleId, onClose }: { titleId: string; onClose: () => void }) {
+  const section = useUi((s) => s.settingsSection)
+  const setSection = useUi((s) => s.setSettingsSection)
+  const load = useSettings((s) => s.load)
+
+  // Re-read from disk on open: main may have mirrored OS state meanwhile.
   useEffect(() => void load(), [load])
 
   const Pane = PANE[section]
@@ -57,7 +68,7 @@ export function SettingsPage() {
     e.preventDefault()
     const next = all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]
     if (next) {
-      void navigate(settingsPath(next), { replace: true })
+      setSection(next)
       document.getElementById(`stg-rail-${next}`)?.focus()
     }
   }
@@ -65,8 +76,10 @@ export function SettingsPage() {
   return (
     <div className="stg">
       <div className="stg-bar">
-        <span className="stg-bar__title">{t('settings.title')}</span>
-        <Button variant="primary" onClick={() => void navigate(returnTo || '/sessions')}>
+        <span id={titleId} className="stg-bar__title">
+          {t('settings.title')}
+        </span>
+        <Button variant="primary" onClick={onClose}>
           {t('settings.done')}
         </Button>
       </div>
@@ -82,7 +95,7 @@ export function SettingsPage() {
                   type="button"
                   className="stg-rail__item app-no-drag"
                   aria-current={id === section ? 'page' : undefined}
-                  onClick={() => void navigate(settingsPath(id), { replace: true })}
+                  onClick={() => setSection(id)}
                 >
                   {t(`settings.section.${id}`)}
                 </button>
