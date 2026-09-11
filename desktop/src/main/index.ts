@@ -30,7 +30,12 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     electronApp.setAppUserModelId('dev.agentos.desktop')
-    app.on('browser-window-created', (_, win) => optimizer.watchWindowShortcuts(win))
+    // `zoom: true` matters: the default swallows ⌘− and ⌘⇧= in
+    // before-input-event, which also silences the View menu's zoom
+    // accelerators (Electron drops menu shortcuts for prevented input).
+    app.on('browser-window-created', (_, win) =>
+      optimizer.watchWindowShortcuts(win, { zoom: true }),
+    )
 
     installLoopbackOriginRewrite()
     servePets(pets)

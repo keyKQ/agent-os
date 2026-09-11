@@ -45,6 +45,15 @@ export function installAppMenu(settings: SettingsStore): void {
         { type: 'separator' },
         { label: 'Actual Size', accelerator: 'CommandOrControl+0', click: () => zoom(0) },
         { label: 'Zoom In', accelerator: 'CommandOrControl+=', click: () => zoom(1) },
+        // ⌘+ is Shift+= on most layouts; a hidden twin keeps the menu tidy
+        // while Settings > Shortcuts can honestly list ⌘+ (macOS fires
+        // accelerators of hidden items by default).
+        {
+          label: 'Zoom In',
+          accelerator: 'CommandOrControl+Shift+=',
+          visible: false,
+          click: () => zoom(1),
+        },
         { label: 'Zoom Out', accelerator: 'CommandOrControl+-', click: () => zoom(-1) },
         { type: 'separator' },
         { role: 'togglefullscreen' },
