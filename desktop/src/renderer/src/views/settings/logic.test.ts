@@ -159,13 +159,18 @@ describe('models', () => {
   it('lists only the active provider, once each, and keeps the current model', () => {
     const opts = modelOptions(catalog, 'p', 'a/two')
     expect(opts.map((o) => o.id)).toEqual(['a/one', 'a/two'])
-    expect(opts[0]?.label).toBe('One  ·  a/one')
-    expect(opts[1]?.label).toBe('a/two')
+    expect(opts[0]).toMatchObject({ label: 'a/one', title: 'One' })
+    expect(opts[1]).toMatchObject({ label: 'a/two', title: '' })
   })
 
   it('prepends an unknown current model as custom', () => {
     const opts = modelOptions(catalog, 'p', 'typed/by-hand')
-    expect(opts[0]).toEqual({ id: 'typed/by-hand', label: 'typed/by-hand', custom: true })
+    expect(opts[0]).toEqual({
+      id: 'typed/by-hand',
+      label: 'typed/by-hand',
+      title: '',
+      custom: true,
+    })
   })
 })
 

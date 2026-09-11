@@ -101,7 +101,10 @@ export interface CatalogModel {
 
 export interface ModelOption {
   id: string
+  /** The id, which is what config.toml holds and what the router tiers show. */
   label: string
+  /** The vendor's display name, for a tooltip; empty when it adds nothing. */
+  title: string
   /** The current model is not in the catalog; keep it selectable. */
   custom?: boolean
 }
@@ -122,9 +125,11 @@ export function modelOptions(
     if (provider && m.provider !== provider) continue
     if (!m.id || seen.has(m.id)) continue
     seen.add(m.id)
-    out.push({ id: m.id, label: m.name && m.name !== m.id ? `${m.name}  ·  ${m.id}` : m.id })
+    out.push({ id: m.id, label: m.id, title: m.name && m.name !== m.id ? m.name : '' })
   }
-  if (current && !seen.has(current)) out.unshift({ id: current, label: current, custom: true })
+  if (current && !seen.has(current)) {
+    out.unshift({ id: current, label: current, title: '', custom: true })
+  }
   return out
 }
 

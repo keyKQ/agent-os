@@ -370,7 +370,7 @@ function ProviderForm({
         >
           <option value="">{t('settings.providers.model.none')}</option>
           {options.map((opt) => (
-            <option key={opt.id} value={opt.id}>
+            <option key={opt.id} value={opt.id} title={opt.title || undefined}>
               {opt.custom && hasCatalog
                 ? `${opt.label}  (${t('settings.providers.model.custom')})`
                 : opt.label}
