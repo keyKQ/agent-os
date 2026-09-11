@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { ChooseFileOptions } from '@shared/app'
 import { IPC, type DesktopApi, type SettingsPatch } from '@shared/ipc'
 import type { GatewayStatus } from '@shared/gateway'
+import type { NotifyRequest, NotifyTarget, SystemSound } from '@shared/notify'
 import type { ResolvedTheme, ThemeSettings } from '@shared/theme'
 
 /** Subscribe to a main -> renderer push channel and return an unsubscribe. */
@@ -45,6 +46,15 @@ const api: DesktopApi = {
     stop: () => ipcRenderer.invoke(IPC.gateway.stop),
     restart: () => ipcRenderer.invoke(IPC.gateway.restart),
     onChanged: (listener) => listen<GatewayStatus>(IPC.gateway.changed, listener),
+  },
+  notify: {
+    supported: () => ipcRenderer.invoke(IPC.notify.supported),
+    show: (request: NotifyRequest) => ipcRenderer.invoke(IPC.notify.show, request),
+    sound: (name: SystemSound) => ipcRenderer.invoke(IPC.notify.sound, name),
+    badge: (count: number) => ipcRenderer.invoke(IPC.notify.badge, count),
+    bounce: () => ipcRenderer.invoke(IPC.notify.bounce),
+    openSystemSettings: () => ipcRenderer.invoke(IPC.notify.openSystemSettings),
+    onActivated: (listener) => listen<NotifyTarget>(IPC.notify.activated, listener),
   },
 }
 

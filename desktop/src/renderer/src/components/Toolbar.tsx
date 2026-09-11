@@ -1,7 +1,7 @@
-import { LayoutPanelLeft, PanelRight, Settings, Volume2, VolumeX } from 'lucide-react'
+import { LayoutPanelLeft, PanelRight, Settings } from 'lucide-react'
+import { NotificationBell } from '~/components/NotificationBell'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { ThemeToggle } from '~/theme/ThemeToggle'
 
@@ -15,9 +15,6 @@ export function Toolbar() {
   const sidebarOpen = useUi((s) => s.sidebarOpen)
   const settingsOpen = useUi((s) => s.settingsOpen)
   const openSettings = useUi((s) => s.openSettings)
-  const sound = useSettings((s) => s.settings.notifications.sound)
-  const update = useSettings((s) => s.update)
-  const soundLabel = sound ? t('toolbar.sound.on') : t('toolbar.sound.off')
 
   return (
     <header
@@ -58,20 +55,7 @@ export function Toolbar() {
             aria-hidden
           />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={soundLabel}
-          title={soundLabel}
-          aria-pressed={sound}
-          onClick={() => void update({ notifications: { sound: !sound } })}
-        >
-          {sound ? (
-            <Volume2 className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          ) : (
-            <VolumeX className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
-          )}
-        </Button>
+        <NotificationBell />
         <ThemeToggle />
         <Button
           variant={settingsOpen ? 'secondary' : 'ghost'}

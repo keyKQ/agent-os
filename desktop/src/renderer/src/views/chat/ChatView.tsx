@@ -34,7 +34,6 @@ import { sessionPath } from '~/components/sidebar/SessionList'
 import { t } from '~/i18n'
 import { rememberLastSession } from '~/lib/last-session'
 import { ease, spring } from '~/lib/motion'
-import { useReplyDoneSignal } from '~/lib/use-notifications'
 import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
 import { useSettings } from '~/stores/settings'
@@ -511,8 +510,9 @@ function ConnectedChat() {
     },
   )
 
+  // Reply notifications for this and every other session come from the
+  // shell's session-run watcher (lib/use-notifications), not from here.
   const title = sessionName || (docked ? sessionKey.split(':').slice(-1)[0] : t('chat.untitled'))
-  useReplyDoneSignal(sessionKey, busy, title ?? sessionKey)
 
   return (
     <div className="chat-desktop" data-docked={docked}>

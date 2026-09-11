@@ -3,6 +3,7 @@ import type { PetStore } from '../pets/store'
 import type { SettingsStore } from '../settings/store'
 import { registerAppIpc } from './app'
 import { registerGatewayIpc } from './gateway'
+import { registerNotifyIpc } from './notify'
 import { registerPetsIpc } from './pets'
 import { registerSettingsIpc } from './settings'
 import { registerThemeIpc } from './theme'
@@ -20,4 +21,5 @@ export function registerIpc(services: MainServices): void {
   registerThemeIpc(services.settings)
   registerGatewayIpc(services.gateway)
   registerPetsIpc(services.pets)
+  registerNotifyIpc()
 }

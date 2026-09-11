@@ -8,7 +8,7 @@ import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { readLastSession } from '~/lib/last-session'
-import { useApprovalSignal } from '~/lib/use-notifications'
+import { useNotificationSignals } from '~/lib/use-notifications'
 import { bindGatewayEvents } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
@@ -21,7 +21,7 @@ export function AppShell() {
   useOpenSettingsFromMenu()
   useShellShortcuts()
   useLaunchView()
-  useApprovalSignal()
+  useNotificationSignals()
 
   return (
     <div className="flex h-full">

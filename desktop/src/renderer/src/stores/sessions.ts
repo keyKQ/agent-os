@@ -87,6 +87,20 @@ export function useSessions(): {
     refetchOnWindowFocus: true,
   })
 
+  // `sessions.changed` for sessions other than the one on screen only reaches
+  // connections that asked for the list topic. Ask on every (re)connect.
+  useEffect(() => {
+    if (!connected) return
+    let cancelled = false
+    rpc
+      .waitForConnection()
+      .then(() => (cancelled ? undefined : rpc.call('sessions.subscribe', {})))
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [rpc, connected])
+
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
     const invalidate = () => {

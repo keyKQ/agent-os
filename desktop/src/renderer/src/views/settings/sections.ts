@@ -7,6 +7,7 @@ export const SETTINGS_SECTIONS = [
   'router',
   'gateway',
   'appearance',
+  'notifications',
   'behaviour',
   'shortcuts',
   'advanced',
@@ -19,7 +20,7 @@ export const SETTINGS_GROUPS: readonly {
   sections: SettingsSection[]
 }[] = [
   { id: 'agent', sections: ['providers', 'router'] },
-  { id: 'app', sections: ['gateway', 'appearance', 'behaviour', 'shortcuts'] },
+  { id: 'app', sections: ['gateway', 'appearance', 'notifications', 'behaviour', 'shortcuts'] },
   { id: 'more', sections: ['advanced', 'about'] },
 ]
 

@@ -1,5 +1,6 @@
 import type { AppInfo, ChooseFileOptions } from './app'
 import type { GatewayStatus } from './gateway'
+import type { NotifyRequest, NotifyResult, NotifyTarget, SystemSound } from './notify'
 import type { InstalledPet, PetManifestEntry } from './pet'
 import type { DesktopSettings, SettingsPatch } from './settings'
 import type { ResolvedTheme, ThemeSettings } from './theme'
@@ -50,6 +51,16 @@ export const IPC = {
     chooseFile: 'app:chooseFile',
     loginItem: 'app:loginItem',
   },
+  notify: {
+    supported: 'notify:supported',
+    show: 'notify:show',
+    sound: 'notify:sound',
+    badge: 'notify:badge',
+    bounce: 'notify:bounce',
+    openSystemSettings: 'notify:openSystemSettings',
+    /** Main -> renderer: a notification was clicked; carries its target. */
+    activated: 'notify:activated',
+  },
 } as const
 
 /**
@@ -98,5 +109,20 @@ export interface DesktopApi {
     stop(): Promise<GatewayStatus>
     restart(): Promise<GatewayStatus>
     onChanged(listener: (status: GatewayStatus) => void): () => void
+  }
+  notify: {
+    /** Whether this platform can post native notifications at all. */
+    supported(): Promise<boolean>
+    /** Post one. The renderer has already decided it should be shown. */
+    show(request: NotifyRequest): Promise<NotifyResult>
+    /** Play a macOS alert sound, notification or not. */
+    sound(name: SystemSound): Promise<void>
+    /** Dock badge: 0 clears it. */
+    badge(count: number): Promise<void>
+    /** One informational bounce of the Dock icon. */
+    bounce(): Promise<void>
+    /** System Settings › Notifications, where the user allows the app. */
+    openSystemSettings(): Promise<void>
+    onActivated(listener: (target: NotifyTarget) => void): () => void
   }
 }

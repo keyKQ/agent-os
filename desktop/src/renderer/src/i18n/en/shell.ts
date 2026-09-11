@@ -21,7 +21,6 @@ export const shell = {
   'group.week': 'This week',
 
   'toolbar.layout': 'Layout',
-  'toolbar.sound': 'Sound',
   'toolbar.settings': 'Settings',
   'toolbar.inspector': 'Inspector',
 
@@ -46,7 +45,4 @@ export const shell = {
   'gateway.start': 'Start gateway',
   'gateway.stop': 'Stop gateway',
   'gateway.restart': 'Restart gateway',
-
-  'toolbar.sound.on': 'Reply sound on',
-  'toolbar.sound.off': 'Reply sound off',
 } as const

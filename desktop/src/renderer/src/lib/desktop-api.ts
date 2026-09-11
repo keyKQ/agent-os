@@ -1,6 +1,7 @@
 import type { AppInfo } from '@shared/app'
 import type { DesktopApi } from '@shared/ipc'
 import { STOPPED_GATEWAY, type GatewayStatus } from '@shared/gateway'
+import type { NotifyTarget } from '@shared/notify'
 import {
   DEFAULT_SETTINGS,
   mergeSettings,
@@ -111,8 +112,40 @@ function createFallbackApi(): DesktopApi {
       restart: cannotControl,
       onChanged: () => () => {},
     },
+    // A browser tab has the web Notification API and nothing else: no Dock,
+    // no system sounds, and a click can only focus the tab.
+    notify: {
+      supported: async () =>
+        typeof Notification !== 'undefined' && Notification.permission !== 'denied',
+      show: async (request) => {
+        if (typeof Notification === 'undefined') return { shown: false }
+        if (Notification.permission === 'default') await Notification.requestPermission()
+        if (Notification.permission !== 'granted') return { shown: false }
+        try {
+          const body = [request.subtitle, request.body].filter(Boolean).join('\n')
+          const n = new Notification(request.title, { body, tag: request.tag, silent: true })
+          n.onclick = () => {
+            window.focus()
+            for (const fn of activationListeners) fn(request.target)
+          }
+          return { shown: true }
+        } catch {
+          return { shown: false }
+        }
+      },
+      sound: async () => {},
+      badge: async () => {},
+      bounce: async () => {},
+      openSystemSettings: async () => {},
+      onActivated: (listener) => {
+        activationListeners.add(listener)
+        return () => activationListeners.delete(listener)
+      },
+    },
   }
 }
+
+const activationListeners = new Set<(target: NotifyTarget) => void>()
 
 let cached: DesktopApi | null = null
 

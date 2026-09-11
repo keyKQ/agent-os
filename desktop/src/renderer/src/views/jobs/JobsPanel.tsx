@@ -152,21 +152,14 @@ function ConnectedJobs({ titleId, onClose }: { titleId: string; onClose: () => v
     }
   }, [jobsQuery.isError, jobsQuery.error])
 
-  // Live updates: subscribe to the cron topic while open and refetch on every
-  // run event. Best effort both ways; the poll above is the backstop.
+  // Live updates: refetch on every run event. The shell keeps the connection
+  // subscribed to the cron topic for the app's lifetime (job notifications,
+  // lib/use-notifications), so this panel only listens; the poll above is
+  // the backstop.
   useEffect(() => {
-    let cancelled = false
-    rpc
-      .waitForConnection()
-      .then(() => (cancelled ? undefined : rpc.call('cron.subscribe', {})))
-      .catch(() => undefined)
     const invalidate = () => void queryClient.invalidateQueries({ queryKey: ['cron'] })
     const offs = CRON_EVENTS.map((event) => rpc.on(event, invalidate))
-    return () => {
-      cancelled = true
-      offs.forEach((off) => off())
-      rpc.call('cron.unsubscribe', {}).catch(() => undefined)
-    }
+    return () => offs.forEach((off) => off())
   }, [rpc, queryClient])
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['cron'] })

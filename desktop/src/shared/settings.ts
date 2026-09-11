@@ -1,3 +1,4 @@
+import { isNotifySound, type NotifySound } from './notify'
 import { clampPetScale, isPetSlug, PET_DEFAULT_SCALE } from './pet'
 import { DEFAULT_THEME_SETTINGS, normalizeThemeSettings, type ThemeSettings } from './theme'
 
@@ -68,19 +69,61 @@ export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   reduceTransparency: false,
 }
 
+/** What happens when an event lands while the window is in front. */
+export type WhenActive = 'skip' | 'banner' | 'system'
+/** Scheduled job runs: none, the failures, or every run. */
+export type JobsNotify = 'off' | 'failures' | 'all'
+/** "Only replies longer than": seconds; 0 = every reply. */
+export const REPLY_MIN_SECONDS = [0, 10, 30, 60, 300] as const
+export type ReplyMinSeconds = (typeof REPLY_MIN_SECONDS)[number]
+
+export function isReplyMinSeconds(value: unknown): value is ReplyMinSeconds {
+  return typeof value === 'number' && (REPLY_MIN_SECONDS as readonly number[]).includes(value)
+}
+
 export interface NotificationSettings {
-  /** Short chime when a reply finishes. */
-  sound: boolean
-  /** macOS notification when a reply finishes while the window is not focused. */
+  /** Master switch. Off: nothing is posted, played or recorded. */
+  enabled: boolean
+  /** Window in front: skip, an in-app banner, or a system notification anyway. */
+  whenActive: WhenActive
+  /** Do not disturb: epoch ms until which delivery is silent (recorded only). */
+  muteUntil: number | null
+  /** Put the session title, reply length, job summary in the notification. */
+  preview: boolean
+  /** A reply finished in any session. */
   replyDone: boolean
-  /** macOS notification when the agent is waiting for an approval. */
+  replyMinSeconds: ReplyMinSeconds
+  /** A reply failed or timed out. */
+  replyFailed: boolean
+  /** The agent is waiting for an approval. */
   approvals: boolean
+  jobs: JobsNotify
+  /** The gateway stopped on its own. */
+  gateway: boolean
+  /** Play `soundName` on delivery. Also toggled from the toolbar bell. */
+  sound: boolean
+  soundName: NotifySound
+  /** Unseen count on the Dock icon. */
+  badge: boolean
+  /** Bounce the Dock icon when the window is in the background. */
+  bounce: boolean
 }
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  sound: true,
+  enabled: true,
+  whenActive: 'banner',
+  muteUntil: null,
+  preview: true,
   replyDone: true,
+  replyMinSeconds: 0,
+  replyFailed: true,
   approvals: true,
+  jobs: 'failures',
+  gateway: true,
+  sound: true,
+  soundName: 'chime',
+  badge: true,
+  bounce: true,
 }
 
 /** The floating petdex mascot (Settings > Appearance > Pet). */
@@ -183,10 +226,25 @@ function normalizeAppearance(raw: unknown): AppearanceSettings {
 function normalizeNotifications(raw: unknown): NotificationSettings {
   const obj = asRecord(raw)
   const d = DEFAULT_NOTIFICATION_SETTINGS
+  const mute = Number(obj.muteUntil)
   return {
-    sound: bool(obj.sound, d.sound),
+    enabled: bool(obj.enabled, d.enabled),
+    whenActive:
+      obj.whenActive === 'skip' || obj.whenActive === 'system' ? obj.whenActive : d.whenActive,
+    muteUntil: Number.isFinite(mute) && mute > 0 ? mute : null,
+    preview: bool(obj.preview, d.preview),
     replyDone: bool(obj.replyDone, d.replyDone),
+    replyMinSeconds: isReplyMinSeconds(obj.replyMinSeconds)
+      ? obj.replyMinSeconds
+      : d.replyMinSeconds,
+    replyFailed: bool(obj.replyFailed, d.replyFailed),
     approvals: bool(obj.approvals, d.approvals),
+    jobs: obj.jobs === 'off' || obj.jobs === 'all' ? obj.jobs : d.jobs,
+    gateway: bool(obj.gateway, d.gateway),
+    sound: bool(obj.sound, d.sound),
+    soundName: isNotifySound(obj.soundName) ? obj.soundName : d.soundName,
+    badge: bool(obj.badge, d.badge),
+    bounce: bool(obj.bounce, d.bounce),
   }
 }
 

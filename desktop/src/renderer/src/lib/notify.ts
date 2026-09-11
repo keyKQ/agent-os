@@ -1,9 +1,10 @@
+import type { NotifySound } from '@shared/notify'
+import { desktopApi, isDesktop } from './desktop-api'
+
 /**
- * The two ways the shell gets the user's attention: a short synthesised
- * chime (no audio asset, so nothing to license or bundle) and a macOS
- * notification through the web Notification API, which Electron routes to
- * Notification Center. Callers decide *whether* from settings; this module
- * only knows *how*.
+ * How the shell makes a sound. The two-note chime is synthesised here (no
+ * audio asset, nothing to license or bundle); the macOS alert sounds are
+ * played by main. Whether to play at all is the dispatcher's call.
  */
 
 let audioCtx: AudioContext | null = null
@@ -45,44 +46,13 @@ export function playChime(): void {
   }
 }
 
-export type NotifyPermission = 'granted' | 'denied' | 'default' | 'unsupported'
-
-export function notificationPermission(): NotifyPermission {
-  if (typeof Notification === 'undefined') return 'unsupported'
-  return Notification.permission
-}
-
-export async function requestNotificationPermission(): Promise<NotifyPermission> {
-  if (typeof Notification === 'undefined') return 'unsupported'
-  try {
-    return await Notification.requestPermission()
-  } catch {
-    return Notification.permission
+/** The chosen sound; a system sound falls back to the chime outside the app. */
+export function playSound(name: NotifySound): void {
+  if (name === 'chime' || !isDesktop()) {
+    playChime()
+    return
   }
-}
-
-/**
- * Post a notification. Returns false when it could not be shown (no
- * permission, unsupported) so a caller can fall back to a toast.
- */
-export function postNotification(
-  title: string,
-  body: string,
-  opts: { tag?: string; onClick?: () => void } = {},
-): boolean {
-  if (notificationPermission() !== 'granted') return false
-  try {
-    const n = new Notification(title, { body, tag: opts.tag, silent: true })
-    if (opts.onClick) {
-      n.onclick = () => {
-        window.focus()
-        opts.onClick?.()
-      }
-    }
-    return true
-  } catch {
-    return false
-  }
+  void desktopApi().notify.sound(name)
 }
 
 /** True when the window is not the one the user is looking at. */

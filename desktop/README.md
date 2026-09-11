@@ -118,21 +118,65 @@ sections edit the **gateway's** configuration instead, through the same
 guided RPCs the web console's setup uses, with the `config.snapshot`
 revision on every write so a stale form cannot overwrite a newer file.
 
-| Section      | What it holds                                                                                                                                                                                                                                                  |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Models       | Provider (catalog from `onboarding.catalog`), API key / env key / base URL / proxy, default model from `models.list`; saved via `onboarding.provider.configure`. Thinking level via `config.set`.                                                              |
-| Pilot Router | Mode (Pilot / LLM judge / Off), default tier, safety net, judge model, translation cap, and the tier ladder c0–c3 + vision with a model and thinking level per rung; saved via `onboarding.router.configure` using the console's `buildRouterConfigureParams`. |
-| Gateway      | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                         |
-| Appearance   | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                        |
-| Behaviour    | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset, reply chime + background notifications + approval alerts, notification permission.     |
-| Shortcuts    | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                       |
-| Advanced     | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                  |
-| About        | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                              |
+| Section       | What it holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Models        | Provider (catalog from `onboarding.catalog`), API key / env key / base URL / proxy, default model from `models.list`; saved via `onboarding.provider.configure`. Thinking level via `config.set`.                                                                                                                                                                                                                                                                                                                                  |
+| Pilot Router  | Mode (Pilot / LLM judge / Off), default tier, safety net, judge model, translation cap, and the tier ladder c0–c3 + vision with a model and thinking level per rung; saved via `onboarding.router.configure` using the console's `buildRouterConfigureParams`.                                                                                                                                                                                                                                                                     |
+| Gateway       | Live status with Start/Stop/Restart, endpoint copy + open console; an editable draft of mode/host/port/token/CLI path with validation, Save/Revert, and a "restart to apply" notice when the running endpoint differs.                                                                                                                                                                                                                                                                                                             |
+| Appearance    | Theme + palette (`ThemeRows`), text size (`data-text-size` on `<html>`), reduce transparency (`data-transparency` + `win.setVibrancy`).                                                                                                                                                                                                                                                                                                                                                                                            |
+| Notifications | Master switch; what happens while the window is in front (nothing / in-app banner / system notification); Do not disturb (30 min, 1 h, 3 h, until tomorrow 9:00); show details; per-event switches (reply finished with a minimum length, reply failed, approval needed, scheduled job runs off/failures/all, gateway stopped on its own); sound on/off and which (the app chime or a macOS alert sound); Dock badge and bounce; a test button and a door to System Settings › Notifications. See [Notifications](#notifications). |
+| Behaviour     | Open at login (mirrored to `app.setLoginItemSettings`), open at launch (home / last session), stop the gateway on quit, Return vs ⌘Return to send, sidebar width reset.                                                                                                                                                                                                                                                                                                                                                            |
+| Shortcuts     | The keys the app binds (⌘, ⌘N ⌘⇧S ⌘⇧O …); static, nothing is rebindable.                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Advanced      | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                                                                                                                                                                                                                                                                                      |
+| About         | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 Main mirrors three settings onto the window/OS on every write
 (`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy and
 the zoom factor. `nativeTheme` follows the theme section the same way, so a
 reset repaints correctly.
+
+## Notifications
+
+Every notification goes through one door, `notify()` in
+`renderer/src/lib/notifications/dispatch.ts`, which reads the settings at fire
+time and asks `decideDelivery()` (`logic.ts`, pure and unit-tested) where the
+event goes: a native notification, an in-app banner (sonner), a sound, a Dock
+bounce, and whether it is recorded in the bell. The rules:
+
+- Off, or the event's switch off, or shorter than "only replies longer than":
+  nothing.
+- Do not disturb: recorded in the bell, nothing shown or played.
+- The event is about the session on screen and the window is in front: only
+  the sound; the user is watching it happen.
+- Window in front, other session: per "while the window is in front".
+- Window behind: native notification, sound, Dock bounce.
+
+The sources (`renderer/src/lib/use-notifications.ts`, bound once from
+`AppShell`):
+
+| Event                 | Where it comes from                                                                                                                                                                                                                                                                                 |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reply finished/failed | The sessions list. The gateway broadcasts `sessions.changed` on every task transition to connections that called `sessions.subscribe` (the sessions store does, on every connect); the list refetches and a row that stops being live is a settled reply. Cancelled and interrupted runs are quiet. |
+| Approval needed       | The console's approval poller (`useApprovals`): the pending count grew.                                                                                                                                                                                                                             |
+| Scheduled job         | `cron.run.finished` on the wildcard topic; the shell calls `cron.subscribe` for the app's lifetime (the Jobs panel only listens).                                                                                                                                                                   |
+| Gateway stopped       | The gateway store went from `running` to `error` without a stop being asked for.                                                                                                                                                                                                                    |
+
+Native notifications are posted by **main** (`main/notify/notifier.ts`,
+Electron's `Notification`), not the renderer's web API, so a click can focus
+the window and push `notify:activated` with a target (session, jobs, settings)
+that the renderer navigates to. They are always `silent`; the sound is the
+renderer's job (`lib/notify.ts`): the synthesised chime, or a macOS alert
+sound that main plays with `afplay` so it works with or without a
+notification. Main also owns the Dock badge (unseen + approvals waiting) and
+bounce, and opens System Settings › Notifications on request. Every IPC
+payload is validated in `main/ipc/notify.ts`.
+
+The toolbar bell (`components/NotificationBell.tsx`) shows the unseen count, a
+slash when muted or off, and a popover with the recent notifications (in
+memory, `stores/notify-center.ts`), Do not disturb, the sound toggle and a
+link to the settings section. Opening the popover or the session a
+notification points at marks it seen. In a plain browser tab the fallback
+uses the web Notification API and the chime; Dock and system sounds are inert.
 
 ### Pet
 
