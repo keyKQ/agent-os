@@ -263,7 +263,176 @@ const graphite: PaletteDefinition = {
   },
 }
 
-export const PALETTES: Record<PaletteId, PaletteDefinition> = { tactical, graphite }
+/* ── Derived palettes ──────────────────────────────────────────────────────
+   The two above are hand-tuned. The rest are built from a few seeds per mode
+   (ground, ink, signal) with the same proportions Tactical uses, so every
+   palette shares one structure and only the mood changes. */
+
+interface Seed {
+  bg: string
+  fg: string
+  primary: string
+  primaryFg: string
+  /** Sidebar ground; defaults to the surface tone. */
+  sidebar?: string
+  grain?: string
+}
+
+function rgb(hex: string): [number, number, number] {
+  const h = hex.replace('#', '')
+  const n = parseInt(h.length === 3 ? h.replace(/./g, (c) => c + c) : h, 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/** `t` of the way from `a` to `b`, as hex. */
+function mix(a: string, b: string, t: number): string {
+  const [r1, g1, b1] = rgb(a)
+  const [r2, g2, b2] = rgb(b)
+  const c = (x: number, y: number) => Math.round(x + (y - x) * t)
+  return `#${[c(r1, r2), c(g1, g2), c(b1, b2)].map((v) => v.toString(16).padStart(2, '0')).join('')}`
+}
+
+function alpha(hex: string, a: number): string {
+  const [r, g, b] = rgb(hex)
+  return `rgba(${r}, ${g}, ${b}, ${a})`
+}
+
+const SIGNALS = {
+  dark: { ok: '#4ade80', warn: '#fbbf24', danger: '#f87171', info: '#60a5fa' },
+  light: { ok: '#166534', warn: '#7a4f00', danger: '#a61b1b', info: '#1d4ed8' },
+} as const
+
+function derive(seed: Seed, mode: ResolvedTheme): ColorTokens {
+  const { bg, fg, primary, primaryFg } = seed
+  const surface = mix(bg, fg, 0.04)
+  const elevated = mix(bg, fg, 0.08)
+  const accent = mix(bg, fg, 0.12)
+  const sidebar = seed.sidebar ?? surface
+  const signals = SIGNALS[mode]
+  const destructive = mode === 'dark' ? '#f87171' : '#a61b1b'
+  return {
+    background: bg,
+    foreground: fg,
+    surface,
+    elevated,
+    card: surface,
+    'card-foreground': fg,
+    popover: elevated,
+    'popover-foreground': fg,
+    primary,
+    'primary-foreground': primaryFg,
+    secondary: elevated,
+    'secondary-foreground': fg,
+    muted: elevated,
+    'muted-foreground': mix(fg, bg, 0.32),
+    dim: mix(fg, bg, 0.5),
+    accent,
+    'accent-foreground': fg,
+    destructive,
+    'destructive-foreground': mode === 'dark' ? '#1a0505' : '#ffffff',
+    border: alpha(fg, 0.13),
+    hairline: alpha(fg, 0.08),
+    input: alpha(fg, 0.17),
+    ring: primary,
+    ...signals,
+    sidebar,
+    'sidebar-foreground': fg,
+    'sidebar-primary': primary,
+    'sidebar-primary-foreground': primaryFg,
+    'sidebar-accent': accent,
+    'sidebar-accent-foreground': fg,
+    'sidebar-border': alpha(fg, 0.11),
+    'sidebar-ring': primary,
+    'grain-opacity': seed.grain ?? '0',
+  }
+}
+
+function palette(
+  id: PaletteId,
+  label: string,
+  description: string,
+  dark: Seed,
+  light: Seed,
+): PaletteDefinition {
+  return { id, label, description, dark: derive(dark, 'dark'), light: derive(light, 'light') }
+}
+
+const everforest = palette(
+  'everforest',
+  'Everforest',
+  'Warm, low-contrast forest greens.',
+  { bg: '#232a2e', fg: '#d3c6aa', primary: '#a7c080', primaryFg: '#1e2326', grain: '0.04' },
+  { bg: '#fdf6e3', fg: '#5c6a72', primary: '#8da101', primaryFg: '#ffffff', grain: '0.03' },
+)
+
+const solarized = palette(
+  'solarized',
+  'Solarized',
+  'Fixed-contrast light and dark, the classic pair.',
+  { bg: '#002b36', fg: '#a7b7b8', primary: '#2aa198', primaryFg: '#002b36' },
+  { bg: '#fdf6e3', fg: '#586e75', primary: '#268bd2', primaryFg: '#ffffff' },
+)
+
+const nord = palette(
+  'nord',
+  'Nord',
+  'Arctic blue-greys with a frost accent.',
+  { bg: '#242933', fg: '#e5e9f0', primary: '#88c0d0', primaryFg: '#2e3440', sidebar: '#2b303b' },
+  { bg: '#eceff4', fg: '#2e3440', primary: '#5e81ac', primaryFg: '#ffffff', sidebar: '#f4f6fa' },
+)
+
+const midnight = palette(
+  'midnight',
+  'Midnight',
+  'Deep blue-violet with cool accents.',
+  { bg: '#0a0b1c', fg: '#dcdcf2', primary: '#a5a0ff', primaryFg: '#0a0b1c', grain: '0.04' },
+  { bg: '#f3f2fb', fg: '#1d1c3a', primary: '#5145d6', primaryFg: '#ffffff' },
+)
+
+const slate = palette(
+  'slate',
+  'Slate',
+  'Cool slate blue, a focused developer theme.',
+  { bg: '#0b1220', fg: '#e2e8f0', primary: '#38bdf8', primaryFg: '#061a2b', sidebar: '#0f172a' },
+  { bg: '#f1f5f9', fg: '#0f172a', primary: '#0f4c81', primaryFg: '#ffffff', sidebar: '#f8fafc' },
+)
+
+const ember = palette(
+  'ember',
+  'Ember',
+  'Warm crimson and bronze, forge light.',
+  { bg: '#140a0a', fg: '#f2e4d8', primary: '#f4a261', primaryFg: '#2a1206', grain: '0.05' },
+  { bg: '#fbf3ec', fg: '#2f1a12', primary: '#b4461d', primaryFg: '#ffffff', grain: '0.03' },
+)
+
+const mono = palette(
+  'mono',
+  'Mono',
+  'Clean grayscale, minimal and focused.',
+  { bg: '#0a0a0a', fg: '#e8e8e8', primary: '#ffffff', primaryFg: '#0a0a0a' },
+  { bg: '#f5f5f5', fg: '#111111', primary: '#111111', primaryFg: '#ffffff' },
+)
+
+const cyberpunk = palette(
+  'cyberpunk',
+  'Cyberpunk',
+  'Neon green on black, matrix terminal.',
+  { bg: '#000000', fg: '#c8ffd4', primary: '#00ff66', primaryFg: '#001a08', grain: '0.06' },
+  { bg: '#f0fff4', fg: '#052e16', primary: '#15803d', primaryFg: '#ffffff' },
+)
+
+export const PALETTES: Record<PaletteId, PaletteDefinition> = {
+  tactical,
+  graphite,
+  everforest,
+  solarized,
+  nord,
+  midnight,
+  slate,
+  ember,
+  mono,
+  cyberpunk,
+}
 
 export function paletteTokens(palette: PaletteId, mode: ResolvedTheme): ColorTokens {
   return PALETTES[palette][mode]

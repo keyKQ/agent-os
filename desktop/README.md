@@ -99,8 +99,12 @@ Adding a palette: add an id to `PALETTE_IDS` in `shared/theme.ts` and a full
 `PaletteDefinition` in `palettes.ts`. The type forces every token for both
 modes; `palettes.test.ts` fails otherwise.
 
-UI: `ThemeToggle` (title bar, cycles preference) and `ThemePicker` (Settings >
-Appearance, mode segmented control + palette cards).
+UI: `ThemeToggle` (title bar, cycles preference) and `ThemeControls`
+(Settings > Appearance: the mode row and the searchable palette gallery).
+Tactical and Graphite are hand-tuned; the other palettes are derived from
+three seeds per mode (ground, ink, signal) by `derive()` in `palettes.ts`, so
+adding one is a `palette(id, label, description, darkSeed, lightSeed)` line
+plus its id in `PALETTE_IDS`.
 
 ## Settings
 

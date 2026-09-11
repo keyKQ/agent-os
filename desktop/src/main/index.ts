@@ -6,7 +6,7 @@ import { GatewaySupervisor } from './gateway/supervisor'
 import { registerIpc } from './ipc'
 import { installAppMenu } from './menu'
 import { SettingsStore } from './settings/store'
-import { applyVibrancy, createMainWindow } from './window'
+import { applyUiScale, applyVibrancy, createMainWindow } from './window'
 
 // Single instance: a second launch focuses the existing window.
 if (!app.requestSingleInstanceLock()) {
@@ -29,17 +29,16 @@ if (!app.requestSingleInstanceLock()) {
 
     installLoopbackOriginRewrite()
     registerIpc({ settings, gateway })
-    installAppMenu()
-    createMainWindow({ reduceTransparency: settings.get().appearance.reduceTransparency })
+    installAppMenu(settings)
+    createMainWindow(windowOptions(settings.get()))
     mirrorSettingsToOs(settings)
     // The shell is only useful with a gateway behind it: bring it up (or
     // adopt a running one) without waiting for a click.
     void gateway.start()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow({ reduceTransparency: settings.get().appearance.reduceTransparency })
-      }
+      if (BrowserWindow.getAllWindows().length === 0)
+        createMainWindow(windowOptions(settings.get()))
     })
   })
 
@@ -59,9 +58,14 @@ if (!app.requestSingleInstanceLock()) {
   })
 }
 
+function windowOptions(s: DesktopSettings): { reduceTransparency: boolean; uiScale: number } {
+  return { reduceTransparency: s.appearance.reduceTransparency, uiScale: s.appearance.uiScale }
+}
+
 /**
- * Two settings are really OS state: the login item and window vibrancy.
- * Apply them at boot and again on every change so the file and macOS agree.
+ * Three settings are really window/OS state: the login item, window
+ * vibrancy and the zoom factor. Apply them at boot and again on every change
+ * so the file and what is on screen agree.
  */
 function mirrorSettingsToOs(settings: SettingsStore): void {
   let last: DesktopSettings | null = null
@@ -77,6 +81,9 @@ function mirrorSettingsToOs(settings: SettingsStore): void {
     }
     if (next.appearance.reduceTransparency !== last?.appearance.reduceTransparency) {
       applyVibrancy(next.appearance.reduceTransparency)
+    }
+    if (next.appearance.uiScale !== last?.appearance.uiScale) {
+      applyUiScale(next.appearance.uiScale)
     }
     last = next
   }

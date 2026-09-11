@@ -6,7 +6,9 @@ import path from 'node:path'
  *  before React mounts is not a white flash in dark mode. */
 const BACKGROUND = { dark: '#060608', light: '#f4f5ee' }
 
-export function createMainWindow(opts: { reduceTransparency?: boolean } = {}): BrowserWindow {
+export function createMainWindow(
+  opts: { reduceTransparency?: boolean; uiScale?: number } = {},
+): BrowserWindow {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -33,6 +35,11 @@ export function createMainWindow(opts: { reduceTransparency?: boolean } = {}): B
   })
 
   win.once('ready-to-show', () => win.show())
+  // Zoom is per-load state in Chromium: reapply after every navigation so a
+  // dev reload does not snap back to 100%.
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.setZoomFactor((opts.uiScale ?? 100) / 100)
+  })
 
   // External links open in the default browser, never inside the shell.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -46,6 +53,13 @@ export function createMainWindow(opts: { reduceTransparency?: boolean } = {}): B
     void win.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
   return win
+}
+
+/** Settings > Appearance > UI scale, as Chromium's zoom factor on every window. */
+export function applyUiScale(percent: number): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.setZoomFactor(percent / 100)
+  }
 }
 
 /** Mirror the "Reduce transparency" setting onto every open window. */

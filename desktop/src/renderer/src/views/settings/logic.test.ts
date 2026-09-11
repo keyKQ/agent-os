@@ -142,11 +142,11 @@ describe('host validation', () => {
   it('normalizes new sections with defaults and drops junk', () => {
     const s = normalizeSettings({
       general: { openAtLogin: 'yes', launchView: 'last' },
-      appearance: { textSize: 'huge', reduceTransparency: true },
+      appearance: { uiScale: 133, reduceTransparency: true },
       notifications: { sound: false },
     })
     expect(s.general).toEqual({ ...DEFAULT_SETTINGS.general, launchView: 'last' })
-    expect(s.appearance).toEqual({ textSize: 'default', reduceTransparency: true })
+    expect(s.appearance).toEqual({ uiScale: 100, reduceTransparency: true })
     expect(s.notifications).toEqual({ ...DEFAULT_SETTINGS.notifications, sound: false })
   })
 })

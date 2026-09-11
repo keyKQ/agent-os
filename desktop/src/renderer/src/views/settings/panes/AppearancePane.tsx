@@ -1,8 +1,8 @@
-import { TEXT_SIZES } from '@shared/settings'
+import { UI_SCALES } from '@shared/settings'
 import { Switch } from '~/components/ui/switch'
 import { t } from '~/i18n'
 import { useSettings } from '~/stores/settings'
-import { ThemeRows } from '~/theme/ThemePicker'
+import { PaletteGallery, ThemeModeRow } from '~/theme/ThemeControls'
 import { Card, Head, Row, Segmented } from '../parts'
 
 export function AppearancePane() {
@@ -15,23 +15,26 @@ export function AppearancePane() {
         title={t('settings.section.appearance')}
         blurb={t('settings.section.appearance.blurb')}
       />
-      <Card title={t('theme.section')}>
-        <ThemeRows rowClass="stg-row" />
+      <Card title={t('theme.section')} blurb={t('theme.section.blurb')}>
+        <ThemeModeRow rowClass="stg-row" />
+      </Card>
+
+      <Card title={t('theme.palette')} blurb={t('theme.palette.help')}>
+        <div className="stg-card__body">
+          <PaletteGallery />
+        </div>
       </Card>
 
       <Card title={t('settings.appearance.window')}>
-        <Row
-          label={t('settings.appearance.textSize')}
-          help={t('settings.appearance.textSize.help')}
-        >
+        <Row label={t('settings.appearance.uiScale')} help={t('settings.appearance.uiScale.help')}>
           <Segmented
-            label={t('settings.appearance.textSize')}
-            value={appearance.textSize}
-            options={TEXT_SIZES.map((size) => ({
-              value: size,
-              label: t(`settings.appearance.textSize.${size}`),
-            }))}
-            onChange={(textSize) => void update({ appearance: { textSize } })}
+            label={t('settings.appearance.uiScale')}
+            value={String(appearance.uiScale)}
+            options={UI_SCALES.map((scale) => ({ value: String(scale), label: `${scale}%` }))}
+            onChange={(v) => {
+              const uiScale = UI_SCALES.find((s) => String(s) === v)
+              if (uiScale) void update({ appearance: { uiScale } })
+            }}
           />
         </Row>
         <Row

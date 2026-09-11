@@ -32,7 +32,7 @@ export const settings = {
   'settings.section.gateway': 'Gateway',
   'settings.section.gateway.blurb': 'The local process the app talks to.',
   'settings.section.appearance': 'Appearance',
-  'settings.section.appearance.blurb': 'Theme, palette, text size.',
+  'settings.section.appearance.blurb': 'Theme, palette, scale.',
   'settings.section.behaviour': 'Behaviour',
   'settings.section.behaviour.blurb':
     'Launch, quit, the composer, and how the app gets your attention.',
@@ -181,11 +181,9 @@ export const settings = {
 
   // Appearance
   'settings.appearance.window': 'Window',
-  'settings.appearance.textSize': 'Text size',
-  'settings.appearance.textSize.help': 'Sidebar, chats and panels.',
-  'settings.appearance.textSize.small': 'Small',
-  'settings.appearance.textSize.default': 'Default',
-  'settings.appearance.textSize.large': 'Large',
+  'settings.appearance.uiScale': 'UI scale',
+  'settings.appearance.uiScale.help':
+    'Text and controls across the whole app. ⌘ + and ⌘ − step it, ⌘ 0 resets.',
   'settings.appearance.reduceTransparency': 'Reduce transparency',
   'settings.appearance.reduceTransparency.help':
     'Opaque sidebar; the desktop no longer shows through.',
@@ -241,6 +239,9 @@ export const settings = {
   'settings.shortcuts.settings': 'Open settings',
   'settings.shortcuts.closeSheet': 'Close a sheet',
   'settings.shortcuts.toggleSidebar': 'Show or hide the sidebar',
+  'settings.shortcuts.zoomIn': 'Larger UI',
+  'settings.shortcuts.zoomOut': 'Smaller UI',
+  'settings.shortcuts.zoomReset': 'Actual size',
   'settings.shortcuts.newChat': 'New chat in this agent',
   'settings.shortcuts.abort': 'Stop the current reply',
   'settings.shortcuts.send': 'Send',

@@ -11,6 +11,9 @@ const APP: readonly Shortcut[] = [
   { keys: ['⌘', 'N'], label: 'settings.shortcuts.newSession' },
   { keys: ['⌘', ','], label: 'settings.shortcuts.settings' },
   { keys: ['⌘', '⇧', 'S'], label: 'settings.shortcuts.toggleSidebar' },
+  { keys: ['⌘', '+'], label: 'settings.shortcuts.zoomIn' },
+  { keys: ['⌘', '−'], label: 'settings.shortcuts.zoomOut' },
+  { keys: ['⌘', '0'], label: 'settings.shortcuts.zoomReset' },
   { keys: ['esc'], label: 'settings.shortcuts.closeSheet' },
 ]
 

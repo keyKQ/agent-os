@@ -12,12 +12,12 @@ interface SettingsStore {
 }
 
 /**
- * Text size and transparency are painted as attributes on <html> so CSS can
- * key off them (tokens.css). Colour is not here: that is theme-store's job.
+ * Transparency is painted as an attribute on <html> so CSS can key off it
+ * (tokens.css). UI scale is the window's zoom factor, applied by main.
+ * Colour is not here: that is theme-store's job.
  */
 export function applyAppearance(appearance: AppearanceSettings, root?: HTMLElement): void {
   const el = root ?? document.documentElement
-  el.setAttribute('data-text-size', appearance.textSize)
   el.setAttribute('data-transparency', appearance.reduceTransparency ? 'reduced' : 'normal')
 }
 

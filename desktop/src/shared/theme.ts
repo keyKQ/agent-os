@@ -9,10 +9,31 @@
  */
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type ResolvedTheme = 'light' | 'dark'
-export type PaletteId = 'tactical' | 'graphite'
+export type PaletteId =
+  | 'tactical'
+  | 'graphite'
+  | 'everforest'
+  | 'solarized'
+  | 'nord'
+  | 'midnight'
+  | 'slate'
+  | 'ember'
+  | 'mono'
+  | 'cyberpunk'
 
 export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
-export const PALETTE_IDS: readonly PaletteId[] = ['tactical', 'graphite']
+export const PALETTE_IDS: readonly PaletteId[] = [
+  'tactical',
+  'graphite',
+  'everforest',
+  'solarized',
+  'nord',
+  'midnight',
+  'slate',
+  'ember',
+  'mono',
+  'cyberpunk',
+]
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = 'system'
 export const DEFAULT_PALETTE: PaletteId = 'tactical'

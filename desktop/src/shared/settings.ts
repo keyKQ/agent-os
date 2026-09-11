@@ -39,18 +39,31 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   enterToSend: true,
 }
 
-export type TextSize = 'small' | 'default' | 'large'
-export const TEXT_SIZES: readonly TextSize[] = ['small', 'default', 'large']
+/** Whole-app zoom, percent. Applied by main as the window's zoom factor. */
+export const UI_SCALES = [90, 100, 110, 125, 150, 175] as const
+export type UiScale = (typeof UI_SCALES)[number]
+export const DEFAULT_UI_SCALE: UiScale = 100
+
+export function isUiScale(value: unknown): value is UiScale {
+  return typeof value === 'number' && (UI_SCALES as readonly number[]).includes(value)
+}
+
+/** The next step up or down the scale ladder; clamps at the ends. */
+export function stepUiScale(current: UiScale, direction: 1 | -1): UiScale {
+  const i = UI_SCALES.indexOf(current)
+  const next = UI_SCALES[Math.min(UI_SCALES.length - 1, Math.max(0, i + direction))]
+  return next ?? DEFAULT_UI_SCALE
+}
 
 /** Appearance beyond colour: the theme axes live in `ThemeSettings`. */
 export interface AppearanceSettings {
-  textSize: TextSize
+  uiScale: UiScale
   /** Opaque sidebar and no window vibrancy (System Settings > Accessibility). */
   reduceTransparency: boolean
 }
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
-  textSize: 'default',
+  uiScale: DEFAULT_UI_SCALE,
   reduceTransparency: false,
 }
 
@@ -143,9 +156,7 @@ function normalizeAppearance(raw: unknown): AppearanceSettings {
   const obj = asRecord(raw)
   const d = DEFAULT_APPEARANCE_SETTINGS
   return {
-    textSize: (TEXT_SIZES as readonly unknown[]).includes(obj.textSize)
-      ? (obj.textSize as TextSize)
-      : d.textSize,
+    uiScale: isUiScale(obj.uiScale) ? obj.uiScale : d.uiScale,
     reduceTransparency: bool(obj.reduceTransparency, d.reduceTransparency),
   }
 }
