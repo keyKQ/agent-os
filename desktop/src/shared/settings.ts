@@ -1,3 +1,4 @@
+import { clampPetScale, isPetSlug, PET_DEFAULT_SCALE } from './pet'
 import { DEFAULT_THEME_SETTINGS, normalizeThemeSettings, type ThemeSettings } from './theme'
 
 /** Where the desktop shell finds (or launches) the AgentOS gateway. */
@@ -82,12 +83,28 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   approvals: true,
 }
 
+/** The floating petdex mascot (Settings > Appearance > Pet). */
+export interface PetSettings {
+  enabled: boolean
+  /** Installed pet to show; null until one is picked. */
+  slug: string | null
+  /** On-screen size relative to the 192×208 frame, 0.1–3. */
+  scale: number
+}
+
+export const DEFAULT_PET_SETTINGS: PetSettings = {
+  enabled: false,
+  slug: null,
+  scale: PET_DEFAULT_SCALE,
+}
+
 export interface DesktopSettings {
   theme: ThemeSettings
   gateway: GatewaySettings
   general: GeneralSettings
   appearance: AppearanceSettings
   notifications: NotificationSettings
+  pet: PetSettings
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -96,6 +113,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   general: DEFAULT_GENERAL_SETTINGS,
   appearance: DEFAULT_APPEARANCE_SETTINGS,
   notifications: DEFAULT_NOTIFICATION_SETTINGS,
+  pet: DEFAULT_PET_SETTINGS,
 }
 
 export const SETTINGS_SECTIONS = [
@@ -104,6 +122,7 @@ export const SETTINGS_SECTIONS = [
   'general',
   'appearance',
   'notifications',
+  'pet',
 ] as const satisfies readonly (keyof DesktopSettings)[]
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -171,6 +190,16 @@ function normalizeNotifications(raw: unknown): NotificationSettings {
   }
 }
 
+function normalizePet(raw: unknown): PetSettings {
+  const obj = asRecord(raw)
+  const d = DEFAULT_PET_SETTINGS
+  return {
+    enabled: bool(obj.enabled, d.enabled),
+    slug: isPetSlug(obj.slug) ? obj.slug : null,
+    scale: typeof obj.scale === 'number' ? clampPetScale(obj.scale) : d.scale,
+  }
+}
+
 /** Validate a settings blob read from disk. Unknown keys are dropped. */
 export function normalizeSettings(raw: unknown): DesktopSettings {
   const obj = asRecord(raw)
@@ -180,6 +209,7 @@ export function normalizeSettings(raw: unknown): DesktopSettings {
     general: normalizeGeneral(obj.general),
     appearance: normalizeAppearance(obj.appearance),
     notifications: normalizeNotifications(obj.notifications),
+    pet: normalizePet(obj.pet),
   }
 }
 

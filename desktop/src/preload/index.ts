@@ -32,6 +32,13 @@ const api: DesktopApi = {
     resolved: () => ipcRenderer.invoke(IPC.theme.resolved),
     onChanged: (listener) => listen<ResolvedTheme>(IPC.theme.changed, listener),
   },
+  pets: {
+    manifest: () => ipcRenderer.invoke(IPC.pets.manifest),
+    installed: () => ipcRenderer.invoke(IPC.pets.installed),
+    install: (slug: string) => ipcRenderer.invoke(IPC.pets.install, slug),
+    remove: (slug: string) => ipcRenderer.invoke(IPC.pets.remove, slug),
+    preview: (slug: string) => ipcRenderer.invoke(IPC.pets.preview, slug),
+  },
   gateway: {
     status: () => ipcRenderer.invoke(IPC.gateway.status),
     start: () => ipcRenderer.invoke(IPC.gateway.start),

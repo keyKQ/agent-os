@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 import { useKeyboardShortcut } from '@/components/KeyboardShortcuts'
+import { PetOverlay } from '~/components/pet/PetOverlay'
 import { Sidebar } from '~/components/Sidebar'
 import { Toolbar } from '~/components/Toolbar'
 import { sessionPath } from '~/components/sidebar/SessionRow'
@@ -34,6 +35,7 @@ export function AppShell() {
       {/* Layers over the whole window, whichever route is showing. */}
       <JobsPanel />
       <SettingsPanel />
+      <PetOverlay />
     </div>
   )
 }

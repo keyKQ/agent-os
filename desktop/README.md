@@ -129,9 +129,35 @@ revision on every write so a stale form cannot overwrite a newer file.
 | Advanced     | Paths (settings file, logs, gateway `config.toml`) with Finder/open actions, copy diagnostics (token redacted), reset all app settings behind an alertdialog.                                                                                                  |
 | About        | App/Electron/Chromium versions, gateway version + uptime, `updates.check`, links.                                                                                                                                                                              |
 
-Main mirrors two settings onto the OS on every write (`mirrorSettingsToOs`
-in `main/index.ts`): the login item and window vibrancy. `nativeTheme` follows
-the theme section the same way, so a reset repaints correctly.
+Main mirrors three settings onto the window/OS on every write
+(`mirrorSettingsToOs` in `main/index.ts`): the login item, window vibrancy and
+the zoom factor. `nativeTheme` follows the theme section the same way, so a
+reset repaints correctly.
+
+### Pet
+
+The same petdex mascots Hermes and Codex use (https://petdex.dev, a public
+gallery of ~4,800 community pets). A pet is `pet.json` + `spritesheet.webp`,
+a grid of 192×208 frames, one row per animation state, six frames stepped
+over 1.1 s. `shared/pet.ts` owns the format facts (grid inference, row
+taxonomy for 8/9/11-row sheets, Hermes' state priority: failed → jump →
+wave → waiting → run → review → idle).
+
+- `main/pets/store.ts` keeps pets in `userData/pets/<slug>/`, gallery
+  previews in `userData/pets/.cache/`, and the manifest cached in memory
+  (5 min) and on disk (offline). Downloads only from petdex hosts.
+- `main/pets/protocol.ts` serves sheets as `agentos-pet://sheet/<slug>`
+  (listed under `img-src` in the renderer CSP) so a 2 MB sheet never crosses
+  IPC and the image cache does its job.
+- `stores/pet.ts` derives the state from what the app already tracks: a turn
+  streaming (`useLive`), approvals pending, the gateway in error, and
+  `task.succeeded` / `task.failed` / `task.timeout` beats that hold ~3 s.
+- `components/pet/PetOverlay.tsx` paints it: one `<button>` whose
+  background-position steps across the row (`steps(6)`, petdex's own CSS),
+  draggable (position remembered), click to wave.
+- Settings > Appearance > Pet: toggle, searchable gallery (installed first,
+  then the manifest a page at a time, thumbnails fetched on sight), size
+  slider 10–300%, remove.
 
 ## Commands
 

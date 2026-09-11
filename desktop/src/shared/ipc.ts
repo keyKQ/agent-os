@@ -1,5 +1,6 @@
 import type { AppInfo, ChooseFileOptions } from './app'
 import type { GatewayStatus } from './gateway'
+import type { InstalledPet, PetManifestEntry } from './pet'
 import type { DesktopSettings, SettingsPatch } from './settings'
 import type { ResolvedTheme, ThemeSettings } from './theme'
 
@@ -32,6 +33,13 @@ export const IPC = {
     restart: 'gateway:restart',
     /** Main -> renderer: status transitions. */
     changed: 'gateway:changed',
+  },
+  pets: {
+    manifest: 'pets:manifest',
+    installed: 'pets:installed',
+    install: 'pets:install',
+    remove: 'pets:remove',
+    preview: 'pets:preview',
   },
   app: {
     version: 'app:version',
@@ -73,6 +81,16 @@ export interface DesktopApi {
     set(next: Partial<ThemeSettings>): Promise<ThemeSettings>
     resolved(): Promise<ResolvedTheme>
     onChanged(listener: (resolved: ResolvedTheme) => void): () => void
+  }
+  pets: {
+    /** Every approved pet on petdex.dev (cached; empty when offline). */
+    manifest(): Promise<PetManifestEntry[]>
+    installed(): Promise<InstalledPet[]>
+    /** Download pet.json + spritesheet into the pets directory. */
+    install(slug: string): Promise<InstalledPet>
+    remove(slug: string): Promise<void>
+    /** Make the sheet loadable for a gallery preview; resolves to its URL. */
+    preview(slug: string): Promise<string>
   }
   gateway: {
     status(): Promise<GatewayStatus>

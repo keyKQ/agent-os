@@ -5,6 +5,8 @@ import type { DesktopSettings } from '@shared/settings'
 import { GatewaySupervisor } from './gateway/supervisor'
 import { registerIpc } from './ipc'
 import { installAppMenu } from './menu'
+import { registerPetScheme, servePets } from './pets/protocol'
+import { PetStore } from './pets/store'
 import { SettingsStore } from './settings/store'
 import { applyUiScale, applyVibrancy, createMainWindow } from './window'
 
@@ -14,6 +16,9 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   const settings = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'))
   const gateway = new GatewaySupervisor(() => settings.get().gateway)
+  const pets = new PetStore(path.join(app.getPath('userData'), 'pets'))
+  // Custom schemes must be declared before the app is ready.
+  registerPetScheme()
 
   app.on('second-instance', () => {
     const [win] = BrowserWindow.getAllWindows()
@@ -28,7 +33,8 @@ if (!app.requestSingleInstanceLock()) {
     app.on('browser-window-created', (_, win) => optimizer.watchWindowShortcuts(win))
 
     installLoopbackOriginRewrite()
-    registerIpc({ settings, gateway })
+    servePets(pets)
+    registerIpc({ settings, gateway, pets })
     installAppMenu(settings)
     createMainWindow(windowOptions(settings.get()))
     mirrorSettingsToOs(settings)

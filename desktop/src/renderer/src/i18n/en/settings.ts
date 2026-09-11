@@ -188,6 +188,29 @@ export const settings = {
   'settings.appearance.reduceTransparency.help':
     'Opaque sidebar; the desktop no longer shows through.',
 
+  // Pet
+  'settings.pet.title': 'Pet',
+  'settings.pet.blurb':
+    'A petdex mascot floats over the app and reacts to the agent: busy while it works, a wave when it finishes, a sulk on errors, a wait when it needs you.',
+  'settings.pet.enabled': 'Show the pet',
+  'settings.pet.choose': 'Choose a pet',
+  'settings.pet.choose.help':
+    'Picking one installs it (if needed) and makes it the active one. Drag it anywhere; click it and it waves.',
+  'settings.pet.search': 'Search pets',
+  'settings.pet.installed': 'installed',
+  'settings.pet.loading': 'Loading the petdex gallery…',
+  'settings.pet.showing': 'Showing',
+  'settings.pet.of': 'of',
+  'settings.pet.narrow': 'Type to narrow it down.',
+  'settings.pet.offline': 'petdex.dev is unreachable. Installed pets still work.',
+  'settings.pet.desktopOnly': 'Pets are only available inside the desktop app.',
+  'settings.pet.adopted': 'adopted',
+  'settings.pet.installFailed': 'Could not install the pet',
+  'settings.pet.size': 'Size',
+  'settings.pet.size.help': 'Applies instantly.',
+  'settings.pet.current': 'Active pet',
+  'settings.pet.remove': 'Remove',
+
   // Behaviour
   'settings.behaviour.launch': 'Launch and quit',
   'settings.behaviour.openAtLogin': 'Open at login',

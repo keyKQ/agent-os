@@ -4,6 +4,7 @@ import { t } from '~/i18n'
 import { useSettings } from '~/stores/settings'
 import { PaletteGallery, ThemeModeRow } from '~/theme/ThemeControls'
 import { Card, Head, Row, Segmented } from '../parts'
+import { PetCard } from './PetCard'
 
 export function AppearancePane() {
   const appearance = useSettings((s) => s.settings.appearance)
@@ -50,6 +51,8 @@ export function AppearancePane() {
           />
         </Row>
       </Card>
+
+      <PetCard />
     </>
   )
 }

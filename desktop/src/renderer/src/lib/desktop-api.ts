@@ -93,6 +93,17 @@ function createFallbackApi(): DesktopApi {
         return () => themeListeners.delete(listener)
       },
     },
+    pets: {
+      manifest: async () => [],
+      installed: async () => [],
+      install: async () => {
+        throw new Error('Pets are only available inside the desktop app.')
+      },
+      remove: async () => {},
+      preview: async () => {
+        throw new Error('Pets are only available inside the desktop app.')
+      },
+    },
     gateway: {
       status: stoppedOnly,
       start: cannotControl,
