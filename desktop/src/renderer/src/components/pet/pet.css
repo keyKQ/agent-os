@@ -16,6 +16,10 @@
   filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
   animation: pet-walk var(--pet-loop) steps(var(--pet-frames)) infinite;
   outline: none;
+  /* Its own layer: the walk never repaints the window behind it, and the
+     drop shadow is rasterised once. */
+  will-change: background-position;
+  transform: translateZ(0);
 }
 .pet:active {
   cursor: grabbing;

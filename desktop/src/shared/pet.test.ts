@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { derivePetState, isPetSlug, petStateRow, sheetGeometry } from './pet'
+import { derivePetState, isPetSlug, petStateRow, rowFrameCounts, sheetGeometry } from './pet'
 
 describe('petdex sheets', () => {
   it('reads the frame grid from the pixel size', () => {
@@ -7,6 +7,18 @@ describe('petdex sheets', () => {
     expect(sheetGeometry(1536, 2288)).toEqual({ cols: 8, rows: 11 })
     expect(sheetGeometry(1728, 1664)).toEqual({ cols: 9, rows: 8 })
     expect(sheetGeometry(1000, 1000)).toBeNull()
+  })
+
+  it('counts real frames per row, stopping at the first blank', () => {
+    // Cache Capy's sheet: wave has 4 frames, jump 5, idle 7 (capped at 6).
+    const rows = [
+      [1, 1, 1, 1, 1, 1, 1, 0],
+      [1, 1, 1, 1, 0, 0, 0, 0],
+      [1, 1, 1, 1, 1, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0],
+    ]
+    const counts = rowFrameCounts({ cols: 8, rows: 4 }, (c, r) => rows[r]![c] === 0)
+    expect(counts).toEqual([6, 4, 5, 1])
   })
 
   it('maps states to rows in both taxonomies', () => {

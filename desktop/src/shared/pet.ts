@@ -65,6 +65,25 @@ export function sheetGeometry(width: number, height: number): SheetGeometry | nu
   return { cols, rows }
 }
 
+/**
+ * Real frames per row. Petdex sheets are left-packed: a state with fewer
+ * frames than the grid is wide leaves the rest of its row transparent, so
+ * animating across the whole row blinks the pet out. Stop at the first
+ * blank frame, and never step more than PET_FRAMES_PER_STATE.
+ */
+export function rowFrameCounts(
+  geometry: SheetGeometry,
+  isBlank: (col: number, row: number) => boolean,
+): number[] {
+  const counts: number[] = []
+  for (let row = 0; row < geometry.rows; row++) {
+    let n = 0
+    while (n < Math.min(geometry.cols, PET_FRAMES_PER_STATE) && !isBlank(n, row)) n++
+    counts.push(Math.max(1, n))
+  }
+  return counts
+}
+
 /** The sheet row that animates `state`; idle when the sheet has no such row. */
 export function petStateRow(state: PetState, rows: number): number {
   const taxonomy: readonly string[] = rows >= CODEX_ROWS.length ? CODEX_ROWS : LEGACY_ROWS

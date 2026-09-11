@@ -4,10 +4,10 @@ import { useRpc } from '@/app/providers'
 import {
   PET_FRAME_H,
   PET_FRAME_W,
-  PET_FRAMES_PER_STATE,
   PET_LOOP_MS,
   petSheetUrl,
   petStateRow,
+  rowFrameCounts,
   sheetGeometry,
   type SheetGeometry,
 } from '@shared/pet'
@@ -19,6 +19,13 @@ const POS_KEY = 'agentos-desktop.petPosition'
 interface Pos {
   x: number
   y: number
+}
+
+interface Sheet extends SheetGeometry {
+  /** Real frames per row (see rowFrameCounts). */
+  frames: number[]
+  /** The pixels could not be read; every row runs the full stride. */
+  tainted?: boolean
 }
 
 function loadPos(): Pos | null {
@@ -39,10 +46,49 @@ function savePos(pos: Pos): void {
   }
 }
 
+/** Alpha threshold at or below which a frame counts as transparent padding. */
+const BLANK_ALPHA = 8
+/** Sample every Nth pixel: enough to catch any sprite, cheap on an 11-row sheet. */
+const SAMPLE_STRIDE = 4
+
+/**
+ * Decode the sheet once and measure which frames of each row are real.
+ * Runs off the loaded <img> on a scratch canvas; a decode failure leaves
+ * every row at the full stride, which is what the petdex web app does.
+ */
+function measureSheet(img: HTMLImageElement): Sheet | null {
+  const geometry = sheetGeometry(img.naturalWidth, img.naturalHeight)
+  if (!geometry) return null
+  const full = Array.from({ length: geometry.rows }, () => 6)
+  let tainted = false
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = img.naturalWidth
+    canvas.height = img.naturalHeight
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return { ...geometry, frames: full }
+    ctx.drawImage(img, 0, 0)
+    const isBlank = (col: number, row: number) => {
+      const data = ctx.getImageData(col * PET_FRAME_W, row * PET_FRAME_H, PET_FRAME_W, PET_FRAME_H)
+      for (let y = 0; y < PET_FRAME_H; y += SAMPLE_STRIDE) {
+        for (let x = 0; x < PET_FRAME_W; x += SAMPLE_STRIDE) {
+          if (data.data[(y * PET_FRAME_W + x) * 4 + 3]! > BLANK_ALPHA) return false
+        }
+      }
+      return true
+    }
+    return { ...geometry, frames: rowFrameCounts(geometry, isBlank) }
+  } catch (err) {
+    tainted = true
+    console.warn('[pet] could not measure sheet frames', err)
+    return { ...geometry, frames: full, tainted }
+  }
+}
+
 /**
  * The petdex mascot floating over the window: one sheet, one row per state,
- * six frames stepped by CSS the way the petdex web app animates. Drag it
- * anywhere (the spot is remembered); click it and it waves back.
+ * the row's real frames stepped by CSS the way the petdex web app animates.
+ * Drag it anywhere (the spot is remembered); click it and it waves back.
  */
 export function PetOverlay() {
   const rpc = useRpc()
@@ -55,20 +101,23 @@ export function PetOverlay() {
 function PetSprite({ slug, scale }: { slug: string; scale: number }) {
   const state = usePet((s) => s.state)
   const poke = usePet((s) => s.poke)
-  const [geometry, setGeometry] = useState<SheetGeometry | null>(null)
+  const [sheet, setSheet] = useState<Sheet | null>(null)
   const [pos, setPos] = useState<Pos | null>(loadPos)
   const drag = useRef<{ dx: number; dy: number; moved: boolean } | null>(null)
   const url = petSheetUrl(slug)
 
-  // Measure the sheet once per pet: the grid tells us which rows exist.
+  // Measure the sheet once per pet: the grid says which rows exist, the
+  // alpha says how many frames each row really has.
   useEffect(() => {
     let cancelled = false
     const img = new Image()
+    // Needed to read pixels back in measureSheet; the pet scheme allows it.
+    img.crossOrigin = 'anonymous'
     img.onload = () => {
-      if (!cancelled) setGeometry(sheetGeometry(img.naturalWidth, img.naturalHeight))
+      if (!cancelled) setSheet(measureSheet(img))
     }
     img.onerror = () => {
-      if (!cancelled) setGeometry(null)
+      if (!cancelled) setSheet(null)
     }
     img.src = url
     return () => {
@@ -76,19 +125,22 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
     }
   }, [url])
 
-  if (!geometry) return null
-  const w = PET_FRAME_W * scale
-  const h = PET_FRAME_H * scale
-  const row = petStateRow(state, geometry.rows)
+  if (!sheet) return null
+  // Whole pixels: a fractional frame width puts every step on a sub-pixel
+  // boundary and the sprite shimmers.
+  const w = Math.max(1, Math.round(PET_FRAME_W * scale))
+  const h = Math.max(1, Math.round(PET_FRAME_H * scale))
+  const row = petStateRow(state, sheet.rows)
+  const frames = sheet.frames[row] ?? 1
   const style: React.CSSProperties = {
     width: w,
     height: h,
     backgroundImage: `url("${url}")`,
-    backgroundSize: `${geometry.cols * w}px ${geometry.rows * h}px`,
+    backgroundSize: `${sheet.cols * w}px ${sheet.rows * h}px`,
     backgroundPositionY: `${-row * h}px`,
     ['--pet-frame-w' as string]: `${w}px`,
-    ['--pet-frames' as string]: String(PET_FRAMES_PER_STATE),
-    ['--pet-loop' as string]: `${PET_LOOP_MS}ms`,
+    ['--pet-frames' as string]: String(frames),
+    ['--pet-loop' as string]: `${Math.round((PET_LOOP_MS * frames) / 6)}ms`,
     ...(pos ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' } : {}),
   }
 
@@ -114,9 +166,13 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
 
   return (
     <button
+      // A new row restarts the walk from its first frame, as Hermes does.
+      key={row}
       type="button"
       className="pet app-no-drag"
       data-state={state}
+      data-frames={frames}
+      data-measured={sheet.tainted ? 'false' : 'true'}
       aria-label={`Pet: ${state}`}
       title={slug}
       style={style}

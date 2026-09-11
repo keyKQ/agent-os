@@ -11,13 +11,18 @@ import type { PetStore } from './store'
  */
 export function registerPetScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: PET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: false } },
+    {
+      scheme: PET_SCHEME,
+      // corsEnabled: the renderer loads sheets crossOrigin="anonymous" so it
+      // may read their pixels back off a canvas (protocol.handle adds the ACAO header).
+      privileges: { standard: true, secure: true, corsEnabled: true, supportFetchAPI: false },
+    },
   ])
 }
 
 /** After `app.whenReady()`. */
 export function servePets(store: PetStore): void {
-  protocol.handle(PET_SCHEME, (request) => {
+  protocol.handle(PET_SCHEME, async (request) => {
     let url: URL
     try {
       url = new URL(request.url)
@@ -28,8 +33,16 @@ export function servePets(store: PetStore): void {
     const slug = url.pathname.replace(/^\/+/, '')
     const file = store.sheetPath(slug)
     if (!file) return new Response('not found', { status: 404 })
-    return net.fetch(pathToFileURL(file).toString(), {
-      headers: { 'Cache-Control': 'max-age=3600' },
+    const res = await net.fetch(pathToFileURL(file).toString())
+    // CORS-open: the renderer reads pixels back off a canvas to find each
+    // row's real frames, which a cross-origin image would refuse (taint).
+    return new Response(res.body, {
+      status: res.status,
+      headers: {
+        'Content-Type': 'image/webp',
+        'Cache-Control': 'max-age=3600',
+        'Access-Control-Allow-Origin': '*',
+      },
     })
   })
 }

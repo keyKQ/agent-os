@@ -153,8 +153,12 @@ wave → waiting → run → review → idle).
   streaming (`useLive`), approvals pending, the gateway in error, and
   `task.succeeded` / `task.failed` / `task.timeout` beats that hold ~3 s.
 - `components/pet/PetOverlay.tsx` paints it: one `<button>` whose
-  background-position steps across the row (`steps(6)`, petdex's own CSS),
-  draggable (position remembered), click to wave.
+  background-position steps across the row (petdex's own `steps()` CSS),
+  draggable (position remembered), click to wave. Sheets are left-packed
+  (a wave may have 4 frames, a jump 5), so the sheet is decoded once on a
+  canvas to count each row's real frames (`rowFrameCounts`) and only those
+  are stepped; the scheme is CORS-open for that pixel read. Frame sizes are
+  rounded to whole pixels so the sprite does not shimmer.
 - Settings > Appearance > Pet: toggle, searchable gallery (installed first,
   then the manifest a page at a time, thumbnails fetched on sight), size
   slider 10–300%, remove.
