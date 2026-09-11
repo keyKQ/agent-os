@@ -171,6 +171,26 @@ notification. Main also owns the Dock badge (unseen + approvals waiting) and
 bounce, and opens System Settings › Notifications on request. Every IPC
 payload is validated in `main/ipc/notify.ts`.
 
+macOS only posts notifications for a bundle it can validate. Electron's npm
+`Electron.app` carries a linker-only signature with no resource seal, so on
+macOS 15+ `usernotificationsd` drops every request ("addRequest not allowed:
+com.github.Electron") while `Notification.show()` reports success. Two
+scripts keep that from happening:
+
+- `scripts/sign-dev-electron.mjs` (`postinstall` and `predev`) ad-hoc signs
+  `node_modules/electron/dist/Electron.app` when its signature does not
+  verify and registers it with LaunchServices. In `npm run dev` the
+  notifications appear as "Electron", and macOS asks for permission once.
+- `scripts/adhoc-sign.mjs` (electron-builder `afterPack`) ad-hoc signs the
+  packaged `AgentOS.app`; with `identity: null` electron-builder would
+  otherwise skip signing altogether and ship the same unsealed bundle.
+
+If a notification still does not show, check `/usr/bin/log stream
+--predicate 'process == "usernotificationsd"'` for the refusal, then System
+Settings › Notifications (the app must be allowed) and Focus: an active
+Focus mode delays banners and Notification Center logs "muted by DND
+suppression".
+
 The toolbar bell (`components/NotificationBell.tsx`) shows the unseen count, a
 slash when muted or off, and a popover with the recent notifications (in
 memory, `stores/notify-center.ts`), Do not disturb, the sound toggle and a
@@ -217,12 +237,13 @@ npm ci                      # Node >= 22
 npm run dev                 # electron-vite dev with HMR
 npm run check               # tsc (node + web), eslint, prettier, vitest
 npm run build               # out/{main,preload,renderer}
-npm run package:dir         # unpacked .app in release/
+npm run package:dir         # unpacked .app in release/ (ad-hoc signed by afterPack)
 npm run package:mac         # dmg + zip (ad-hoc signed)
 ```
 
 If `npm ci` did not download the Electron binary (sandboxed installs skip
-postinstall), run `node node_modules/electron/install.js` once.
+postinstall), run `node node_modules/electron/install.js` once; `npm run dev`
+then signs it on its `predev` step (see [Notifications](#notifications)).
 
 ## Conventions
 

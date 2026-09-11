@@ -14,11 +14,15 @@ mac:
       arch: [arm64, x64]
     - target: zip
       arch: [arm64, x64]
-  # Ad-hoc signing until a Developer ID identity is configured. The app talks
-  # only to the local gateway over loopback, so no extra entitlements are needed.
+  # No Developer ID identity yet: `null` stops electron-builder from searching
+  # the keychain, and `afterPack` below ad-hoc signs the bundle so macOS still
+  # treats it as an app (Notification Center refuses an unsealed bundle). The
+  # app talks only to the local gateway over loopback, so no extra
+  # entitlements are needed.
   identity: null
   hardenedRuntime: false
   darkModeSupport: true
+afterPack: scripts/adhoc-sign.mjs
 dmg:
   sign: false
 npmRebuild: false
