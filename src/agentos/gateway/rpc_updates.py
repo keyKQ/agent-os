@@ -19,6 +19,11 @@ _d = get_dispatcher()
 async def _handle_updates_check(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Check for new release availability, returning version info and status.
 
+    Params:
+        force: When true, skip the 24h throttle and ask PyPI right now. Meant
+          for an explicit "Check for updates" click; the passive banner check
+          keeps using the cache.
+
     Returns:
         A dict containing:
           - current: The currently running version of agent-os
@@ -26,12 +31,12 @@ async def _handle_updates_check(params: dict | None, ctx: RpcContext) -> dict[st
           - status: "up-to-date" | "outdated" | "offline"
     """
     config = getattr(ctx, "config", None)
+    force = bool((params or {}).get("force", False))
 
     # 1. Respect preferences: AGENTOS_NO_UPDATE_NOTICE or updates.notify == False
-    if (
-        os.environ.get("AGENTOS_NO_UPDATE_NOTICE", "").strip() == "1"
-        or not pypi_client.config_notify_enabled(config)
-    ):
+    if os.environ.get(
+        "AGENTOS_NO_UPDATE_NOTICE", ""
+    ).strip() == "1" or not pypi_client.config_notify_enabled(config):
         return {
             "current": __version__,
             "latest": None,
@@ -43,7 +48,7 @@ async def _handle_updates_check(params: dict | None, ctx: RpcContext) -> dict[st
 
     # 2. Check if we need to contact PyPI or use cached state
     latest: str | None = None
-    due = await asyncio.to_thread(pypi_client.due_for_check, path, now, "webui")
+    due = force or await asyncio.to_thread(pypi_client.due_for_check, path, now, "webui")
     if due:
         latest = await asyncio.to_thread(pypi_client.latest_version, timeout=2.0)
         # Record/cache the result

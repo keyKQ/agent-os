@@ -123,6 +123,28 @@ async def test_updates_check_throttling_and_cache(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+async def test_updates_check_force_bypasses_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_latest(monkeypatch, "2099.1.1")
+    ctx = RpcContext(conn_id="test", config=GatewayConfig())
+
+    response1 = await get_dispatcher().dispatch("req-1", "updates.check", {}, ctx)
+    assert response1.payload["latest"] == "2099.1.1"
+
+    # A manual click passes force=True and must see the newer PyPI release
+    # even though the throttle window has not elapsed.
+    _mock_latest(monkeypatch, "2099.2.2")
+    response2 = await get_dispatcher().dispatch("req-2", "updates.check", {"force": True}, ctx)
+    assert response2.ok is True
+    assert response2.payload["latest"] == "2099.2.2"
+    assert response2.payload["status"] == "outdated"
+
+    # Forcing still respects the opt-out.
+    monkeypatch.setenv("AGENTOS_NO_UPDATE_NOTICE", "1")
+    response3 = await get_dispatcher().dispatch("req-3", "updates.check", {"force": True}, ctx)
+    assert response3.payload["status"] == "offline"
+
+
+@pytest.mark.asyncio
 async def test_updates_check_namespaced_from_cli(monkeypatch: pytest.MonkeyPatch) -> None:
     from agentos.compat.pypi_client import notice_state_path, read_state
 

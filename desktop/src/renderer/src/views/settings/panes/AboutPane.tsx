@@ -9,6 +9,7 @@ import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { formatUptime } from '../logic'
 import { Card, Head, Notice, Row, Value } from '../parts'
+import agentosMark from '@/assets/agentos-mark.png'
 
 const REPO = 'https://github.com/use-agent-os/agent-os'
 const LINKS = [
@@ -53,7 +54,8 @@ export function AboutPane() {
     queryFn: () => rpc.call<StatusResult>('status'),
   })
   const updates = useMutation({
-    mutationFn: () => rpc.call<UpdateResult>('updates.check'),
+    // A click is an explicit ask: skip the gateway's 24h cache and hit PyPI now.
+    mutationFn: () => rpc.call<UpdateResult>('updates.check', { force: true }),
   })
 
   const open = (url: string) => void desktopApi().app.openExternal(url)
@@ -63,7 +65,7 @@ export function AboutPane() {
       <Head title={t('settings.section.about')} />
       <div className="stg-hero">
         <div className="stg-hero__mark" aria-hidden>
-          <span className="font-display text-2xl font-[640] tracking-tight">A</span>
+          <img src={agentosMark} alt="" draggable={false} />
         </div>
         <div>
           <div className="stg-hero__name">{t('settings.about.app')}</div>
