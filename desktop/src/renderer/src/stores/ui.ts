@@ -53,9 +53,17 @@ interface UiStore {
   sessionQuery: string
   /** The Scheduled jobs panel is a layer over the window, not a route. */
   jobsOpen: boolean
+  /** Skills is the same kind of layer: browse, install, then back to the chat. */
+  skillsOpen: boolean
   /** Settings is a sheet over the window too; remembers the section between opens. */
   settingsOpen: boolean
   settingsSection: SettingsSection
+  /**
+   * Text waiting to be dropped into the composer, written by Skills → "Use in
+   * chat" and drained by the chat view once its composer is mounted. One-shot:
+   * nothing is sent, the user still presses Return.
+   */
+  pendingPrompt: string | null
   /** Project folders currently disclosed in the sidebar. */
   openFolders: ReadonlySet<string>
   /** The inline "new project" row is showing in the sidebar. */
@@ -67,10 +75,14 @@ interface UiStore {
   openJobs(): void
   closeJobs(): void
   toggleJobs(): void
+  openSkills(): void
+  closeSkills(): void
+  toggleSkills(): void
   openSettings(section?: SettingsSection): void
   closeSettings(): void
   toggleSettings(): void
   setSettingsSection(section: SettingsSection): void
+  setPendingPrompt(text: string | null): void
   toggleFolder(id: string): void
   setFolderOpen(id: string, open: boolean): void
   startCreatingProject(): void
@@ -83,8 +95,10 @@ export const useUi = create<UiStore>((set) => ({
   sidebarWidth: loadWidth(),
   sessionQuery: '',
   jobsOpen: false,
+  skillsOpen: false,
   settingsOpen: false,
   settingsSection: DEFAULT_SECTION,
+  pendingPrompt: null,
   openFolders: loadOpenFolders(),
   creatingProject: false,
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
@@ -98,19 +112,26 @@ export const useUi = create<UiStore>((set) => ({
     set({ sidebarWidth: SIDEBAR_DEFAULT, sidebarOpen: true })
   },
   setSessionQuery: (sessionQuery) => set({ sessionQuery }),
-  // One sheet at a time: opening Settings closes Jobs and vice versa.
-  openJobs: () => set({ jobsOpen: true, settingsOpen: false }),
+  // One sheet at a time: opening any of Jobs, Skills or Settings closes the others.
+  openJobs: () => set({ jobsOpen: true, skillsOpen: false, settingsOpen: false }),
   closeJobs: () => set({ jobsOpen: false }),
-  toggleJobs: () => set((s) => ({ jobsOpen: !s.jobsOpen })),
+  toggleJobs: () => set((s) => ({ jobsOpen: !s.jobsOpen, skillsOpen: false, settingsOpen: false })),
+  openSkills: () => set({ skillsOpen: true, jobsOpen: false, settingsOpen: false }),
+  closeSkills: () => set({ skillsOpen: false }),
+  toggleSkills: () =>
+    set((s) => ({ skillsOpen: !s.skillsOpen, jobsOpen: false, settingsOpen: false })),
   openSettings: (section) =>
     set((s) => ({
       settingsOpen: true,
       jobsOpen: false,
+      skillsOpen: false,
       settingsSection: section ?? s.settingsSection,
     })),
   closeSettings: () => set({ settingsOpen: false }),
-  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, jobsOpen: false })),
+  toggleSettings: () =>
+    set((s) => ({ settingsOpen: !s.settingsOpen, jobsOpen: false, skillsOpen: false })),
   setSettingsSection: (settingsSection) => set({ settingsSection }),
+  setPendingPrompt: (pendingPrompt) => set({ pendingPrompt }),
   toggleFolder: (id) =>
     set((s) => {
       const next = new Set(s.openFolders)

@@ -14,6 +14,7 @@ import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
 import { JobsPanel } from '~/views/jobs/JobsPanel'
 import { SettingsPanel } from '~/views/settings/SettingsPanel'
+import { SkillsPanel } from '~/views/skills/SkillsPanel'
 
 /** Window chrome: translucent full-height sidebar, then toolbar + routed content. */
 export function AppShell() {
@@ -34,6 +35,7 @@ export function AppShell() {
       </div>
       {/* Layers over the whole window, whichever route is showing. */}
       <JobsPanel />
+      <SkillsPanel />
       <SettingsPanel />
       <PetOverlay />
     </div>
@@ -46,13 +48,45 @@ function useOpenSettingsFromMenu() {
   useEffect(() => desktopApi().settings.onOpenRequested(() => openSettings()), [openSettings])
 }
 
-/** ⌘, settings · ⌘N new session · ⌘⇧S sidebar. Registered with the console's
- *  registry so they show in its cheat sheet and respect open overlays. */
+/** ⌘, settings · ⌘N new session · ⌘⇧S sidebar · ⌘⇧K skills · ⌘⇧J jobs.
+ *  Registered with the console's registry so they show in its cheat sheet
+ *  and respect open overlays. */
 function useShellShortcuts() {
   const navigate = useNavigate()
   const toggleSettings = useUi((s) => s.toggleSettings)
   const toggleSidebar = useUi((s) => s.toggleSidebar)
+  const toggleSkills = useUi((s) => s.toggleSkills)
+  const toggleJobs = useUi((s) => s.toggleJobs)
   const category = t('settings.shortcuts.app')
+
+  // Sheets toggle even while one is up: ⌘⇧K over Settings swaps to Skills,
+  // and pressed again it closes, the way ⌘, already behaves.
+  useKeyboardShortcut(
+    {
+      combo: 'mod+shift+k',
+      description: t('settings.shortcuts.skills'),
+      category,
+      allowInInputs: true,
+      allowWithOverlays: true,
+    },
+    (e) => {
+      e.preventDefault()
+      toggleSkills()
+    },
+  )
+  useKeyboardShortcut(
+    {
+      combo: 'mod+shift+j',
+      description: t('settings.shortcuts.jobs'),
+      category,
+      allowInInputs: true,
+      allowWithOverlays: true,
+    },
+    (e) => {
+      e.preventDefault()
+      toggleJobs()
+    },
+  )
 
   useKeyboardShortcut(
     {

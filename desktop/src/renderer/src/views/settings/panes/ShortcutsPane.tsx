@@ -10,6 +10,8 @@ interface Shortcut {
 const APP: readonly Shortcut[] = [
   { keys: ['⌘', 'N'], label: 'settings.shortcuts.newSession' },
   { keys: ['⌘', ','], label: 'settings.shortcuts.settings' },
+  { keys: ['⌘', '⇧', 'K'], label: 'settings.shortcuts.skills' },
+  { keys: ['⌘', '⇧', 'J'], label: 'settings.shortcuts.jobs' },
   { keys: ['⌘', '⇧', 'S'], label: 'settings.shortcuts.toggleSidebar' },
   { keys: ['⌘', '+'], label: 'settings.shortcuts.zoomIn' },
   { keys: ['⌘', '−'], label: 'settings.shortcuts.zoomOut' },

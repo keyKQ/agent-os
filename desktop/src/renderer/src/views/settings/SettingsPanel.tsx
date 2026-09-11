@@ -14,11 +14,13 @@ import { NotificationsPane } from './panes/NotificationsPane'
 import { ProvidersPane } from './panes/ProvidersPane'
 import { RouterPane } from './panes/RouterPane'
 import { ShortcutsPane } from './panes/ShortcutsPane'
+import { SkillsPane } from './panes/SkillsPane'
 import { SETTINGS_GROUPS, type SettingsSection } from './sections'
 
 const PANE: Record<SettingsSection, () => React.JSX.Element> = {
   providers: ProvidersPane,
   router: RouterPane,
+  skills: SkillsPane,
   gateway: GatewayPane,
   appearance: AppearancePane,
   notifications: NotificationsPane,

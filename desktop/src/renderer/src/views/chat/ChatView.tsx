@@ -37,6 +37,7 @@ import { ease, spring } from '~/lib/motion'
 import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
 import { useSettings } from '~/stores/settings'
+import { useUi } from '~/stores/ui'
 import { ProjectChip } from './ProjectChip'
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
@@ -167,6 +168,28 @@ function ConnectedChat() {
   const regenerateMessage = useCallback((text: string) => {
     regenerateMessageRef.current(text)
   }, [])
+
+  // Skills → "Use in chat" leaves text in the UI store. Drop it into the
+  // composer of whichever chat is showing, once, and forget it. Nothing is
+  // sent: the user still presses Return. Two paths in: a prompt written while
+  // this chat is up (the subscription), or one written just before it mounted
+  // (the deferred first read, after the composer ref has attached).
+  useEffect(() => {
+    const drain = () => {
+      const text = useUi.getState().pendingPrompt
+      if (!text) return
+      useUi.getState().setPendingPrompt(null)
+      editMessage(text)
+    }
+    const first = window.setTimeout(drain, 0)
+    const unsubscribe = useUi.subscribe((s, prev) => {
+      if (s.pendingPrompt && s.pendingPrompt !== prev.pendingPrompt) drain()
+    })
+    return () => {
+      window.clearTimeout(first)
+      unsubscribe()
+    }
+  }, [editMessage])
 
   const route = useRoutePin(rpc, sessionKey)
 

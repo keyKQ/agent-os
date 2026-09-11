@@ -26,6 +26,22 @@ export const settings = {
   'settings.section.providers': 'Providers',
   'settings.section.providers.blurb':
     'Who answers your messages, with which credentials, and the model it falls back to.',
+  'settings.section.skills': 'Skills',
+  'settings.section.skills.blurb': 'What the agent can do, and where more comes from.',
+  'settings.skills.installed': 'Installed',
+  'settings.skills.ready': 'Ready',
+  'settings.skills.needsSetup': 'Needs setup',
+  'settings.skills.disabled': 'Disabled',
+  'settings.skills.offered': 'Offered to the agent',
+  'settings.skills.open': 'Open Skills',
+  'settings.skills.library': 'Library',
+  'settings.skills.library.blurb':
+    'Browse what is installed, install from a partner catalog, the community hub or a GitHub URL, and fix anything that needs setup.',
+  'settings.skills.catalogs': 'Catalogs',
+  'settings.skills.catalogs.blurb':
+    'Robinhood, Bankr, Aeon and Capminal ship curated skills; Community is the open hub.',
+  'settings.skills.needsSetup.help':
+    'A missing command or environment variable. Open Skills to fix it.',
   'settings.section.router': 'Pilot Router',
   'settings.section.router.blurb':
     'Sends each message to the cheapest tier that can handle it. Tune the ladder here.',
@@ -239,6 +255,8 @@ export const settings = {
   'settings.shortcuts.composer': 'Composer',
   'settings.shortcuts.newSession': 'New session',
   'settings.shortcuts.settings': 'Open settings',
+  'settings.shortcuts.skills': 'Open skills',
+  'settings.shortcuts.jobs': 'Open scheduled jobs',
   'settings.shortcuts.closeSheet': 'Close a sheet',
   'settings.shortcuts.toggleSidebar': 'Show or hide the sidebar',
   'settings.shortcuts.zoomIn': 'Larger UI',

@@ -1,4 +1,4 @@
-import { CalendarClock, PenSquare, type LucideIcon } from 'lucide-react'
+import { CalendarClock, PenSquare, Sparkles, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { t, type MessageKey } from '~/i18n'
 import { useUi } from '~/stores/ui'
@@ -10,18 +10,25 @@ interface Action {
   /** Navigate here (never shown as the selected place). */
   to?: string
   /** Or open a panel over the window instead of navigating. */
-  panel?: 'jobs'
+  panel?: 'jobs' | 'skills'
 }
 
 export const QUICK_ACTIONS: readonly Action[] = [
   { to: '/sessions', label: 'sidebar.new', icon: PenSquare, shortcut: ['⌘', 'N'] },
+  { panel: 'skills', label: 'sidebar.skills', icon: Sparkles },
   { panel: 'jobs', label: 'sidebar.jobs', icon: CalendarClock },
 ]
 
 /** Fixed destinations above the session list. */
 export function QuickActions() {
   const jobsOpen = useUi((s) => s.jobsOpen)
+  const skillsOpen = useUi((s) => s.skillsOpen)
   const openJobs = useUi((s) => s.openJobs)
+  const openSkills = useUi((s) => s.openSkills)
+  const panels = {
+    jobs: { open: jobsOpen, show: openJobs },
+    skills: { open: skillsOpen, show: openSkills },
+  } as const
 
   return (
     <nav aria-label={t('shell.brand')} className="flex flex-col gap-px px-2">
@@ -52,8 +59,8 @@ export function QuickActions() {
               type="button"
               className="mac-row w-full app-no-drag"
               aria-haspopup="dialog"
-              aria-expanded={jobsOpen}
-              onClick={openJobs}
+              aria-expanded={panels[panel].open}
+              onClick={panels[panel].show}
             >
               {body}
             </button>

@@ -94,6 +94,7 @@ export function bindActivation(fn: (target: NotifyTarget) => void): () => void {
     if (target.type === 'session') {
       useUi.getState().closeSettings()
       useUi.getState().closeJobs()
+      useUi.getState().closeSkills()
     }
     fn(target)
   }
