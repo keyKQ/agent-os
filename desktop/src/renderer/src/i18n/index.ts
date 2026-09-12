@@ -1,6 +1,7 @@
 import { jobs } from './en/jobs'
 import { notifications } from './en/notifications'
 import { projects } from './en/projects'
+import { sessions } from './en/sessions'
 import { settings } from './en/settings'
 import { shell } from './en/shell'
 import { skills } from './en/skills'
@@ -12,6 +13,7 @@ const en = {
   ...jobs,
   ...skills,
   ...projects,
+  ...sessions,
   ...settings,
   ...notifications,
 } as const

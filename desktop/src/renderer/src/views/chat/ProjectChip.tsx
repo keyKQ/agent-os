@@ -1,7 +1,7 @@
-import { Check, ChevronDown, Folder, FolderPlus } from 'lucide-react'
+import { ChevronDown, Folder, FolderPlus } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { projectId, projectName, sessionProjectId } from '@/views/projects/logic'
-import { Menu } from '~/components/Menu'
+import { Menu, MenuItem, MenuNote, MenuSep } from '~/components/menu/PopMenu'
 import { t } from '~/i18n'
 import { useMoveSession, useProjects } from '~/stores/projects'
 import { useSessions } from '~/stores/sessions'
@@ -52,64 +52,31 @@ export function ProjectChip({ sessionKey }: { sessionKey: string }) {
         <ChevronDown className="size-3 opacity-60" strokeWidth={2} aria-hidden />
       </button>
       {open ? (
-        <Menu onClose={close} label={t('projects.menu.label')}>
-          {projects.length === 0 ? (
-            <p className="proj-menu__note">{t('projects.menu.empty')}</p>
-          ) : null}
+        <Menu onClose={close} label={t('projects.menu.label')} align="start">
+          {projects.length === 0 ? <MenuNote>{t('projects.menu.empty')}</MenuNote> : null}
           {projects.map((p) => {
             const id = projectId(p)
             const selected = id === currentId
             return (
-              <button
+              <MenuItem
                 key={id}
-                type="button"
                 role="menuitemradio"
-                aria-checked={selected}
-                className="proj-menu__item"
-                onClick={() => {
-                  close()
+                checked={selected}
+                label={projectName(p)}
+                onSelect={() => {
                   if (!selected) move(sessionKey, p)
                 }}
-              >
-                <span className="proj-menu__check" aria-hidden>
-                  {selected ? <Check className="size-3.5" strokeWidth={2.5} /> : null}
-                </span>
-                <span className="proj-menu__label">{projectName(p)}</span>
-              </button>
+              />
             )
           })}
           {current ? (
             <>
-              <div className="proj-menu__sep" role="separator" />
-              <button
-                type="button"
-                role="menuitem"
-                className="proj-menu__item"
-                onClick={() => {
-                  close()
-                  move(sessionKey, null)
-                }}
-              >
-                <span className="proj-menu__check" aria-hidden />
-                <span className="proj-menu__label">{t('projects.menu.remove')}</span>
-              </button>
+              <MenuSep />
+              <MenuItem label={t('projects.menu.remove')} onSelect={() => move(sessionKey, null)} />
             </>
           ) : null}
-          <div className="proj-menu__sep" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            className="proj-menu__item"
-            onClick={() => {
-              close()
-              startCreating()
-            }}
-          >
-            <span className="proj-menu__check" aria-hidden>
-              <FolderPlus className="size-3.5" strokeWidth={1.75} />
-            </span>
-            <span className="proj-menu__label">{t('projects.menu.create')}</span>
-          </button>
+          <MenuSep />
+          <MenuItem icon={FolderPlus} label={t('projects.menu.create')} onSelect={startCreating} />
         </Menu>
       ) : null}
     </div>

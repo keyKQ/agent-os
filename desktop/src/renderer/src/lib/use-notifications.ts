@@ -11,6 +11,7 @@ import { t } from '~/i18n'
 import { desktopApi, isDesktop } from '~/lib/desktop-api'
 import { useGateway } from '~/stores/gateway'
 import { useNotifyCenter, unseenCount } from '~/stores/notify-center'
+import { useSessionMarks } from '~/stores/session-marks'
 import { useSessions } from '~/stores/sessions'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
@@ -77,7 +78,13 @@ function useSessionRunSignals(): void {
       return
     }
     const preview = useSettings.getState().settings.notifications.preview
+    const onScreen = currentSessionKey(window.location.hash || window.location.pathname)
     for (const run of finished) {
+      // A reply that settled while the user was elsewhere (another session,
+      // another app) leaves the row bold until it is opened.
+      if (run.key !== onScreen || !document.hasFocus()) {
+        useSessionMarks.getState().setUnread(run.key, true)
+      }
       const kind = runKind(run.status)
       const failedWhy = excerpt(String(rowTerminalMessage(rows, run.key) ?? ''))
       void notify({
@@ -246,16 +253,31 @@ function useMuteExpiry(): void {
   }, [muteUntil, update])
 }
 
-/** Opening a session reads every notification that pointed at it. */
+/** The session key a route path points at, or null off the chat route. */
+export function currentSessionKey(path: string): string | null {
+  const m = /\/sessions\/([^/?#]+)/.exec(path)
+  if (!m?.[1]) return null
+  try {
+    return decodeURIComponent(m[1])
+  } catch {
+    return null
+  }
+}
+
+/** Opening a session reads every notification that pointed at it, and the row. */
 function useSeenOnOpen(): void {
   const { pathname } = useLocation()
   useEffect(() => {
-    const m = /^\/sessions\/([^/]+)/.exec(pathname)
-    if (!m?.[1]) return
-    try {
-      useNotifyCenter.getState().markSessionSeen(decodeURIComponent(m[1]))
-    } catch {
-      /* malformed key in the URL: nothing to mark */
+    const key = currentSessionKey(pathname)
+    if (!key) return
+    const read = () => {
+      useNotifyCenter.getState().markSessionSeen(key)
+      useSessionMarks.getState().setUnread(key, false)
     }
+    read()
+    // A reply that landed while the window was in the background is read
+    // the moment the user comes back to it.
+    window.addEventListener('focus', read)
+    return () => window.removeEventListener('focus', read)
   }, [pathname])
 }

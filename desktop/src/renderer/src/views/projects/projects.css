@@ -219,93 +219,13 @@
   box-shadow: inset 0 0 0 1.5px var(--primary);
 }
 
-/* ── Menus (shared by the page's "…" and the chat's project chip) ────────── */
+/* ── Menus ───────────────────────────────────────────────────────────────── */
+/* The panels themselves are components/menu/menu.css; the page's "…" and the
+   chat's project chip only need a positioned anchor. */
 
 .proj-more,
 .proj-chip__anchor {
   position: relative;
-}
-.proj-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: var(--z-overlay);
-  display: flex;
-  min-width: 200px;
-  max-width: 280px;
-  flex-direction: column;
-  padding: 4px;
-  border-radius: var(--radius);
-  background: var(--popover);
-  box-shadow:
-    0 0 0 0.5px var(--border),
-    0 12px 32px rgba(0, 0, 0, 0.32),
-    0 2px 6px rgba(0, 0, 0, 0.16);
-  animation: proj-menu-in 120ms cubic-bezier(0.32, 0.72, 0, 1);
-  transform-origin: top right;
-}
-.proj-chip__anchor .proj-menu {
-  right: auto;
-  left: 0;
-  transform-origin: top left;
-}
-@keyframes proj-menu-in {
-  from {
-    opacity: 0;
-    transform: scale(0.96) translateY(-3px);
-  }
-}
-.proj-menu__item {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  height: 26px;
-  padding: 0 8px 0 6px;
-  border-radius: var(--radius-compact);
-  text-align: left;
-  font-size: 12.5px;
-  color: var(--foreground);
-}
-.proj-menu__item:hover,
-.proj-menu__item:focus-visible {
-  outline: none;
-  color: var(--primary-foreground);
-  background: var(--primary);
-}
-.proj-menu__item[data-tone='danger'] {
-  color: var(--danger);
-}
-.proj-menu__item[data-tone='danger']:hover,
-.proj-menu__item[data-tone='danger']:focus-visible {
-  color: #fff;
-  background: var(--danger);
-}
-.proj-menu__item svg {
-  justify-self: center;
-}
-.proj-menu__check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-}
-.proj-menu__label {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.proj-menu__sep {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--hairline);
-}
-.proj-menu__note {
-  padding: 5px 8px;
-  font-size: 11.5px;
-  color: var(--dim);
 }
 
 /* The chat header chip: reads where this chat is filed. */

@@ -1,5 +1,5 @@
 import './pet.css'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { useRpc } from '@/app/providers'
 import {
   PET_FRAME_H,
@@ -13,13 +13,16 @@ import {
 } from '@shared/pet'
 import { useSettings } from '~/stores/settings'
 import { bindPetSignals, usePet } from '~/stores/pet'
+import {
+  anchorFromPixels,
+  defaultAnchor,
+  parseStoredAnchor,
+  pixelsFromAnchor,
+  type PetAnchor,
+  type Size,
+} from './logic'
 
 const POS_KEY = 'agentos-desktop.petPosition'
-
-interface Pos {
-  x: number
-  y: number
-}
 
 interface Sheet extends SheetGeometry {
   /** Real frames per row (see rowFrameCounts). */
@@ -28,22 +31,45 @@ interface Sheet extends SheetGeometry {
   tainted?: boolean
 }
 
-function loadPos(): Pos | null {
+function loadAnchor(size: Size, win: Size): PetAnchor | null {
   try {
-    const raw = JSON.parse(localStorage.getItem(POS_KEY) || 'null')
-    if (raw && Number.isFinite(raw.x) && Number.isFinite(raw.y)) return { x: raw.x, y: raw.y }
+    return parseStoredAnchor(JSON.parse(localStorage.getItem(POS_KEY) || 'null'), size, win)
   } catch {
-    /* storage unavailable */
+    return null
   }
-  return null
 }
 
-function savePos(pos: Pos): void {
+function saveAnchor(anchor: PetAnchor): void {
   try {
-    localStorage.setItem(POS_KEY, JSON.stringify(pos))
+    localStorage.setItem(POS_KEY, JSON.stringify(anchor))
   } catch {
     /* storage unavailable */
   }
+}
+
+/** The window's inner size, re-read on every resize. */
+function subscribeWindow(onChange: () => void): () => void {
+  // The last resize event of a burst can fire before the metrics settle;
+  // read once more on the next frame so the pet ends on the final size.
+  let frame = 0
+  const onResize = () => {
+    onChange()
+    cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(onChange)
+  }
+  window.addEventListener('resize', onResize)
+  return () => {
+    window.removeEventListener('resize', onResize)
+    cancelAnimationFrame(frame)
+  }
+}
+function readWindow(): string {
+  return `${window.innerWidth}x${window.innerHeight}`
+}
+function useWindowSize(): Size {
+  const key = useSyncExternalStore(subscribeWindow, readWindow)
+  const [w, h] = key.split('x').map(Number)
+  return { w: w ?? 0, h: h ?? 0 }
 }
 
 /** Alpha threshold at or below which a frame counts as transparent padding. */
@@ -102,7 +128,17 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
   const state = usePet((s) => s.state)
   const poke = usePet((s) => s.poke)
   const [sheet, setSheet] = useState<Sheet | null>(null)
-  const [pos, setPos] = useState<Pos | null>(loadPos)
+  const win = useWindowSize()
+  // Whole pixels: a fractional frame width puts every step on a sub-pixel
+  // boundary and the sprite shimmers.
+  const w = Math.max(1, Math.round(PET_FRAME_W * scale))
+  const h = Math.max(1, Math.round(PET_FRAME_H * scale))
+  const size: Size = { w, h }
+  // The spot is kept as a share of the free space, so a resized window
+  // carries the pet along and can never strand it off screen.
+  const [anchor, setAnchor] = useState<PetAnchor>(
+    () => loadAnchor(size, win) ?? defaultAnchor(size, win),
+  )
   const drag = useRef<{ dx: number; dy: number; moved: boolean } | null>(null)
   const url = petSheetUrl(slug)
 
@@ -126,10 +162,7 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
   }, [url])
 
   if (!sheet) return null
-  // Whole pixels: a fractional frame width puts every step on a sub-pixel
-  // boundary and the sprite shimmers.
-  const w = Math.max(1, Math.round(PET_FRAME_W * scale))
-  const h = Math.max(1, Math.round(PET_FRAME_H * scale))
+  const pos = pixelsFromAnchor(anchor, size, win)
   const row = petStateRow(state, sheet.rows)
   const frames = sheet.frames[row] ?? 1
   const style: React.CSSProperties = {
@@ -141,7 +174,8 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
     ['--pet-frame-w' as string]: `${w}px`,
     ['--pet-frames' as string]: String(frames),
     ['--pet-loop' as string]: `${Math.round((PET_LOOP_MS * frames) / 6)}ms`,
-    ...(pos ? { left: pos.x, top: pos.y, right: 'auto', bottom: 'auto' } : {}),
+    left: pos.x,
+    top: pos.y,
   }
 
   function onPointerDown(e: React.PointerEvent<HTMLButtonElement>) {
@@ -151,17 +185,21 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
   }
   function onPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
     if (!drag.current) return
-    const x = Math.max(0, Math.min(window.innerWidth - w, e.clientX - drag.current.dx))
-    const y = Math.max(0, Math.min(window.innerHeight - h, e.clientY - drag.current.dy))
     drag.current.moved = true
-    setPos({ x, y })
+    setAnchor(
+      anchorFromPixels(
+        { x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy },
+        size,
+        win,
+      ),
+    )
   }
   function onPointerUp(e: React.PointerEvent<HTMLButtonElement>) {
     const d = drag.current
     drag.current = null
     e.currentTarget.releasePointerCapture(e.pointerId)
-    if (d?.moved && pos) savePos(pos)
-    else if (!d?.moved) poke()
+    if (d?.moved) saveAnchor(anchor)
+    else if (d) poke()
   }
 
   return (

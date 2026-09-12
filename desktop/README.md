@@ -63,10 +63,12 @@ desktop/
             ├── views/settings/ # Settings sheet: SettingsPanel (rail + section), one pane
             │                 #   per section (providers, router, gateway, appearance,
             │                 #   behaviour, shortcuts, advanced, about), parts.tsx, logic.ts
-            ├── components/   #   Sidebar (+ resizer, project folders, session list),
-            │                 #   Toolbar, Menu, composer/
+            ├── components/   #   Sidebar (+ resizer, project folders, session list with
+            │                 #   its row menu and view menu), Toolbar, menu/ (PopMenu,
+            │                 #   Menu, items, submenus), pet/, composer/
             ├── theme/        #   theme system (see below)
-            ├── stores/       #   zustand: gateway, sessions, projects, live, settings, ui
+            ├── stores/       #   zustand: gateway, sessions, projects, live, settings, ui,
+            │                 #   session-marks (pin/archive/unread), session-view
             ├── lib/          #   desktop-api bridge, motion curves, relative time
             ├── i18n/         #   t() catalog for desktop-only copy
             └── assets/fonts/ #   Bricolage Grotesque (wordmark) + JetBrains Mono
@@ -218,7 +220,9 @@ wave → waiting → run → review → idle).
   `task.succeeded` / `task.failed` / `task.timeout` beats that hold ~3 s.
 - `components/pet/PetOverlay.tsx` paints it: one `<button>` whose
   background-position steps across the row (petdex's own `steps()` CSS),
-  draggable (position remembered), click to wave. Sheets are left-packed
+  draggable (the spot is remembered as a fraction of the window's free
+  space, so a resized window carries the pet along and never strands it
+  off screen; see `components/pet/logic.ts`), click to wave. Sheets are left-packed
   (a wave may have 4 frames, a jump 5), so the sheet is decoded once on a
   canvas to count each row's real frames (`rowFrameCounts`) and only those
   are stepped; the scheme is CORS-open for that pixel read. Frame sizes are

@@ -3,8 +3,6 @@
 
 .pet {
   position: fixed;
-  right: 28px;
-  bottom: 96px;
   z-index: calc(var(--z-toolbar) + 5);
   padding: 0;
   border: 0;

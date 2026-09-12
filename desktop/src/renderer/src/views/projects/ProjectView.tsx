@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { ModalShell } from '@/components/ModalShell'
 import { projectAgentId, projectId, projectName, type RawProject } from '@/views/projects/logic'
-import { Menu } from '~/components/Menu'
+import { Menu, MenuItem } from '~/components/menu/PopMenu'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -243,19 +243,12 @@ function ProjectPage({ project }: { project: RawProject }) {
             </Button>
             {menuOpen ? (
               <Menu onClose={() => setMenuOpen(false)}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="proj-menu__item"
-                  data-tone="danger"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    setConfirmDelete(true)
-                  }}
-                >
-                  <Trash2 className="size-3.5" strokeWidth={1.75} aria-hidden />
-                  {t('projects.page.delete')}
-                </button>
+                <MenuItem
+                  icon={Trash2}
+                  tone="danger"
+                  label={t('projects.page.delete')}
+                  onSelect={() => setConfirmDelete(true)}
+                />
               </Menu>
             ) : null}
           </div>

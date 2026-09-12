@@ -272,8 +272,14 @@ function ConnectedChat() {
         if (!cancelled) setSessionName('')
       }
     })()
+    // A rename from the sidebar (or another window) lands as an event.
+    const off = rpc.on('sessions.changed', (payload) => {
+      const p = (payload ?? {}) as { key?: string; reason?: string; display_name?: string }
+      if (p.key === sessionKey && p.reason === 'renamed') setSessionName(p.display_name || '')
+    })
     return () => {
       cancelled = true
+      off()
     }
   }, [rpc, sessionKey, runStatus])
 
