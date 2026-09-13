@@ -26,7 +26,7 @@ import {
   shortAddress,
 } from './logic'
 import { Empty, StatusPill } from './parts'
-import { providerLabel, type Order } from './types'
+import { isWrappedEth, providerLabel, type Order } from './types'
 
 /** "Received WETH" with the one click that turns it back into ETH. */
 export function UnwrapNote({
@@ -246,7 +246,10 @@ function OrderRow({
           {t('trading.orders.note')}: {order.note}
         </div>
       ) : null}
-      {order.deliveredToken && order.status === 'confirmed' ? (
+      {order.deliveredToken &&
+      order.status === 'confirmed' &&
+      isWrappedEth(order.deliveredToken) &&
+      !isWrappedEth(order.tokenOut) ? (
         <div className="trd-order__note" data-testid="order-delivered">
           <UnwrapNote chainId={order.chainId} wallet={order.wallet} />
         </div>

@@ -98,6 +98,29 @@ describe('Orders · approvals', () => {
     expect(openExternal).toHaveBeenCalledWith('https://basescan.org/tx/0xabc')
   })
 
+  it('does not offer to unwrap when the delivered token is the one asked for', () => {
+    renderDesk(
+      <Orders
+        orders={[
+          order({
+            orderId: 'u1',
+            status: 'confirmed',
+            tokenIn: { ...USDC, symbol: 'ETH', native: true, address: '0x0' },
+            tokenOut: USDC,
+            deliveredToken: USDC,
+            expiresAt: null,
+          }),
+        ]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    expect(screen.queryByTestId('order-delivered')).toBeNull()
+  })
+
   it('offers to unwrap when a swap to ETH delivered WETH', async () => {
     rpcCall.mockImplementation(async (method: string) =>
       method === 'trading.unwrap' ? { txHash: '0xdef' } : {},

@@ -1608,3 +1608,36 @@ body[data-dragging] .trd-book__handle {
     transition: none;
   }
 }
+
+/* ── Orders inside the BOOK ─────────────────────────────────────────────────
+   The order row is laid out for the wide desk (facts left, status and
+   actions right). In a 300–520 px rail that grid overflows, so it stacks:
+   status line first, then the legs, facts and actions in one column. */
+.trd-book .trd-order {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 10px 12px;
+}
+.trd-book .trd-order__side {
+  order: -1;
+  grid-row: auto;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trd-book .trd-order__head {
+  flex-wrap: wrap;
+  font-size: 12.5px;
+}
+.trd-book .trd-order__meta {
+  gap: 2px 10px;
+  font-size: 11px;
+}
+.trd-book .trd-order__actions {
+  margin-left: auto;
+}
+.trd-book .trd-order__reason,
+.trd-book .trd-order__note {
+  overflow-wrap: anywhere;
+}
