@@ -166,6 +166,23 @@ def _sandbox_effectively_off() -> bool:
     return runtime is None or not bool(getattr(effective, "sandbox_enabled", False))
 
 
+def _add_session_env(env: dict[str, str]) -> None:
+    """Tell a child process which agent session is running it.
+
+    ``agentos trade swap`` reads ``AGENTOS_SESSION_KEY`` / ``AGENTOS_AGENT`` to
+    mark the order as agent-initiated and to link it to the chat that asked,
+    so the desktop can dock the approval card in that conversation. Explicit
+    overrides passed by the caller win.
+    """
+    ctx = current_tool_context.get()
+    if ctx is None:
+        return
+    if ctx.session_key and not env.get("AGENTOS_SESSION_KEY"):
+        env["AGENTOS_SESSION_KEY"] = ctx.session_key
+    if ctx.agent_id and not env.get("AGENTOS_AGENT"):
+        env["AGENTOS_AGENT"] = ctx.agent_id
+
+
 def _context_elevated_mode() -> str | None:
     ctx = current_tool_context.get()
     if ctx is None:
@@ -807,6 +824,7 @@ async def exec_command(
     # AgentOS's own provider credentials do not cross into a child process;
     # see tools/env_passthrough.py for why the rest of the environment does.
     merged_env = build_subprocess_env(extra=env)
+    _add_session_env(merged_env)
     effective_timeout = _resolve_exec_timeout(timeout)
 
     # /elevated on|bypass|full — route exec around the sandbox backend so host
