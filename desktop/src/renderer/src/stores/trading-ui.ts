@@ -11,6 +11,8 @@ const WIDTH_KEY = 'agentos-desktop.trading.bookWidth'
 const OPEN_KEY = 'agentos-desktop.trading.bookOpen'
 const SESSION_KEY = 'agentos-desktop.trading.sessionKey'
 const FILED_KEY = 'agentos-desktop.trading.sessionFiled'
+/** The chat the user left to enter Trading mode; the pill's "Chat" goes back there. */
+const RETURN_KEY = 'agentos-desktop.trading.returnSession'
 
 function loadWidth(): number {
   try {
@@ -94,6 +96,32 @@ export function readTradingSessionKey(): string {
 export function writeTradingSessionKey(key: string): void {
   save(SESSION_KEY, key)
   save(FILED_KEY, 'false')
+}
+
+/** The desk's key, minted on first need so mode derivation can read it synchronously. */
+export function ensureTradingSessionKey(mint: () => string): string {
+  const existing = readTradingSessionKey()
+  if (existing) return existing
+  const fresh = mint()
+  writeTradingSessionKey(fresh)
+  return fresh
+}
+
+export function readReturnSession(): string | null {
+  try {
+    return sessionStorage.getItem(RETURN_KEY) || null
+  } catch {
+    return null
+  }
+}
+
+export function writeReturnSession(key: string | null): void {
+  try {
+    if (key) sessionStorage.setItem(RETURN_KEY, key)
+    else sessionStorage.removeItem(RETURN_KEY)
+  } catch {
+    /* storage unavailable */
+  }
 }
 
 export function readTradingSessionFiled(): boolean {

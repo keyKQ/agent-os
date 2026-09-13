@@ -298,6 +298,8 @@ export function useTradeLedger(onFocusApproval: (orderId: string | null) => void
   seams: TranscriptEventSeams
   /** Attach to the element the transcript renders into (idempotent). */
   bind: (root: HTMLElement | null) => void
+  /** Stop decorating (the chat left the desk); rows already drawn stay until the thread rebuilds. */
+  unbind: () => void
 } {
   const live = useRef(new Map<string, LiveCall>())
   const rootRef = useRef<HTMLElement | null>(null)
@@ -368,6 +370,12 @@ export function useTradeLedger(onFocusApproval: (orderId: string | null) => void
     run()
   }, [])
 
+  const unbind = useCallback(() => {
+    observerRef.current?.disconnect()
+    observerRef.current = null
+    rootRef.current = null
+  }, [])
+
   useEffect(
     () => () => {
       observerRef.current?.disconnect()
@@ -413,5 +421,5 @@ export function useTradeLedger(onFocusApproval: (orderId: string | null) => void
     [],
   )
 
-  return { seams, bind }
+  return { seams, bind, unbind }
 }

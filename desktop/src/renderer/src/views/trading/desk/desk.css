@@ -23,9 +23,67 @@
 
    Honesty: status is a word, not a spinner. No countdown the engine does not
    own. A duration appears only when it was measured. "Confirmed" needs a
-   hash and a confirmed status, together. */
+   hash and a confirmed status, together.
 
-.trd-page {
+   THE ONE EXCEPTION — the desk power-on (data-enter="trading", ~700 ms)
+   Trading is a mode of the chat, and the switch into it is the one event
+   the rules of stillness make room for: a single choreographed entrance,
+   then nothing moves. It reads as a desk being printed onto the chat.
+
+     0–120    the pane dims to the desk canvas; a 4%-ink dot grid fades in
+     80–420   a lime scan line sweeps top→bottom; what it passes "prints":
+              transcript rows and BOOK cards snap from .3/6px to rest,
+              12 ms apart by row
+     160–520  BOOK slides in from the right, the strip drops from the top,
+              the seats rise into place
+     380–700  the hero value counts up from 0 (Book.tsx), the allocation bar
+              draws left→right, "TRADING DESK" stamps at 8% ink and dissolves
+     600–700  one lime hairline pulse on the mode pill — then stillness
+
+   Resting identity after the entrance: the lime live dot in the pill and a
+   1 px lime hairline on the composer capsule. Leaving Trading is the short
+   reverse (data-enter="chat", 300 ms). Reduced motion takes the instant
+   path; a pending ask (data-still) skips the entrance entirely. Every
+   timing lives in the custom properties below, once. */
+
+.mode-shell {
+  --enter-total: 700ms;
+  --enter-dim: 120ms;
+  --enter-scan-start: 80ms;
+  --enter-scan: 340ms;
+  --enter-print-step: 12ms;
+  --enter-slide-start: 160ms;
+  --enter-slide: 360ms;
+  --enter-count-start: 380ms;
+  --enter-count: 320ms;
+  --enter-stamp-start: 380ms;
+  --enter-stamp: 320ms;
+  --enter-pulse-start: 600ms;
+  --enter-pulse: 100ms;
+  --leave-total: 300ms;
+  --desk-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --desk-ease-inout: cubic-bezier(0.45, 0, 0.2, 1);
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  isolation: isolate;
+}
+.mode-body {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.mode-body > .chat-desktop {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.trd-page,
+.mode-shell {
   --trd-up: var(--ok);
   --trd-down: var(--danger);
   --trd-row: 30px;
@@ -1078,6 +1136,417 @@ body[data-dragging] .trd-book__handle {
   .trd-book,
   .trd-quick {
     animation: none;
+    transition: none;
+  }
+}
+
+/* ── Mode pill (Chat | Trading) ──────────────────────────────────────────── */
+
+.trd-strip[data-mode='chat'] {
+  border-bottom-color: transparent;
+}
+.trd-strip__centre {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.trd-pill {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  height: 22px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-pill__thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  border-radius: var(--radius-pill);
+  background: var(--elevated);
+  box-shadow: 0 0 0 0.5px var(--border);
+  transition: transform 150ms var(--desk-ease-out);
+}
+.trd-pill[data-mode='trading'] .trd-pill__thumb {
+  transform: translateX(100%);
+}
+.trd-pill__seg {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 68px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--muted-foreground);
+  transition: color 100ms ease-out;
+}
+.trd-pill__seg[aria-selected='true'] {
+  color: var(--foreground);
+}
+.trd-pill__seg:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-pill__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--dim);
+  transition: background-color 150ms ease-out;
+}
+.trd-pill[data-mode='trading'] .trd-pill__dot {
+  background: var(--primary);
+}
+.trd-pill__dot[data-live] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+/* ── Gate banner (over the chat, never instead of it) ───────────────────── */
+
+.trd-gate {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 20px 0;
+  padding: 10px 12px 10px 14px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+  font-size: 12.5px;
+}
+.trd-gate__mark {
+  display: inline-flex;
+  color: var(--primary);
+}
+.trd-gate__text {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--muted-foreground);
+}
+.trd-gate__text b {
+  color: var(--foreground);
+}
+.trd-gate__actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+/* ── The chat inside the desk frame ─────────────────────────────────────── */
+
+.trd-frame > .chat-desktop {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+}
+.chat-desktop[data-desk] .chat-thread {
+  --chat-col: min(56rem, calc(100% - 3rem));
+}
+.chat-desktop[data-desk] .composer-shell {
+  padding-top: 0;
+}
+/* Resting identity: the capsule wears a lime hairline while at the desk. */
+.chat-desktop[data-desk] .composer {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.chat-desktop[data-desk][data-still] .chat-history-loading__dot,
+.chat-desktop[data-desk][data-still] .composer[data-busy='true']::after,
+.chat-desktop[data-desk][data-still] ~ .trd-book .trd-ring circle,
+.chat-desktop[data-desk][data-still] ~ .trd-book .trd-tick,
+.chat-desktop[data-desk][data-still] ~ .trd-book .trd-status[data-tone='live']::before {
+  animation-play-state: paused;
+}
+.chat-desktop[data-desk][data-still] .trd-card {
+  transition: none;
+}
+
+/* ── The entrance ────────────────────────────────────────────────────────── */
+
+/* 0–120: the pane dims to the desk canvas and the dot grid fades in. Both
+   are painted by the frame's own backdrop layers so nothing repaints twice. */
+.mode-shell[data-enter='trading'] .trd-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      circle at 1px 1px,
+      color-mix(in srgb, var(--foreground) 4%, transparent) 1px,
+      transparent 1.5px
+    ),
+    color-mix(in srgb, var(--background) 92%, var(--primary));
+  background-size:
+    14px 14px,
+    100% 100%;
+  animation: desk-dim var(--enter-dim) var(--desk-ease-out) both;
+}
+.mode-shell[data-enter='trading'] .trd-frame {
+  position: relative;
+}
+.mode-shell[data-enter='trading'] .trd-frame > * {
+  position: relative;
+  z-index: 1;
+}
+@keyframes desk-dim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 80–420: the scan line. 2 px of lime with a 24 px glow, screen-blended so
+   it lights what it crosses instead of covering it. */
+.mode-shell[data-enter='trading'] .trd-frame::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  height: 2px;
+  pointer-events: none;
+  background: var(--primary);
+  box-shadow:
+    0 0 24px 6px color-mix(in srgb, var(--primary) 55%, transparent),
+    0 0 2px 1px var(--primary);
+  mix-blend-mode: screen;
+  opacity: 0;
+  animation: desk-scan var(--enter-scan) linear var(--enter-scan-start) both;
+}
+@keyframes desk-scan {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  96% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(calc(100vh - 80px));
+    opacity: 0;
+  }
+}
+
+/* What the line passes, prints: rows and cards snap from .3/6px to rest,
+   staggered by row index so the print follows the sweep. */
+.mode-shell[data-enter='trading'] .chat-thread > .msg,
+.mode-shell[data-enter='trading'] .trd-book__hero,
+.mode-shell[data-enter='trading'] .trd-book__wallets,
+.mode-shell[data-enter='trading'] .trd-table tbody tr,
+.mode-shell[data-enter='trading'] .trd-book__stat {
+  animation: desk-print 180ms var(--desk-ease-out) both;
+  animation-delay: calc(var(--enter-scan-start) + var(--enter-print-step) * var(--row, 0));
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(2),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(2) {
+  --row: 2;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(3),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(3) {
+  --row: 4;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(4),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(4) {
+  --row: 6;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(5),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(5) {
+  --row: 8;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(6),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(6) {
+  --row: 10;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(7),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(7) {
+  --row: 12;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(8),
+.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(n + 8) {
+  --row: 14;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(9) {
+  --row: 16;
+}
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(n + 10) {
+  --row: 18;
+}
+.mode-shell[data-enter='trading'] .trd-book__wallets {
+  --row: 6;
+}
+.mode-shell[data-enter='trading'] .trd-book__stat {
+  --row: 4;
+}
+@keyframes desk-print {
+  from {
+    opacity: 0.3;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 160–520: the BOOK slides in from the right, the strip drops from the
+   top, the seats rise into place. */
+.mode-shell[data-enter='trading'] .trd-book {
+  animation: desk-slide-in var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
+}
+@keyframes desk-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mode-shell[data-enter='trading'] .trd-strip {
+  animation: desk-drop var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
+}
+@keyframes desk-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mode-shell[data-enter='trading'] .trd-seats,
+.mode-shell[data-enter='trading'] .trd-mstrip,
+.mode-shell[data-enter='trading'] .trd-mctl {
+  animation: desk-rise var(--enter-slide) var(--desk-ease-out) calc(var(--enter-slide-start) + 60ms)
+    both;
+}
+@keyframes desk-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 380–700: the allocation bar draws, the stamp lands and dissolves. The
+   hero count-up is JavaScript (Book.tsx) on the same clock. */
+.mode-shell[data-enter='trading'] .trd-book__alloc {
+  transform-origin: left center;
+  animation: desk-draw var(--enter-count) var(--desk-ease-out) var(--enter-count-start) both;
+}
+@keyframes desk-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+.trd-poweron {
+  position: absolute;
+  inset: 0 0 20%;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-family: var(--font-mono);
+  font-size: clamp(48px, 9vw, 112px);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--foreground);
+  opacity: 0;
+  animation: desk-stamp var(--enter-stamp) var(--desk-ease-inout) var(--enter-stamp-start) both;
+}
+@keyframes desk-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(1.04);
+    filter: blur(6px);
+  }
+  35% {
+    opacity: 0.08;
+    transform: none;
+    filter: blur(0);
+  }
+  70% {
+    opacity: 0.08;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
+
+/* 600–700: one hairline pulse on the pill, and the sequence is over. */
+.mode-shell[data-enter='trading'] .trd-pill {
+  animation: desk-pulse var(--enter-pulse) ease-out var(--enter-pulse-start) both;
+}
+@keyframes desk-pulse {
+  from {
+    box-shadow:
+      inset 0 0 0 0.5px var(--hairline),
+      0 0 0 1px var(--primary),
+      0 0 12px 2px color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  to {
+    box-shadow: inset 0 0 0 0.5px var(--hairline);
+  }
+}
+
+/* Leaving: the short reverse — the chat settles back from the desk wash. */
+.mode-shell[data-enter='chat'] .mode-body {
+  animation: desk-settle var(--leave-total) var(--desk-ease-inout) both;
+}
+@keyframes desk-settle {
+  from {
+    opacity: 0.6;
+    transform: translateY(4px);
+    filter: saturate(1.15);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-shell[data-enter] *,
+  .mode-shell[data-enter] *::before,
+  .mode-shell[data-enter] *::after,
+  .trd-poweron {
+    animation: none !important;
+  }
+  .trd-pill__thumb {
     transition: none;
   }
 }

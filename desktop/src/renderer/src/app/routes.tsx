@@ -1,7 +1,7 @@
 import { createHashRouter, Navigate } from 'react-router'
-import { ChatView } from '~/views/chat/ChatView'
 import { ProjectView } from '~/views/projects/ProjectView'
-import { TradingDesk } from '~/views/trading/desk/TradingDesk'
+import { SessionRoute } from '~/views/trading/desk/SessionRoute'
+import { TradingRedirect } from '~/views/trading/desk/TradingRedirect'
 import { AppShell } from './AppShell'
 
 // Hash routing: the packaged app loads index.html from disk (file://), where
@@ -23,10 +23,12 @@ export const router = createHashRouter([
     Component: AppShell,
     children: [
       { index: true, element: <Navigate to="/sessions" replace /> },
-      { path: 'sessions/:key?', Component: ChatView },
+      // A session is a chat — or, when it is the desk's own session, the
+      // trading desk around that same chat (views/trading/desk/SessionRoute).
+      { path: 'sessions/:key?', Component: SessionRoute },
       { path: 'projects/:id', Component: ProjectView },
-      // The trading desk is a page too: wallets, holdings, the swap ticket.
-      { path: 'trading', Component: TradingDesk },
+      // Trading is not a page: /trading forwards into the desk session.
+      { path: 'trading', Component: TradingRedirect },
     ],
   },
 ])

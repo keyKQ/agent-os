@@ -9,7 +9,7 @@ import {
   Star,
   Wallet as WalletIcon,
 } from 'lucide-react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -66,6 +66,7 @@ export function Book({
   onToggle,
   onSwitchProvider,
   highlightOrder,
+  entering = false,
 }: {
   wallets: Wallet[]
   primary: string | null
@@ -78,6 +79,8 @@ export function Book({
   onToggle: () => void
   onSwitchProvider: () => void
   highlightOrder: string | null
+  /** The desk is powering on: the hero value counts up once. */
+  entering?: boolean
 }) {
   const tab = useTradingUi((s) => s.bookTab)
   const setTab = useTradingUi((s) => s.setBookTab)
@@ -99,6 +102,7 @@ export function Book({
   const history = useHistory(walletAddress, undefined, !collapsed && tab === 'history')
   const totals = portfolio.data?.totals ?? EMPTY_TOTALS
   const holdings = portfolio.data?.holdings ?? []
+  const counted = useCountUp(totals.valueUsd, entering && !portfolio.isPending)
   const pendingCount = orders.orders.filter(isAwaitingApproval).length
   const byWallet = useMemo(() => {
     const m = new Map<string, number>()
@@ -245,6 +249,10 @@ export function Book({
               <b className="trd-book__value" data-testid="book-value">
                 {portfolio.isPending ? (
                   <span className="trd-skel" style={{ width: 120, height: 24 }} />
+                ) : counted !== null ? (
+                  <span className="trd-num" data-testid="book-value-counting">
+                    {formatUsd(counted)}
+                  </span>
                 ) : (
                   <Money value={totals.valueUsd} />
                 )}
@@ -381,4 +389,37 @@ function Stat({ label, value, toned }: { label: string; value: number; toned?: b
       <Money value={value} signed={toned} toned={toned} />
     </div>
   )
+}
+
+/* Entrance: the hero value counts from 0 to its figure over the window the
+   choreography reserves for it (see --enter-count-* in desk.css), then hands
+   back to the live, ticking value. Returns null when not counting. */
+const COUNT_DELAY_MS = 380
+const COUNT_MS = 320
+
+function useCountUp(target: number, active: boolean): number | null {
+  const [shown, setShown] = useState<number | null>(null)
+  const done = useRef(false)
+  useEffect(() => {
+    if (!active) return
+    done.current = false
+    const start = performance.now() + COUNT_DELAY_MS
+    let raf = requestAnimationFrame(function tick(now: number) {
+      const p = Math.min(1, Math.max(0, (now - start) / COUNT_MS))
+      const eased = 1 - Math.pow(1 - p, 3)
+      if (p < 1) {
+        setShown(target * eased)
+        raf = requestAnimationFrame(tick)
+      } else {
+        done.current = true
+        setShown(null)
+      }
+    })
+    return () => {
+      cancelAnimationFrame(raf)
+      done.current = false
+    }
+  }, [active, target])
+  if (!active || done.current) return null
+  return shown ?? 0
 }

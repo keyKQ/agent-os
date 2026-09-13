@@ -52,7 +52,7 @@ export interface MissionsApi {
   busy: boolean
 }
 
-export function useMissions(sessionKey: string): MissionsApi {
+export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   const connected = useConnection((s) => s.state === 'connected')
@@ -60,7 +60,7 @@ export function useMissions(sessionKey: string): MissionsApi {
 
   const query = useQuery<RawJob[]>({
     queryKey: MISSIONS_KEY,
-    enabled: connected,
+    enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
       const data = await rpc.call<RawJob[] | CronListResult>('cron.list', {})

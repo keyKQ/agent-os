@@ -42,6 +42,8 @@ import { isPlaceholderSessionName, shownSessionName } from '~/lib/session-name'
 import { configuredProvider } from '@/views/setup/logic'
 import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
+import { useDeskInstruments, type DeskProps } from '~/views/trading/desk/useDeskInstruments'
+import { useTradeLedger } from '~/views/trading/desk/useTradeLedger'
 
 /** After a run settles, when the name is still a placeholder: re-read at these offsets. */
 const PLACEHOLDER_RECHECK_MS = [4_000, 12_000, 40_000]
@@ -97,7 +99,7 @@ function runTone(status: string): 'ok' | 'warn' | 'danger' | 'dim' {
  * menu, route picker, attachments, pending queue, approvals — is the shared
  * web implementation talking to the same gateway.
  */
-export function ChatView() {
+export function ChatView({ desk = null }: { desk?: DeskProps | null } = {}) {
   const gatewayState = useGateway((s) => s.status.state)
   if (gatewayState !== 'running') {
     return (
@@ -111,10 +113,10 @@ export function ChatView() {
       </div>
     )
   }
-  return <ConnectedChat />
+  return <ConnectedChat desk={desk} />
 }
 
-function ConnectedChat() {
+function ConnectedChat({ desk }: { desk: DeskProps | null }) {
   const rpc = useRpc()
   const navigate = useNavigate()
   const reduce = useReducedMotion()
@@ -199,6 +201,15 @@ function ConnectedChat() {
 
   const route = useRoutePin(rpc, sessionKey)
 
+  // The desk's ledger decorates the same element the transcript renders into;
+  // its seams must be handed to the transcript before it mounts. Created for
+  // every chat (idle when there is no desk) so the hook order never changes.
+  const [focusOrderId, setFocusOrderId] = useState<string | null>(null)
+  const onFocusApproval = useCallback((id: string | null) => {
+    if (id) setFocusOrderId(id)
+  }, [])
+  const ledger = useTradeLedger(onFocusApproval)
+
   const {
     containerRef,
     routerFxDockRef,
@@ -214,6 +225,7 @@ function ConnectedChat() {
     setPendingDelegates,
   } = useTranscript({
     sessionKey,
+    seams: desk ? ledger.seams : undefined,
     openModal: openToolResultModal,
     onEditMessage: editMessage,
     onRegenerateMessage: regenerateMessage,
@@ -221,6 +233,10 @@ function ConnectedChat() {
     routePinned: route.isPinned,
   })
   const attachments = useAttachments()
+  useEffect(() => {
+    if (desk) ledger.bind(containerRef.current)
+    else ledger.unbind()
+  })
 
   // The router animation strip is a console-only flourish; the desktop shows
   // the route in the composer pill instead.
@@ -232,6 +248,7 @@ function ConnectedChat() {
   // The shared renderer also rebuilds the whole thread after a turn settles
   // (history resync); replaying the animation on every row then reads as a
   // flash. Mark bulk inserts so the skin leaves them still.
+  const [hasMessages, setHasMessages] = useState(false)
   useEffect(() => {
     const th = containerRef.current
     if (!th) return
@@ -243,10 +260,11 @@ function ConnectedChat() {
         })
       }
       if (added.length > 1) for (const el of added) el.dataset.enter = 'none'
+      setHasMessages(th.querySelector('.msg') !== null)
     })
-    observer.observe(th, { childList: true })
+    observer.observe(th, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [containerRef])
+  }, [containerRef, sessionKey])
 
   // Sidebar signal light for THIS session while a turn streams.
   const setLive = useLive((s) => s.setLive)
@@ -459,6 +477,44 @@ function ConnectedChat() {
     }
   }, [send])
 
+  // The desk's own way in: a rejection reason, a mission prompt. The first
+  // send from the desk files its session into the "Trading desk" project.
+  const deskSentOnce = useRef(false)
+  const deskSendText = useCallback(
+    (text: string) => {
+      send(text, [], pendingIntentRef.current)
+      pendingIntentRef.current = null
+      if (desk && !deskSentOnce.current) {
+        deskSentOnce.current = true
+        desk.onFirstSend()
+      }
+    },
+    [send, desk],
+  )
+  const deskSubmitText = useCallback((text: string) => void onComposerSend(text), [onComposerSend])
+  const instruments = useDeskInstruments(desk, {
+    sessionKey,
+    sendText: deskSendText,
+    submitText: deskSubmitText,
+    busy,
+    composerValue,
+    idle: runState.status === 'idle',
+    hasMessages,
+    focusOrderId,
+    setFocusOrderId,
+  })
+  const lastSentRef = useRef('')
+  useEffect(() => {
+    // Any send from the desk's composer counts as its first send too.
+    if (!desk || deskSentOnce.current) return
+    const last = history[history.length - 1] ?? ''
+    if (last && last !== lastSentRef.current) {
+      lastSentRef.current = last
+      deskSentOnce.current = true
+      desk.onFirstSend()
+    }
+  }, [history, desk])
+
   const onSlashKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean =>
       slashHandleRef.current?.handleKeyDown(e) ?? false,
@@ -567,10 +623,17 @@ function ConnectedChat() {
 
   // Reply notifications for this and every other session come from the
   // shell's session-run watcher (lib/use-notifications), not from here.
-  const title = shownSessionName(sessionName) || t('chat.untitled')
+  const title = desk
+    ? shownSessionName(sessionName) || t('trading.chat.title')
+    : shownSessionName(sessionName) || t('chat.untitled')
 
   return (
-    <div className="chat-desktop" data-docked={docked}>
+    <div
+      className="chat-desktop"
+      data-docked={docked}
+      data-desk={desk ? 'true' : undefined}
+      data-still={instruments.still || undefined}
+    >
       {docked ? (
         <div className="chat-desktop-header">
           <h1 className="chat-desktop-header__title" title={sessionKey}>
@@ -585,9 +648,14 @@ function ConnectedChat() {
           <Button
             variant="ghost"
             size="icon"
-            aria-label={t('chat.newChat')}
-            title={`${t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`}
-            onClick={startNewChat}
+            aria-label={desk ? t('trading.chat.fresh') : t('chat.newChat')}
+            title={
+              desk
+                ? t('trading.chat.fresh')
+                : `${t('chat.newChat')} (${formatCombo(NEW_CHAT_COMBO)})`
+            }
+            onClick={desk ? desk.onStartFresh : startNewChat}
+            data-testid={desk ? 'chat-fresh' : undefined}
           >
             <SquarePen className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
           </Button>
@@ -617,8 +685,11 @@ function ConnectedChat() {
         <div className="chat-thread" ref={containerRef} data-history-ready="false" />
         <div className="chat-history-loading" role="status" aria-live="polite">
           <span className="chat-history-loading__dot" aria-hidden="true" />
-          <span>{tw('chat.opening')}</span>
+          <span>{desk ? t('trading.chat.opening') : tw('chat.opening')}</span>
         </div>
+        {instruments.emptyHint}
+
+        {instruments.region}
 
         <AnimatePresence initial={false}>
           {!docked ? (
@@ -641,6 +712,7 @@ function ConnectedChat() {
           className={docked ? 'shrink-0' : 'flex flex-1 flex-col justify-center pt-24'}
         >
           <motion.div layout="position" transition={reduce ? { duration: 0 } : spring}>
+            {instruments.dockAbove}
             <PendingQueue
               queue={pending.queue}
               onRemove={pending.remove}
@@ -680,10 +752,15 @@ function ConnectedChat() {
                 <div id="chat-routerfx-dock" className="chat-routerfx-dock" ref={routerFxDockRef} />
               }
               routePicker={<RoutePicker route={route} />}
+              seats={instruments.seats}
+              placeholder={instruments.placeholder}
+              onFocusChange={instruments.onFocusChange}
             />
           </motion.div>
         </motion.div>
       </div>
+
+      {instruments.modal}
 
       <AnimatePresence>
         {toolResultModal ? (

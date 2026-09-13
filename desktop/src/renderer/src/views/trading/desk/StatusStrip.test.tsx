@@ -4,11 +4,14 @@ import { renderDesk, WALLET } from '../test-utils'
 import { ComposerSeats } from './ComposerSeats'
 import { StatusStrip } from './StatusStrip'
 
+const pill = { mode: 'trading' as const, onSwitchMode: vi.fn() }
+
 describe('StatusStrip', () => {
   it('carries one status word and a pin only when something is waiting', () => {
     const onOpenApprovals = vi.fn()
     const { rerender } = renderDesk(
       <StatusStrip
+        {...pill}
         missions={[]}
         running={new Set()}
         sessionPending={0}
@@ -23,6 +26,7 @@ describe('StatusStrip', () => {
     expect(screen.queryByTestId('strip-pin')).toBeNull()
     rerender(
       <StatusStrip
+        {...pill}
         missions={[
           {
             id: 'j1',
@@ -52,6 +56,7 @@ describe('StatusStrip', () => {
     const onToggleDesk = vi.fn()
     renderDesk(
       <StatusStrip
+        {...pill}
         missions={[]}
         running={new Set()}
         sessionPending={0}
@@ -66,6 +71,20 @@ describe('StatusStrip', () => {
     expect(toggle).toHaveTextContent('Chat')
     fireEvent.click(toggle)
     expect(onToggleDesk).toHaveBeenCalled()
+  })
+
+  it('is only the mode pill in Chat mode, and the pill switches modes', () => {
+    const onSwitchMode = vi.fn()
+    renderDesk(<StatusStrip mode="chat" onSwitchMode={onSwitchMode} />)
+    expect(screen.queryByTestId('status-word')).toBeNull()
+    expect(screen.queryByTestId('desk-toggle')).toBeNull()
+    expect(screen.getByTestId('mode-chat')).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByTestId('mode-chat'))
+    expect(onSwitchMode).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('mode-trading'))
+    expect(onSwitchMode).toHaveBeenCalledWith('trading')
+    fireEvent.keyDown(screen.getByTestId('mode-pill'), { key: 'ArrowRight' })
+    expect(onSwitchMode).toHaveBeenCalledTimes(2)
   })
 })
 

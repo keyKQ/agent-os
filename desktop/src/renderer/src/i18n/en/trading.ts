@@ -1,7 +1,11 @@
 /** Copy for the Trading page, its sheets, and Settings › Trading. */
 export const trading = {
   'sidebar.trading': 'Trading',
-  'settings.shortcuts.trading': 'Open trading',
+  'settings.shortcuts.trading': 'Switch Chat / Trading',
+  'trading.mode.label': 'Mode',
+  'trading.mode.chat': 'Chat',
+  'trading.mode.trading': 'Trading',
+  'trading.mode.stamp': 'TRADING DESK',
   'settings.section.trading': 'Trading',
   'settings.section.trading.blurb':
     'The Uniswap key that quotes your swaps, how the vault unlocks, and the limits the agent trades within.',

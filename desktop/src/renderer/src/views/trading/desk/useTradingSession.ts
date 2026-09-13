@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { useRpc } from '@/app/providers'
-import { webchatSessionKey } from '@/views/chat/logic'
+import { sessionPath } from '~/components/sidebar/SessionRow'
 import type { RawProject } from '@/views/projects/logic'
 import { projectId, projectName } from '@/views/projects/logic'
 import {
+  ensureTradingSessionKey,
   readTradingSessionFiled,
-  readTradingSessionKey,
   writeTradingSessionFiled,
   writeTradingSessionKey,
 } from '~/stores/trading-ui'
 import { TRADING_PROJECT_NAME, tradingProjectKnowledge } from './desk-logic'
+import { mintTradingSessionKey } from './mode-logic'
 import type { Wallet } from '../types'
 
 /**
@@ -19,16 +21,14 @@ import type { Wallet } from '../types'
  * knowledge tells the agent where it is and what it may use.
  */
 
-function mintKey(): string {
-  const suffix = 'trading-' + Math.random().toString(36).slice(2, 8)
-  return webchatSessionKey('main', suffix)
-}
-
-export function useTradingSession(ctx: {
-  wallets: readonly Wallet[]
-  chains: readonly number[]
-  limits: { thresholdUsd: number; dailyCapUsd: number } | null
-}): {
+export function useTradingSession(
+  ctx: {
+    wallets: readonly Wallet[]
+    chains: readonly number[]
+    limits: { thresholdUsd: number; dailyCapUsd: number } | null
+  },
+  active = true,
+): {
   sessionKey: string
   /** Start over in a fresh chat; the old one stays in the sidebar. */
   startFresh: () => void
@@ -36,13 +36,8 @@ export function useTradingSession(ctx: {
   ensureFiled: () => void
 } {
   const rpc = useRpc()
-  const [sessionKey, setSessionKey] = useState(() => {
-    const existing = readTradingSessionKey()
-    if (existing) return existing
-    const fresh = mintKey()
-    writeTradingSessionKey(fresh)
-    return fresh
-  })
+  const navigate = useNavigate()
+  const [sessionKey, setSessionKey] = useState(() => ensureTradingSessionKey(mintTradingSessionKey))
   const filingRef = useRef(false)
   const ctxRef = useRef(ctx)
   useEffect(() => {
@@ -88,14 +83,16 @@ export function useTradingSession(ctx: {
 
   // A session that already exists (previous launch) may still be unfiled.
   useEffect(() => {
-    if (!readTradingSessionFiled()) ensureFiled()
-  }, [ensureFiled])
+    if (active && !readTradingSessionFiled()) ensureFiled()
+  }, [ensureFiled, active])
 
   const startFresh = useCallback(() => {
-    const fresh = mintKey()
+    const fresh = mintTradingSessionKey()
     writeTradingSessionKey(fresh)
     setSessionKey(fresh)
-  }, [])
+    // The desk's session is a route: the fresh chat is where we go next.
+    void navigate(sessionPath(fresh), { replace: true })
+  }, [navigate])
 
   return { sessionKey, startFresh, ensureFiled }
 }

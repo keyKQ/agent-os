@@ -18,6 +18,7 @@ import { SetupOverlay } from '~/views/setup/SetupOverlay'
 import { JobsPanel } from '~/views/jobs/JobsPanel'
 import { SettingsPanel } from '~/views/settings/SettingsPanel'
 import { SkillsPanel } from '~/views/skills/SkillsPanel'
+import { useDeskToggle } from '~/views/trading/desk/useDeskToggle'
 
 /** Window chrome: translucent full-height sidebar, then toolbar + routed content. */
 export function AppShell() {
@@ -64,6 +65,7 @@ function useShellShortcuts() {
   const toggleSidebar = useUi((s) => s.toggleSidebar)
   const toggleSkills = useUi((s) => s.toggleSkills)
   const toggleJobs = useUi((s) => s.toggleJobs)
+  const desk = useDeskToggle()
   const category = t('settings.shortcuts.app')
 
   // Sheets toggle even while one is up: ⌘⇧K over Settings swaps to Skills,
@@ -104,7 +106,7 @@ function useShellShortcuts() {
     },
     (e) => {
       e.preventDefault()
-      void navigate('/trading')
+      desk.toggle()
     },
   )
 
