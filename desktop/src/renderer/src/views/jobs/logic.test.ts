@@ -222,10 +222,10 @@ describe('datetime-local conversions', () => {
 
 describe('timeZoneOptions', () => {
   it('lists the local zone first, then UTC, then the rest sorted', () => {
-    const zones = timeZoneOptions('Asia/Ho_Chi_Minh')
-    expect(zones[0]).toBe('Asia/Ho_Chi_Minh')
+    const zones = timeZoneOptions('Asia/Tokyo')
+    expect(zones[0]).toBe('Asia/Tokyo')
     expect(zones[1]).toBe('UTC')
-    expect(zones.slice(2)).not.toContain('Asia/Ho_Chi_Minh')
+    expect(zones.slice(2)).not.toContain('Asia/Tokyo')
     expect(zones.slice(2)).toEqual([...zones.slice(2)].sort())
   })
 })

@@ -148,10 +148,10 @@ describe('EngineUpdater.check', () => {
 describe('EngineUpdater.apply', () => {
   const okInstall: Script = {
     stdout: [
-      'Snapshot: 3 file(s) → /home/.agentos/state/snapshots/pre-upgrade-1',
+      'Snapshot: 3 file(s) → /opt/agentos/state/snapshots/pre-upgrade-1',
       'Upgrading use-agent-os via uv-tool from pypi…',
       'Upgraded: 2026.8.23 → 2026.9.11',
-      '{"old": "2026.8.23", "new": "2026.9.11", "source": "pypi", "restarted": false, "snapshot": {"path": "/home/.agentos/state/snapshots/pre-upgrade-1", "files": 3}}',
+      '{"old": "2026.8.23", "new": "2026.9.11", "source": "pypi", "restarted": false, "snapshot": {"path": "/opt/agentos/state/snapshots/pre-upgrade-1", "files": 3}}',
     ],
   }
 
@@ -170,7 +170,7 @@ describe('EngineUpdater.apply', () => {
       old: '2026.8.23',
       new: '2026.9.11',
       gatewayRestarted: true,
-      snapshot: '/home/.agentos/state/snapshots/pre-upgrade-1',
+      snapshot: '/opt/agentos/state/snapshots/pre-upgrade-1',
       source: 'pypi',
     })
     expect(state.current).toBe('2026.9.11')

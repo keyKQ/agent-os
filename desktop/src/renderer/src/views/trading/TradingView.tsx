@@ -1,0 +1,490 @@
+import './trading.css'
+import { CandlestickChart, KeyRound, Lock, Wallet as WalletIcon } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router'
+import { toast } from 'sonner'
+import { Button } from '~/components/ui/button'
+import { t } from '~/i18n'
+import { useNow } from '~/lib/use-now'
+import { useGateway } from '~/stores/gateway'
+import {
+  useHistory,
+  useLimits,
+  useOrderDecision,
+  useOrders,
+  usePortfolio,
+  useSync,
+  useTradingInvalidation,
+  useTradingStatus,
+  useWalletMutation,
+  useWalletStatus,
+  useWallets,
+} from '~/stores/trading'
+import { useUi } from '~/stores/ui'
+import { Notice } from '~/views/settings/parts'
+import { History } from './History'
+import { Holdings } from './Holdings'
+import { EMPTY_TOTALS, errorText, filterHoldings, isAwaitingApproval, sameAddress } from './logic'
+import { Orders } from './Orders'
+import { Overview } from './Overview'
+import { PriceChart } from './PriceChart'
+import { SwapPanel, type SwapPrefill } from './SwapPanel'
+import {
+  CHAINS,
+  type ChainId,
+  type Holding,
+  type Order,
+  type ProviderId,
+  type Totals,
+  type Wallet,
+} from './types'
+import { WalletRail, type WalletAction, type WalletSelection } from './WalletRail'
+import { WalletSheet, type WalletSheetMode } from './WalletSheet'
+
+type Tab = 'holdings' | 'history' | 'orders' | 'approvals'
+
+/**
+ * The desk. Three columns once the vault is open; before that, one message
+ * and the single action that gets you to the next state: start the
+ * gateway, turn trading on, create the vault, unlock it, add a wallet.
+ */
+export function TradingView() {
+  const gatewayState = useGateway((s) => s.status.state)
+  if (gatewayState !== 'running') {
+    return (
+      <div className="trd-state">
+        <CandlestickChart className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />
+        <h1>
+          {gatewayState === 'starting'
+            ? t('chat.waitingGateway')
+            : t(`gateway.state.${gatewayState}`)}
+        </h1>
+        <p>{t('trading.offline.body')}</p>
+      </div>
+    )
+  }
+  return <Gate />
+}
+
+function Gate() {
+  useTradingInvalidation()
+  const status = useTradingStatus()
+  const vault = useWalletStatus()
+  const openSettings = useUi((s) => s.openSettings)
+  const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
+
+  if (status.isPending || vault.isPending) return null
+  if (status.data && !status.data.enabled) {
+    return (
+      <State
+        icon={
+          <CandlestickChart className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />
+        }
+        title={t('trading.disabled.title')}
+        body={t('trading.disabled.body')}
+        action={
+          <Button variant="primary" onClick={() => openSettings('trading')}>
+            {t('trading.openSettings')}
+          </Button>
+        }
+      />
+    )
+  }
+  const v = vault.data
+  if (!v || !v.initialized) {
+    return (
+      <>
+        <State
+          icon={<Lock className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />}
+          title={t('trading.setup.title')}
+          body={t('trading.setup.body')}
+          action={
+            <Button
+              variant="primary"
+              onClick={() => setSheet({ kind: 'setup' })}
+              data-testid="vault-setup"
+            >
+              {t('trading.setup.cta')}
+            </Button>
+          }
+        />
+        {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
+      </>
+    )
+  }
+  if (!v.unlocked) {
+    return (
+      <>
+        <State
+          icon={<Lock className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />}
+          title={t('trading.locked.title')}
+          body={t('trading.locked.body')}
+          action={
+            <Button
+              variant="primary"
+              onClick={() => setSheet({ kind: 'unlock' })}
+              data-testid="vault-unlock"
+            >
+              {t('trading.locked.cta')}
+            </Button>
+          }
+        />
+        {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
+      </>
+    )
+  }
+  const provider = status.data?.provider ?? 'uniswap'
+  const providerStatus = status.data?.providers?.find((p) => p.id === provider)
+  return (
+    <Desk
+      provider={provider}
+      // Only Uniswap needs a key; Kyber's readiness is whether the region lets it answer.
+      providerReady={
+        provider === 'uniswap'
+          ? Boolean(status.data?.apiKeyConfigured)
+          : providerStatus?.blocked !== true
+      }
+      providerBlocked={providerStatus?.blocked === true}
+      needsKey={provider === 'uniswap' && !status.data?.apiKeyConfigured}
+    />
+  )
+}
+
+function State({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon: React.ReactNode
+  title: string
+  body: string
+  action: React.ReactNode
+}) {
+  return (
+    <div className="trd-state">
+      {icon}
+      <h1>{title}</h1>
+      <p>{body}</p>
+      <div className="trd-state__actions">{action}</div>
+    </div>
+  )
+}
+
+function Desk({
+  provider,
+  providerReady,
+  providerBlocked,
+  needsKey,
+}: {
+  provider: ProviderId
+  providerReady: boolean
+  providerBlocked: boolean
+  needsKey: boolean
+}) {
+  const status = useTradingStatus()
+  const vault = useWalletStatus()
+  const { wallets, primary, isPending: walletsPending } = useWallets()
+  const [chosen, setSelected] = useState<WalletSelection>('all')
+  const [chain, setChain] = useState<ChainId | null>(null)
+  const [tab, setTab] = useState<Tab>('holdings')
+  const [picked, setPicked] = useState<Holding | null>(null)
+  const [prefill, setPrefill] = useState<SwapPrefill | null>(null)
+  const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
+  const [highlight, setHighlight] = useState<string | null>(null)
+  const openSettings = useUi((s) => s.openSettings)
+  const now = useNow(30_000)
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // A notification about an order lands on the approvals tab with that row
+  // in view; the URL is then cleaned so a reload does not repeat it.
+  const orderParam = new URLSearchParams(location.search).get('order')
+  const [seenOrder, setSeenOrder] = useState<string | null>(null)
+  if (orderParam && orderParam !== seenOrder) {
+    setSeenOrder(orderParam)
+    setTab('approvals')
+    setHighlight(orderParam)
+  }
+  useEffect(() => {
+    if (orderParam) void navigate('/trading', { replace: true })
+  }, [orderParam, navigate])
+
+  // The rail's selection must be a wallet that still exists.
+  const selected: WalletSelection =
+    chosen !== 'all' && wallets.length > 0 && !wallets.some((w) => sameAddress(w.address, chosen))
+      ? 'all'
+      : chosen
+
+  const walletAddress = selected === 'all' ? undefined : selected
+  const portfolio = usePortfolio(walletAddress)
+  const orders = useOrders(undefined)
+  const history = useHistory(walletAddress, chain ?? undefined, tab === 'history')
+  const limitsWallet: Wallet | null =
+    wallets.find((w) => (selected === 'all' ? w.primary : sameAddress(w.address, selected))) ??
+    wallets[0] ??
+    null
+  const limits = useLimits(limitsWallet?.address ?? null)
+  const decide = useOrderDecision()
+  const sync = useSync()
+  const walletWrite = useWalletMutation()
+
+  const totalsByWallet = useMemo(() => {
+    const m = new Map<string, Totals>()
+    for (const row of portfolio.data?.wallets ?? [])
+      m.set(row.wallet.address.toLowerCase(), row.totals)
+    return m
+  }, [portfolio.data])
+  // The rail always shows every wallet's total, whichever one is selected.
+  const allPortfolio = usePortfolio(undefined, selected !== 'all')
+  const allTotals = useTotalsMap(allPortfolio.data?.wallets)
+  const railTotals = selected === 'all' ? totalsByWallet : allTotals
+
+  const holdings = useMemo(
+    () => filterHoldings(portfolio.data?.holdings ?? [], chain),
+    [portfolio.data, chain],
+  )
+  const pending = orders.orders.filter(isAwaitingApproval).length
+
+  function onDecide(order: Order, approve: boolean) {
+    decide.mutate(
+      { orderId: order.orderId, approve },
+      {
+        onSuccess: () =>
+          toast.success(
+            approve ? t('trading.approvals.approved') : t('trading.approvals.rejected'),
+            {
+              id: `trd-order-${order.orderId}`,
+            },
+          ),
+        onError: (err) =>
+          toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
+            id: `trd-order-${order.orderId}`,
+          }),
+      },
+    )
+  }
+
+  function onWalletAction(action: WalletAction) {
+    if (action.kind === 'lock') {
+      walletWrite.mutate({ method: 'wallet.lock', params: {} })
+      return
+    }
+    setSheet(action)
+  }
+
+  function onSetPrimary(wallet: Wallet) {
+    walletWrite.mutate(
+      { method: 'wallet.setPrimary', params: { address: wallet.address } },
+      { onError: (err) => toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`) },
+    )
+  }
+
+  if (!walletsPending && wallets.length === 0) {
+    return (
+      <>
+        <State
+          icon={<WalletIcon className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />}
+          title={t('trading.noWallets.title')}
+          body={t('trading.noWallets.body')}
+          action={
+            <>
+              <Button onClick={() => setSheet({ kind: 'import' })}>
+                {t('trading.noWallets.import')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => setSheet({ kind: 'create' })}
+                data-testid="wallet-create"
+              >
+                {t('trading.noWallets.create')}
+              </Button>
+            </>
+          }
+        />
+        {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
+      </>
+    )
+  }
+
+  const showWallet = selected === 'all'
+  const totals = portfolio.data?.totals ?? EMPTY_TOTALS
+
+  return (
+    <div className="trd-viewport">
+      <div className="trd" data-testid="trading-desk">
+        <WalletRail
+          wallets={wallets}
+          totals={railTotals}
+          selected={selected}
+          onSelect={(s) => {
+            setSelected(s)
+            setPicked(null)
+          }}
+          onAction={onWalletAction}
+          onSetPrimary={onSetPrimary}
+          limits={limits.data}
+          limitsWallet={limitsWallet}
+          chains={status.data?.chains ?? []}
+          manualUnlock={vault.data?.unlockMode === 'manual'}
+        />
+
+        <div className="trd-desk">
+          {needsKey ? (
+            <div className="px-6 pt-3">
+              <Notice
+                tone="info"
+                action={
+                  <Button onClick={() => openSettings('trading')} data-testid="add-key">
+                    <KeyRound className="size-3.5" strokeWidth={1.75} aria-hidden />
+                    {t('trading.noKey.cta')}
+                  </Button>
+                }
+              >
+                <b>{t('trading.noKey.title')}</b> {t('trading.noKey.body')}
+              </Notice>
+            </div>
+          ) : providerBlocked ? (
+            <div className="px-6 pt-3">
+              <Notice
+                tone="warn"
+                action={
+                  <Button
+                    onClick={() => openSettings('trading')}
+                    data-testid="provider-blocked-fix"
+                  >
+                    {t('trading.provider.switch')}
+                  </Button>
+                }
+              >
+                {t('trading.provider.blocked')}
+              </Notice>
+            </div>
+          ) : null}
+
+          <Overview
+            totals={totals}
+            holdings={holdings}
+            syncing={Boolean(portfolio.data?.syncing || status.data?.syncing)}
+            lastSyncAt={status.data?.lastSyncAt ?? null}
+            now={now}
+            loading={portfolio.isPending}
+            onSync={() => sync.mutate(walletAddress ? { wallet: walletAddress } : {})}
+            provider={provider}
+          />
+
+          <div className="trd-tabs" role="tablist" aria-label={t('trading.title')}>
+            {(['holdings', 'history', 'orders', 'approvals'] as Tab[]).map((id) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={tab === id}
+                className="trd-tab app-no-drag"
+                data-testid={`tab-${id}`}
+                onClick={() => setTab(id)}
+              >
+                {t(`trading.tab.${id}`)}
+                {id === 'approvals' && pending > 0 ? (
+                  <span className="trd-tab__count">{pending}</span>
+                ) : null}
+              </button>
+            ))}
+            <span className="trd-tabs__spacer" />
+            <div className="trd-tabs__tools">
+              <div
+                role="radiogroup"
+                aria-label={t('trading.overview.chains')}
+                className="mac-segmented trd-chainpick"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={chain === null}
+                  className="mac-segment app-no-drag"
+                  onClick={() => setChain(null)}
+                >
+                  {t('trading.overview.chains.all')}
+                </button>
+                {CHAINS.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={chain === c.id}
+                    className="mac-segment app-no-drag"
+                    onClick={() => setChain(c.id)}
+                  >
+                    <span data-long>{c.short}</span>
+                    <span data-short aria-hidden>
+                      {c.abbr}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {tab === 'holdings' ? (
+            <>
+              {picked ? <PriceChart holding={picked} onClose={() => setPicked(null)} /> : null}
+              <Holdings
+                holdings={holdings}
+                loading={portfolio.isPending}
+                selected={picked}
+                onSelect={setPicked}
+                showChain={chain === null}
+                onSwap={(h) =>
+                  setPrefill({
+                    chainId: h.chainId,
+                    tokenIn: h.token,
+                    wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
+                    seq: Date.now(),
+                  })
+                }
+              />
+            </>
+          ) : tab === 'history' ? (
+            <History
+              entries={history.entries}
+              loading={history.isPending}
+              now={now}
+              showWallet={showWallet}
+            />
+          ) : (
+            <Orders
+              orders={orders.orders}
+              approvalsOnly={tab === 'approvals'}
+              deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
+              onDecide={onDecide}
+              showWallet={showWallet}
+              highlight={highlight}
+            />
+          )}
+        </div>
+
+        <SwapPanel
+          wallets={wallets}
+          primary={primary}
+          selectedWallet={selected}
+          provider={provider}
+          providerReady={providerReady}
+          onSwitchProvider={() => openSettings('trading')}
+          unlocked={Boolean(vault.data?.unlocked)}
+          prefill={prefill}
+          onSent={() => setTab('orders')}
+        />
+
+        {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
+      </div>
+    </div>
+  )
+}
+
+function useTotalsMap(rows: { wallet: Wallet; totals: Totals }[] | undefined): Map<string, Totals> {
+  return useMemo(() => {
+    const m = new Map<string, Totals>()
+    for (const row of rows ?? []) m.set(row.wallet.address.toLowerCase(), row.totals)
+    return m
+  }, [rows])
+}

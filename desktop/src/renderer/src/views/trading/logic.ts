@@ -1,0 +1,453 @@
+import type { ChainId, Entry, Holding, Initiator, Order, OrderStatus, Token, Totals } from './types'
+import { CHAINS } from './types'
+
+/**
+ * Every figure the trading terminal shows, as pure functions over the RPC
+ * shapes: decimal-string arithmetic (never floats for token amounts),
+ * formatting, sorting, tones, the quote countdown, the confirm rule.
+ * Components render; this file decides.
+ */
+
+// ── Decimal strings ─────────────────────────────────────────────────────────
+
+const AMOUNT_RE = /^(\d+)(?:\.(\d*))?$/
+
+/** A typed amount, normalised: "1,5" → "1.5", ".5" → "0.5", "" → null, junk → null. */
+export function parseAmount(input: string): string | null {
+  let s = input.trim().replace(/,/g, '.').replace(/\s+/g, '')
+  if (s === '' || s === '.') return null
+  if (s.startsWith('.')) s = `0${s}`
+  const m = AMOUNT_RE.exec(s)
+  if (!m) return null
+  const whole = (m[1] ?? '0').replace(/^0+(?=\d)/, '')
+  const frac = (m[2] ?? '').replace(/0+$/, '')
+  if (whole === '0' && frac === '') return '0'
+  return frac ? `${whole}.${frac}` : whole
+}
+
+export function isPositiveAmount(amount: string | null): boolean {
+  return amount !== null && amount !== '0' && /[1-9]/.test(amount)
+}
+
+/** "1.5" with 6 decimals → 1500000n. Extra precision is truncated, never rounded up. */
+export function toRaw(amount: string, decimals: number): bigint {
+  const parsed = parseAmount(amount)
+  if (parsed === null) return 0n
+  const [whole, frac = ''] = parsed.split('.')
+  const digits = (frac + '0'.repeat(decimals)).slice(0, decimals)
+  return BigInt(whole + digits)
+}
+
+/** 1500000n with 6 decimals → "1.5". */
+export function fromRaw(raw: bigint | string, decimals: number): string {
+  const value = typeof raw === 'bigint' ? raw : BigInt(raw || '0')
+  const negative = value < 0n
+  const abs = negative ? -value : value
+  const s = abs.toString().padStart(decimals + 1, '0')
+  const whole = s.slice(0, s.length - decimals) || '0'
+  const frac = decimals ? s.slice(s.length - decimals).replace(/0+$/, '') : ''
+  const out = frac ? `${whole}.${frac}` : whole
+  return negative ? `-${out}` : out
+}
+
+/** The share of a balance, as an amount string: pct 50 of "1.5" → "0.75". */
+export function amountFromPct(balance: string, decimals: number, pct: number): string {
+  const share = Math.max(0, Math.min(100, Math.round(pct)))
+  const raw = (toRaw(balance, decimals) * BigInt(share)) / 100n
+  return fromRaw(raw, decimals)
+}
+
+export function compareAmounts(a: string, b: string, decimals: number): number {
+  const ra = toRaw(a, decimals)
+  const rb = toRaw(b, decimals)
+  return ra < rb ? -1 : ra > rb ? 1 : 0
+}
+
+// ── Formatting ──────────────────────────────────────────────────────────────
+
+const usd2 = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+const usdSmall = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumSignificantDigits: 4,
+})
+const usdCompact = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  notation: 'compact',
+  maximumFractionDigits: 1,
+})
+
+/** "$12,480.22"; tiny prices keep 4 significant digits; null → "—". */
+export function formatUsd(
+  value: number | null | undefined,
+  opts: { signed?: boolean; compact?: boolean } = {},
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  const body =
+    opts.compact && abs >= 100_000
+      ? usdCompact.format(abs)
+      : abs > 0 && abs < 0.01
+        ? usdSmall.format(abs)
+        : usd2.format(abs)
+  if (value < 0) return `−${body}`
+  return opts.signed && value > 0 ? `+${body}` : body
+}
+
+/** "+3.2%" / "−0.4%" / "—". */
+export function formatPct(
+  value: number | null | undefined,
+  opts: { signed?: boolean } = {},
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2
+  const body = `${abs.toFixed(digits)}%`
+  if (value < 0) return `−${body}`
+  return opts.signed && value > 0 ? `+${body}` : body
+}
+
+/**
+ * A token amount for a table cell: grouped, at most 6 decimals (8 under
+ * 0.001), trailing zeros dropped, "0" for nothing. Works on the decimal
+ * string directly so 18-decimal balances never pass through a float.
+ */
+export function formatAmount(amount: string | null | undefined, maxDecimals = 6): string {
+  if (amount === null || amount === undefined) return '—'
+  const parsed = parseAmount(amount)
+  if (parsed === null) return '—'
+  const [whole = '0', frac = ''] = parsed.split('.')
+  const small = whole === '0'
+  // Dust (≤ 1e-6) as scientific with three significant digits: "1.23e-7".
+  if (small && frac !== '' && /^0{5}/.test(frac)) {
+    const first = frac.search(/[1-9]/)
+    if (first >= 5) {
+      const digits = frac.slice(first, first + 3).padEnd(3, '0')
+      const mantissa = `${digits[0]}.${digits.slice(1)}`.replace(/\.?0+$/, '')
+      return `${mantissa}e-${first + 1}`
+    }
+  }
+  const keep = small && frac.length > maxDecimals ? Math.max(maxDecimals, 8) : maxDecimals
+  let cut = frac.slice(0, keep).replace(/0+$/, '')
+  if (small && cut === '' && frac !== '') cut = '0'.repeat(keep - 1) + '1'
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  return cut ? `${grouped}.${cut}` : grouped
+}
+
+const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉'
+
+function subscript(n: number): string {
+  return String(n)
+    .split('')
+    .map((d) => SUBSCRIPT_DIGITS[Number(d)] ?? d)
+    .join('')
+}
+
+/**
+ * A token price for a cell. Under $0.001 it uses DexScreener's notation:
+ * "$0.0₅1727" is 0.00000 1727 — the subscript counts the zeros after "0.",
+ * then four significant digits. Everything else is `formatUsd`.
+ */
+export function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  if (abs === 0 || abs >= 0.001) return formatUsd(value)
+  // Exact decimal expansion, no exponent, enough digits for the significant part.
+  const fixed = abs.toFixed(20)
+  const frac = fixed.slice(2)
+  const first = frac.search(/[1-9]/)
+  if (first < 0) return formatUsd(value)
+  const sig = frac.slice(first, first + 4).replace(/0+$/, '')
+  const body = `$0.0${subscript(first)}${sig}`
+  return value < 0 ? `−${body}` : body
+}
+
+/**
+ * A USD figure for a table cell. Anything under a cent collapses to "<$0.01"
+ * (the exact figure belongs in the cell's `title`), so dust never widens the
+ * column. Zero and larger values format as `formatUsd`.
+ */
+export function formatUsdCell(
+  value: number | null | undefined,
+  opts: { signed?: boolean } = {},
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  if (abs > 0 && abs < 0.01) {
+    if (value < 0) return '−<$0.01'
+    return opts.signed ? '+<$0.01' : '<$0.01'
+  }
+  return formatUsd(value, opts)
+}
+
+/**
+ * A token amount for a narrow column: four significant digits under 1
+ * ("0.0002064"), four decimals above it, dust in scientific notation.
+ */
+export function formatAmountCompact(amount: string | null | undefined): string {
+  if (amount === null || amount === undefined) return '—'
+  const parsed = parseAmount(amount)
+  if (parsed === null) return '—'
+  const [whole = '0', frac = ''] = parsed.split('.')
+  if (whole !== '0') return formatAmount(parsed, 4)
+  const first = frac.search(/[1-9]/)
+  if (first < 0) return '0'
+  if (first >= 5) return formatAmount(parsed)
+  const kept = frac.slice(0, first + 4).replace(/0+$/, '')
+  return `0.${kept}`
+}
+
+/** "0x1234…abcd". */
+export function shortAddress(address: string, head = 6, tail = 4): string {
+  if (!address) return ''
+  if (address.length <= head + tail + 1) return address
+  return `${address.slice(0, head)}…${address.slice(-tail)}`
+}
+
+export function shortHash(hash: string | null): string {
+  return hash ? shortAddress(hash, 8, 6) : ''
+}
+
+export function chainName(chainId: number): string {
+  return CHAINS.find((c) => c.id === chainId)?.name ?? `Chain ${chainId}`
+}
+
+export function chainShort(chainId: number): string {
+  return CHAINS.find((c) => c.id === chainId)?.short ?? String(chainId)
+}
+
+export function isChainId(value: unknown): value is ChainId {
+  return CHAINS.some((c) => c.id === value)
+}
+
+/** Two tokens are the same asset: same chain, same address (case-insensitive). */
+export function sameToken(
+  a: Pick<Token, 'chainId' | 'address'> | null,
+  b: Pick<Token, 'chainId' | 'address'> | null,
+): boolean {
+  if (!a || !b) return false
+  return a.chainId === b.chainId && a.address.toLowerCase() === b.address.toLowerCase()
+}
+
+// ── Tones ───────────────────────────────────────────────────────────────────
+
+export type PnlTone = 'up' | 'down' | 'flat'
+
+export function pnlTone(value: number | null | undefined): PnlTone {
+  if (value === null || value === undefined || !Number.isFinite(value)) return 'flat'
+  if (Math.abs(value) < 0.005) return 'flat'
+  return value > 0 ? 'up' : 'down'
+}
+
+export type OrderTone = 'ok' | 'warn' | 'danger' | 'dim' | 'live'
+
+export function orderTone(status: OrderStatus): OrderTone {
+  switch (status) {
+    case 'confirmed':
+      return 'ok'
+    case 'awaiting_approval':
+      return 'warn'
+    case 'failed':
+    case 'rejected':
+    case 'expired':
+      return 'danger'
+    case 'submitted':
+    case 'approved':
+      return 'live'
+    case 'quoted':
+      return 'dim'
+  }
+}
+
+export function isAwaitingApproval(order: Pick<Order, 'status'>): boolean {
+  return order.status === 'awaiting_approval'
+}
+
+export function isOrderLive(order: Pick<Order, 'status'>): boolean {
+  return order.status === 'submitted' || order.status === 'approved'
+}
+
+export function isOrderSettled(order: Pick<Order, 'status'>): boolean {
+  return !isOrderLive(order) && !isAwaitingApproval(order) && order.status !== 'quoted'
+}
+
+// ── Sorting and grouping ────────────────────────────────────────────────────
+
+export type HoldingSort = 'value' | 'pnl' | 'change' | 'symbol' | 'allocation'
+
+export function sortHoldings(
+  holdings: readonly Holding[],
+  key: HoldingSort,
+  dir: 'asc' | 'desc' = 'desc',
+): Holding[] {
+  const sign = dir === 'desc' ? -1 : 1
+  const num = (v: number | null) => (v === null || !Number.isFinite(v) ? -Infinity : v)
+  return [...holdings].sort((a, b) => {
+    let d: number
+    switch (key) {
+      case 'symbol':
+        d = a.token.symbol.localeCompare(b.token.symbol)
+        break
+      case 'pnl':
+        d = num(a.unrealizedUsd) - num(b.unrealizedUsd)
+        break
+      case 'change':
+        d = num(a.change24hPct) - num(b.change24hPct)
+        break
+      case 'allocation':
+        d = a.allocationPct - b.allocationPct
+        break
+      case 'value':
+      default:
+        d = num(a.valueUsd) - num(b.valueUsd)
+    }
+    if (d === 0) d = a.token.symbol.localeCompare(b.token.symbol) * -sign
+    return d * sign
+  })
+}
+
+export interface AllocationSegment {
+  symbol: string
+  pct: number
+}
+
+/** Top slices of the pie for the stacked bar; the tail folds into "other". */
+export function allocationSegments(holdings: readonly Holding[], max = 6): AllocationSegment[] {
+  const sorted = [...holdings]
+    .filter((h) => h.allocationPct > 0)
+    .sort((a, b) => b.allocationPct - a.allocationPct)
+  const head = sorted.slice(0, max)
+  const rest = sorted.slice(max).reduce((sum, h) => sum + h.allocationPct, 0)
+  const out = head.map((h) => ({ symbol: h.token.symbol, pct: h.allocationPct }))
+  if (rest > 0) out.push({ symbol: 'other', pct: rest })
+  return out
+}
+
+export function filterHoldings(holdings: readonly Holding[], chainId: ChainId | null): Holding[] {
+  return chainId === null ? [...holdings] : holdings.filter((h) => h.chainId === chainId)
+}
+
+/** Entries by local day, newest day first; entries within a day newest first. */
+export function groupEntriesByDay(entries: readonly Entry[]): { day: string; entries: Entry[] }[] {
+  const byDay = new Map<string, Entry[]>()
+  for (const e of [...entries].sort((a, b) => b.ts - a.ts)) {
+    const d = new Date(e.ts)
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    const list = byDay.get(day)
+    if (list) list.push(e)
+    else byDay.set(day, [e])
+  }
+  return [...byDay.entries()].map(([day, list]) => ({ day, entries: list }))
+}
+
+export function initiatorKey(initiator: Initiator): 'you' | 'agent' | 'external' {
+  return initiator === 'manual' ? 'you' : initiator
+}
+
+// ── Quote freshness and the confirm rule ───────────────────────────────────
+
+export const QUOTE_REFRESH_MS = 15_000
+
+export interface Countdown {
+  /** Whole seconds left, never below 0. */
+  seconds: number
+  /** 1 fresh → 0 expired, for the ring. */
+  fraction: number
+  expired: boolean
+}
+
+export function quoteCountdown(
+  fetchedAt: number,
+  now: number,
+  ttlMs = QUOTE_REFRESH_MS,
+): Countdown {
+  const left = fetchedAt + ttlMs - now
+  if (left <= 0) return { seconds: 0, fraction: 0, expired: true }
+  return { seconds: Math.ceil(left / 1000), fraction: Math.min(1, left / ttlMs), expired: false }
+}
+
+/** Above this the confirm sheet asks the amount to be typed again. */
+export const RETYPE_ABOVE_USD = 1000
+
+export function needsRetype(valueUsd: number | null): boolean {
+  return valueUsd !== null && Number.isFinite(valueUsd) && valueUsd > RETYPE_ABOVE_USD
+}
+
+/** The retyped amount matches when it parses to the same decimal string. */
+export function retypeMatches(typed: string, amount: string): boolean {
+  const a = parseAmount(typed)
+  const b = parseAmount(amount)
+  return a !== null && b !== null && a === b
+}
+
+/** Price impact above this is shown as a warning, above the second as danger. */
+export function impactTone(pct: number | null): 'ok' | 'warn' | 'danger' {
+  if (pct === null || !Number.isFinite(pct)) return 'ok'
+  if (pct >= 5) return 'danger'
+  if (pct >= 1) return 'warn'
+  return 'ok'
+}
+
+/** Seconds until an approval lapses, for the countdown on its row. */
+export function approvalSecondsLeft(order: Pick<Order, 'expiresAt'>, now: number): number | null {
+  if (order.expiresAt === null) return null
+  return Math.max(0, Math.ceil((order.expiresAt - now) / 1000))
+}
+
+export function formatClock(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+// ── Limits ─────────────────────────────────────────────────────────────────
+
+/** How much of the day's agent budget is used, 0..1, with the remainder. */
+export function capUsage(spent: number, cap: number): { fraction: number; leftUsd: number } {
+  if (!Number.isFinite(cap) || cap <= 0) return { fraction: 0, leftUsd: 0 }
+  const used = Math.max(0, spent)
+  return { fraction: Math.min(1, used / cap), leftUsd: Math.max(0, cap - used) }
+}
+
+export const EMPTY_TOTALS: Totals = {
+  valueUsd: 0,
+  costUsd: 0,
+  unrealizedUsd: 0,
+  realizedUsd: 0,
+  gasUsd: 0,
+  change24hUsd: null,
+  change24hPct: null,
+}
+
+/** The address a page-level query means: an explicit wallet, or all of them. */
+export function walletParam(selected: string | 'all'): { address?: string } {
+  return selected === 'all' ? {} : { address: selected }
+}
+
+/** Pending-approval count for a badge; capped so the pill never widens. */
+export function badgeText(count: number): string {
+  if (count <= 0) return ''
+  return count > 9 ? '9+' : String(count)
+}
+
+/** Is this the wallet's own primary key? (Matched case-insensitively.) */
+export function sameAddress(a: string | null | undefined, b: string | null | undefined): boolean {
+  return Boolean(a && b) && String(a).toLowerCase() === String(b).toLowerCase()
+}
+
+/** A sane label for a wallet with none. */
+export function walletLabel(wallet: { label: string; address: string }): string {
+  return wallet.label.trim() || shortAddress(wallet.address)
+}
+
+/** The error text an RPC failure carries, for a toast. */
+export function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}

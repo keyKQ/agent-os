@@ -98,6 +98,8 @@ export interface NotificationSettings {
   /** The agent is waiting for an approval. */
   approvals: boolean
   jobs: JobsNotify
+  /** A swap settled: every one, only failures, or none. Approvals use `approvals`. */
+  trades: JobsNotify
   /** The gateway stopped on its own. */
   gateway: boolean
   /** Play `soundName` on delivery. Also toggled from the toolbar bell. */
@@ -119,6 +121,7 @@ export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   replyFailed: true,
   approvals: true,
   jobs: 'failures',
+  trades: 'all',
   gateway: true,
   sound: true,
   soundName: 'chime',
@@ -240,6 +243,10 @@ function normalizeNotifications(raw: unknown): NotificationSettings {
     replyFailed: bool(obj.replyFailed, d.replyFailed),
     approvals: bool(obj.approvals, d.approvals),
     jobs: obj.jobs === 'off' || obj.jobs === 'all' ? obj.jobs : d.jobs,
+    trades:
+      obj.trades === 'off' || obj.trades === 'failures' || obj.trades === 'all'
+        ? obj.trades
+        : d.trades,
     gateway: bool(obj.gateway, d.gateway),
     sound: bool(obj.sound, d.sound),
     soundName: isNotifySound(obj.soundName) ? obj.soundName : d.soundName,

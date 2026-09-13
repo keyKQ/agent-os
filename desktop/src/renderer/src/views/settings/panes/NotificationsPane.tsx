@@ -232,6 +232,22 @@ export function NotificationsPane() {
           />
         </Row>
         <Row
+          label={t('settings.notifications.trades')}
+          help={t('settings.notifications.trades.help')}
+        >
+          <Segmented
+            label={t('settings.notifications.trades')}
+            value={prefs.trades}
+            disabled={off}
+            options={[
+              { value: 'off', label: t('settings.notifications.jobs.off') },
+              { value: 'failures', label: t('settings.notifications.jobs.failures') },
+              { value: 'all', label: t('settings.notifications.trades.all') },
+            ]}
+            onChange={(trades) => void update({ notifications: { trades } })}
+          />
+        </Row>
+        <Row
           label={t('settings.notifications.gateway')}
           help={t('settings.notifications.gateway.help')}
         >

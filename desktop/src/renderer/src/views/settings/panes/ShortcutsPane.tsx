@@ -12,6 +12,7 @@ const APP: readonly Shortcut[] = [
   { keys: ['⌘', ','], label: 'settings.shortcuts.settings' },
   { keys: ['⌘', '⇧', 'K'], label: 'settings.shortcuts.skills' },
   { keys: ['⌘', '⇧', 'J'], label: 'settings.shortcuts.jobs' },
+  { keys: ['⌘', '⇧', 'T'], label: 'settings.shortcuts.trading' },
   { keys: ['⌘', '⇧', 'S'], label: 'settings.shortcuts.toggleSidebar' },
   { keys: ['⌘', '+'], label: 'settings.shortcuts.zoomIn' },
   { keys: ['⌘', '−'], label: 'settings.shortcuts.zoomOut' },

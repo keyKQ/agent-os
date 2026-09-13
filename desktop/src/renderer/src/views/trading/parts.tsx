@@ -1,0 +1,189 @@
+import { LoaderCircle, TriangleAlert, X } from 'lucide-react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { ModalShell } from '@/components/ModalShell'
+import { Button } from '~/components/ui/button'
+import { t } from '~/i18n'
+import { cn } from '~/lib/utils'
+import { chainShort, formatUsd, orderTone, pnlTone, type PnlTone } from './logic'
+import type { OrderStatus, Token } from './types'
+
+/** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
+
+export function Sheet({
+  title,
+  onClose,
+  role = 'dialog',
+  wide,
+  children,
+  foot,
+  note,
+}: {
+  title: string
+  onClose: () => void
+  role?: 'dialog' | 'alertdialog'
+  wide?: boolean
+  children: ReactNode
+  foot?: ReactNode
+  note?: ReactNode
+}) {
+  const titleId = useId()
+  return (
+    <ModalShell
+      role={role}
+      labelledBy={titleId}
+      onClose={onClose}
+      overlayClassName="trd-modal__overlay"
+      className={cn('trd-modal', wide && 'trd-modal--wide')}
+    >
+      <header className="trd-modal__head">
+        <h2 id={titleId}>{title}</h2>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label={t('trading.sheet.cancel')}
+          onClick={onClose}
+        >
+          <X className="size-4 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+        </Button>
+      </header>
+      <div className="trd-modal__body">{children}</div>
+      {foot ? (
+        <footer className="trd-modal__foot">
+          {note ? <span className="trd-modal__note">{note}</span> : null}
+          {foot}
+        </footer>
+      ) : null}
+    </ModalShell>
+  )
+}
+
+export function StatusPill({ status }: { status: OrderStatus }) {
+  return (
+    <span className="trd-status" data-tone={orderTone(status)} data-status={status}>
+      {t(`trading.orders.status.${status}`)}
+    </span>
+  )
+}
+
+export function TokenLogo({ token, size = 22 }: { token: Token; size?: number }) {
+  const [broken, setBroken] = useState(false)
+  const initials = token.symbol.slice(0, 3).toUpperCase()
+  return (
+    <span className="trd-asset__logo" style={{ width: size, height: size }} aria-hidden>
+      {token.logoUrl && !broken ? (
+        <img src={token.logoUrl} alt="" onError={() => setBroken(true)} />
+      ) : (
+        initials
+      )}
+    </span>
+  )
+}
+
+export function AssetCell({
+  token,
+  showChain,
+  sub,
+}: {
+  token: Token
+  showChain?: boolean
+  sub?: string
+}) {
+  return (
+    <span className="trd-asset">
+      <TokenLogo token={token} />
+      <span className="trd-asset__text">
+        <span className="trd-asset__symbol">
+          {token.symbol}
+          {showChain ? <span className="trd-asset__chain">{chainShort(token.chainId)}</span> : null}
+          {!token.verified && !token.native ? (
+            <TriangleAlert
+              className="trd-asset__warn size-3"
+              strokeWidth={2}
+              aria-label={t('trading.holdings.unverified')}
+            />
+          ) : null}
+        </span>
+        <span className="trd-asset__name">{sub ?? token.name}</span>
+      </span>
+    </span>
+  )
+}
+
+/**
+ * A number that flashes when it changes. The wash is the only motion the
+ * desk uses for data, so an eye on the table sees what moved.
+ */
+export function Tick({
+  value,
+  children,
+  tone,
+  className,
+}: {
+  value: string | number | null
+  children: ReactNode
+  tone?: PnlTone
+  className?: string
+}) {
+  const prev = useRef(value)
+  const [flash, setFlash] = useState(0)
+  useEffect(() => {
+    if (prev.current !== value && prev.current !== null) setFlash((n) => n + 1)
+    prev.current = value
+  }, [value])
+  return (
+    <span
+      key={flash}
+      className={cn('trd-num', flash > 0 && 'trd-tick', className)}
+      data-tone={tone}
+    >
+      {children}
+    </span>
+  )
+}
+
+export function Money({
+  value,
+  signed,
+  toned,
+  compact,
+}: {
+  value: number | null | undefined
+  signed?: boolean
+  toned?: boolean
+  compact?: boolean
+}) {
+  return (
+    <Tick value={value ?? null} tone={toned ? pnlTone(value) : undefined}>
+      {formatUsd(value, { signed, compact })}
+    </Tick>
+  )
+}
+
+export function Spinner({ className }: { className?: string }) {
+  return <LoaderCircle className={cn('trd-spin size-3.5', className)} strokeWidth={2} aria-hidden />
+}
+
+export function Skeleton({ width }: { width: number | string }) {
+  return <span className="trd-skel" style={{ width }} aria-hidden />
+}
+
+export function Empty({
+  icon,
+  title,
+  body,
+  action,
+}: {
+  icon: ReactNode
+  title: string
+  body: string
+  action?: ReactNode
+}) {
+  return (
+    <div className="trd-empty">
+      {icon}
+      <b>{title}</b>
+      <p>{body}</p>
+      {action ? <div className="mt-2 flex gap-2">{action}</div> : null}
+    </div>
+  )
+}

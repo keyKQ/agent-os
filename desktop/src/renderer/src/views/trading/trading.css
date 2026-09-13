@@ -1,0 +1,1945 @@
+/* Trading — the desk.
+
+   DESIGN BRIEF
+   Subject: one person's on-chain desk (Base tokens, Robinhood Stock Tokens)
+   that an agent also trades from. The page's single job: show what the money
+   is doing right now, and let you act on it without a second thought about
+   whether the price is fresh.
+
+   Type: Bricolage Grotesque, the app's wordmark face, is let out of the logo
+   for one purpose — the portfolio value and each wallet's total — set narrow
+   (font-stretch 85%) and heavy, so the desk has a voice the rest of the app
+   never uses. Every other figure is JetBrains Mono with tabular numerals, so
+   a ticking price never reflows a column. Labels stay SF.
+
+   Hierarchy and density: one hero number, then 12–13 px everywhere. Rows are
+   30 px, separated by hairlines, never boxed. Three columns: wallets (rail),
+   the ledger (overview, holdings, history, approvals), the ticket (swap).
+
+   Signature: the ticket's primary button wears the quote's countdown as a
+   ring around its glyph, so the button itself says how fresh the price is;
+   and allocation is drawn as a thin lime rule under each holding's value,
+   a ledger line rather than a pie.
+
+   Colour: palette tokens only. Up is --ok, down is --danger, live is
+   --primary. The one gradient is the hero's wash, tinted by today's move.
+   Motion: a value that changed flashes a wash and fades; a new row lifts in
+   4 px; the ring is continuous. Reduced motion turns all of it off. */
+
+/* ── Frame ─────────────────────────────────────────────────────────────────── */
+
+/* The desk sizes itself from its own width, not the window's: the app
+   sidebar comes and goes. Three columns when there is room, a narrower rail
+   and ticket below ~1180px, and below ~1000px the wallets become a strip
+   across the top so the ledger keeps at least ~650px beside a 300px ticket.
+   Math: 1920 window − 220 sidebar = 1700 → ledger 1152; 1440 → 1220 →
+   ledger 672; 1200 → 980 → strip, ledger 680; 1200 with the sidebar hidden
+   → 1200 → ledger 652. */
+.trd-viewport {
+  container-type: inline-size;
+  container-name: desk-viewport;
+  height: 100%;
+  min-height: 0;
+}
+.trd {
+  --trd-rail: 232px;
+  --trd-ticket: 316px;
+  --trd-row: 30px;
+  --trd-up: var(--ok);
+  --trd-down: var(--danger);
+  display: grid;
+  grid-template-columns: var(--trd-rail) minmax(0, 1fr) var(--trd-ticket);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  isolation: isolate;
+}
+@container desk-viewport (max-width: 1179px) {
+  .trd {
+    --trd-rail: 200px;
+    --trd-ticket: 300px;
+  }
+}
+.trd-num,
+.trd-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-variant-ligatures: none;
+}
+.trd-num[data-tone='up'] {
+  color: var(--trd-up);
+}
+.trd-num[data-tone='down'] {
+  color: var(--trd-down);
+}
+.trd-num[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+
+/* A figure that just changed: a wash that fades out. */
+@keyframes trd-tick {
+  0% {
+    background-color: color-mix(in srgb, var(--primary) 26%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.trd-tick {
+  border-radius: 3px;
+  animation: trd-tick 900ms ease-out;
+}
+
+/* Offline / locked / empty: the whole desk is one message and one action. */
+.trd-state {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 32px;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.trd-state h1 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+.trd-state p {
+  max-width: 380px;
+  font-size: 13px;
+}
+.trd-state__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.trd-state__mark {
+  margin-bottom: 8px;
+  color: var(--dim);
+}
+
+/* ── Rail ──────────────────────────────────────────────────────────────────── */
+
+.trd-rail {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--hairline);
+}
+.trd-rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px 6px 16px;
+}
+.trd-rail__title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-rail__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+}
+.trd-wallet {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  width: 100%;
+  padding: 7px 8px 7px 10px;
+  border-radius: var(--radius);
+  text-align: left;
+  color: var(--foreground);
+  transition: background-color 80ms ease-out;
+}
+.trd-wallet:hover {
+  background: color-mix(in srgb, var(--sidebar-accent) 70%, transparent);
+}
+.trd-wallet[aria-selected='true'] {
+  background: var(--sidebar-accent);
+}
+.trd-wallet:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-wallet__name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.trd-wallet__name > span:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-wallet__star {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trd-wallet__addr {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-wallet__value {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  align-self: center;
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 650;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-align: right;
+}
+.trd-wallet__delta {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  font-stretch: 100%;
+  letter-spacing: 0;
+}
+.trd-wallet--all .trd-wallet__name {
+  color: var(--muted-foreground);
+}
+.trd-wallet--all[aria-selected='true'] .trd-wallet__name {
+  color: var(--foreground);
+}
+.trd-wallet__menu {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+.trd-wallet:hover .trd-wallet__menu,
+.trd-wallet:focus-within .trd-wallet__menu,
+.trd-wallet__menu[aria-expanded='true'] {
+  opacity: 1;
+}
+.trd-wallet:hover .trd-wallet__value,
+.trd-wallet:focus-within .trd-wallet__value {
+  visibility: hidden;
+}
+
+.trd-rail__add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  margin: 2px 8px 0;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+.trd-rail__add:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-rail__add:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Agent budget: a thin meter, the remainder in words. */
+.trd-budget {
+  margin: auto 12px 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+}
+.trd-budget__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-budget__meter {
+  position: relative;
+  height: 3px;
+  margin: 8px 0 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  overflow: hidden;
+}
+.trd-budget__meter > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--primary);
+  transition: width 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.trd-budget__meter[data-full='true'] > span {
+  background: var(--danger);
+}
+.trd-budget__text {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-budget__text b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+/* ── Ledger column ─────────────────────────────────────────────────────────── */
+
+.trd-desk {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: auto;
+}
+.trd-desk > * {
+  flex-shrink: 0;
+}
+
+/* Hero: the value, its move today, the four figures under it, and the
+   allocation rule. The wash tints with the day's direction. */
+.trd-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 24px 16px;
+  background: radial-gradient(
+    90% 120% at 0% 0%,
+    color-mix(in srgb, var(--foreground) 5%, transparent) 0%,
+    transparent 60%
+  );
+}
+.trd-hero[data-tone='up'] {
+  background: radial-gradient(
+    90% 120% at 0% 0%,
+    color-mix(in srgb, var(--trd-up) 10%, transparent) 0%,
+    transparent 60%
+  );
+}
+.trd-hero[data-tone='down'] {
+  background: radial-gradient(
+    90% 120% at 0% 0%,
+    color-mix(in srgb, var(--trd-down) 10%, transparent) 0%,
+    transparent 60%
+  );
+}
+.trd-hero__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.trd-hero__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-hero__value {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-top: 2px;
+}
+.trd-hero__value > b {
+  font-family: var(--font-display);
+  font-stretch: 85%;
+  font-weight: 700;
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.trd-hero__delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.trd-hero__delta small {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+.trd-hero__tools {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding-top: 2px;
+}
+.trd-hero__sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.trd-hero__sync[data-live='true'] {
+  color: var(--primary);
+}
+.trd-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 640px;
+}
+.trd-stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--hairline);
+}
+.trd-stat__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-stat__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 4px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.trd-stat__value > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-stat__value small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+}
+
+/* Allocation: a single rule split by holding, labelled below. */
+.trd-alloc {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trd-alloc__bar {
+  display: flex;
+  height: 5px;
+  gap: 2px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.trd-alloc__bar > span {
+  min-width: 2px;
+  background: var(--primary);
+  transition: flex-basis 320ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.trd-alloc__bar > span:nth-child(2) {
+  opacity: 0.78;
+}
+.trd-alloc__bar > span:nth-child(3) {
+  opacity: 0.6;
+}
+.trd-alloc__bar > span:nth-child(4) {
+  opacity: 0.46;
+}
+.trd-alloc__bar > span:nth-child(5) {
+  opacity: 0.34;
+}
+.trd-alloc__bar > span:nth-child(n + 6) {
+  opacity: 0.24;
+}
+.trd-alloc__bar > span[data-other='true'] {
+  background: var(--dim);
+  opacity: 0.5;
+}
+.trd-alloc__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-alloc__legend b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+/* Tabs across the ledger: text, a rule under the active one, a count. */
+.trd-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  backdrop-filter: blur(8px);
+}
+.trd-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition: color 90ms ease-out;
+}
+.trd-tab:hover {
+  color: var(--foreground);
+}
+.trd-tab[aria-selected='true'] {
+  color: var(--foreground);
+}
+.trd-tab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: -1px;
+  left: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--primary);
+}
+.trd-tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-tab__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-tabs__spacer {
+  flex: 1;
+}
+.trd-tabs__tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+.trd-chainpick {
+  margin-right: 6px;
+}
+/* The chain filter carries a long and a short label; the ledger's width picks. */
+.trd-chainpick [data-short] {
+  display: none;
+}
+.trd-desk {
+  container-type: inline-size;
+  container-name: desk;
+}
+@container desk (max-width: 720px) {
+  .trd-chainpick [data-long] {
+    display: none;
+  }
+  .trd-chainpick [data-short] {
+    display: inline;
+  }
+}
+@container desk (max-width: 639px) {
+  .trd-hero__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── Holdings table ────────────────────────────────────────────────────────── */
+
+/* The table keeps every column at its minimum and scrolls sideways past
+   that, rather than squeezing figures into each other. */
+.trd-tablewrap {
+  flex-shrink: 0;
+}
+.trd-table {
+  width: 100%;
+  min-width: 800px;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+.trd-table .trd-col--amount {
+  min-width: 96px;
+}
+.trd-table .trd-col--price {
+  min-width: 96px;
+}
+.trd-table .trd-col--change {
+  min-width: 64px;
+}
+.trd-table .trd-col--value {
+  min-width: 96px;
+}
+.trd-table .trd-col--cost {
+  min-width: 90px;
+}
+.trd-table .trd-col--pnl {
+  min-width: 110px;
+}
+.trd-table th,
+.trd-table td {
+  height: var(--trd-row);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: right;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.trd-table th {
+  position: sticky;
+  top: 35px;
+  z-index: 1;
+  height: 26px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: var(--background);
+}
+.trd-table th:first-child,
+.trd-table td:first-child {
+  padding-left: 24px;
+  text-align: left;
+}
+.trd-table th:last-child,
+.trd-table td:last-child {
+  padding-right: 16px;
+}
+.trd-table th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.trd-table th button[aria-pressed='true'] {
+  color: var(--foreground);
+}
+.trd-table th button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-table tbody tr {
+  transition: background-color 80ms ease-out;
+}
+.trd-table tbody tr:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.trd-table tbody tr[aria-selected='true'] {
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.trd-table td {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.trd-table td.trd-cell--muted {
+  color: var(--muted-foreground);
+}
+.trd-table td[data-tone='up'] {
+  color: var(--trd-up);
+}
+.trd-table td[data-tone='down'] {
+  color: var(--trd-down);
+}
+.trd-table td[data-tone='flat'] {
+  color: var(--muted-foreground);
+}
+.trd-table .trd-col--asset {
+  /* A percentage width plus max-width 0 makes the cell ellipsize its
+     contents instead of growing the table past the ledger. */
+  width: 34%;
+  min-width: 150px;
+  max-width: 0;
+}
+.trd-table .trd-col--actions {
+  /* three ghost buttons: chart, swap, and unwrap for WETH */
+  width: 96px;
+  min-width: 96px;
+}
+.trd-asset {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-sans);
+}
+.trd-asset__logo {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  overflow: hidden;
+}
+.trd-asset__logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.trd-asset__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.trd-asset__symbol {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.trd-asset__name {
+  overflow: hidden;
+  font-size: 10.5px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-asset__chain {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-asset__warn {
+  color: var(--warn);
+}
+
+/* The allocation rule under the value: the signature ledger line. */
+.trd-value {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 3px;
+}
+.trd-value::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: calc(var(--alloc) * 1%);
+  max-width: 100%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: 0.7;
+}
+.trd-row__actions {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 80ms ease-out;
+}
+tr:hover .trd-row__actions,
+tr:focus-within .trd-row__actions {
+  opacity: 1;
+}
+
+.trd-note {
+  padding: 14px 24px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.trd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+.trd-empty b {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-empty p {
+  max-width: 360px;
+  font-size: 12.5px;
+}
+.trd-empty svg {
+  margin-bottom: 6px;
+  color: var(--dim);
+}
+
+/* Skeletons: the shape of a row before its numbers arrive. */
+@keyframes trd-shimmer {
+  50% {
+    opacity: 0.35;
+  }
+}
+.trd-skel {
+  display: inline-block;
+  height: 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  animation: trd-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ── Chart panel (under the table when a row is picked) ────────────────────── */
+
+.trd-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 24px 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-chart__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trd-chart__title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.trd-chart__title small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
+}
+.trd-chart__canvas {
+  height: 180px;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.trd-chart__empty {
+  display: flex;
+  height: 120px;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── History ───────────────────────────────────────────────────────────────── */
+
+.trd-day {
+  position: sticky;
+  top: 35px;
+  z-index: 1;
+  padding: 10px 24px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: var(--background);
+}
+.trd-entry {
+  display: grid;
+  grid-template-columns: 26px minmax(96px, 0.8fr) minmax(140px, 1.4fr) 88px 72px 28px;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 5px 16px 5px 24px;
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12px;
+}
+.trd-entry:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.trd-entry__glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-entry__glyph[data-kind='deposit'] {
+  color: var(--trd-up);
+  background: color-mix(in srgb, var(--trd-up) 12%, transparent);
+}
+.trd-entry__glyph[data-kind='withdraw'] {
+  color: var(--trd-down);
+  background: color-mix(in srgb, var(--trd-down) 12%, transparent);
+}
+.trd-entry__glyph[data-kind='swap'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-entry__what {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.trd-entry__kind {
+  font-weight: 500;
+}
+.trd-entry__sub {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-entry__legs {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+.trd-entry__legs > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-entry__out {
+  color: var(--muted-foreground);
+}
+.trd-entry__in {
+  color: var(--foreground);
+}
+.trd-entry__value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.trd-entry__value small {
+  display: block;
+  font-size: 10px;
+  color: var(--dim);
+}
+.trd-entry__who {
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-by {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-by[data-by='agent'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-entry__time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+  text-align: right;
+}
+
+/* ── Orders and approvals ──────────────────────────────────────────────────── */
+
+.trd-order {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  padding: 12px 16px 12px 24px;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-order[data-status='awaiting_approval'] {
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+}
+.trd-order__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.trd-order__leg {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.trd-order__arrow {
+  color: var(--dim);
+}
+.trd-order__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-order__meta b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--foreground);
+}
+.trd-order__side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  grid-row: 1 / span 2;
+}
+.trd-order__actions {
+  display: flex;
+  gap: 6px;
+}
+.trd-order__timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--warn);
+}
+.trd-order__timer[data-urgent='true'] {
+  color: var(--danger);
+}
+.trd-order__note {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-order__reason {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
+.trd-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  white-space: nowrap;
+}
+.trd-status::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  opacity: 0.8;
+}
+.trd-status[data-tone='ok'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.trd-status[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.trd-status[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-status[data-tone='live'] {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-status[data-tone='live']::before {
+  animation: mac-light-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── Ticket (swap) ─────────────────────────────────────────────────────────── */
+
+.trd-ticket {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  overflow-y: auto;
+}
+.trd-ticket__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px 16px;
+}
+.trd-ticket__title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-ticket__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 16px 16px;
+}
+
+/* A leg: label row, token button + amount, balance row. */
+.trd-leg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 10px;
+  border-radius: var(--radius-surface);
+  border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--card) 80%, transparent);
+  transition: border-color 100ms ease-out;
+}
+.trd-leg:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+.trd-leg__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trd-leg__label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-leg__balance {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.trd-leg__balance button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+}
+.trd-leg__balance button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.trd-leg__main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+.trd-tokenbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 8px 0 5px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition: background-color 80ms ease-out;
+}
+.trd-tokenbtn:hover {
+  background: color-mix(in srgb, var(--foreground) 13%, transparent);
+}
+.trd-tokenbtn:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-tokenbtn[data-empty='true'] {
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+.trd-tokenbtn svg {
+  color: var(--dim);
+}
+.trd-tokenbtn[data-empty='true'] svg {
+  color: inherit;
+}
+.trd-amount {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--foreground);
+  user-select: text;
+}
+.trd-amount::placeholder {
+  color: var(--dim);
+}
+.trd-amount[data-invalid='true'] {
+  color: var(--danger);
+}
+.trd-amount--out {
+  color: var(--foreground);
+}
+.trd-amount--out[data-pending='true'] {
+  color: var(--dim);
+}
+.trd-leg__usd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+  text-align: right;
+}
+.trd-pcts {
+  display: flex;
+  gap: 4px;
+}
+.trd-pcts button {
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  transition:
+    background-color 80ms ease-out,
+    color 80ms ease-out;
+}
+.trd-pcts button:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+}
+.trd-pcts button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.trd-flip {
+  display: flex;
+  justify-content: center;
+  height: 0;
+  z-index: 1;
+}
+.trd-flip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-top: -17px;
+  border-radius: var(--radius-pill);
+  color: var(--muted-foreground);
+  background: var(--elevated);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    0 1px 2px rgba(0, 0, 0, 0.2);
+  transition:
+    transform 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    color 80ms ease-out;
+}
+.trd-flip button:hover {
+  color: var(--foreground);
+  transform: rotate(180deg);
+}
+.trd-flip button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+/* The wallet the ticket pays from. */
+.trd-ticket__wallet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-ticket__wallet .mac-select {
+  width: 160px;
+  height: 24px;
+  font-size: 12px;
+}
+
+/* Quote facts: label left, value right, hairlines between. */
+.trd-facts {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 2px 0;
+}
+.trd-fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-fact + .trd-fact {
+  border-top: 1px solid var(--hairline);
+}
+.trd-fact > b {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+  text-align: right;
+}
+.trd-fact > b[data-tone='warn'] {
+  color: var(--warn);
+}
+.trd-fact > b[data-tone='danger'] {
+  color: var(--danger);
+}
+.trd-fact__slip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.trd-fact__slip input {
+  width: 52px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* Provider warnings (a transfer fee, a thin pool): warn-toned, one per line. */
+.trd-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 9px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-warnings li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.trd-warnings svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warn);
+}
+
+/* Guard line: what the engine will say to this size of swap. */
+.trd-guard {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: var(--radius-control);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-guard svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.trd-guard[data-decision='allow'] svg {
+  color: var(--ok);
+}
+.trd-guard[data-decision='needs_approval'] svg,
+.trd-guard[data-decision='blocked_daily_cap'] svg {
+  color: var(--warn);
+}
+
+.trd-ticket__error {
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  font-size: 11.5px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* The signature: the primary button wears the countdown ring around its glyph. */
+.trd-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 40px;
+  border-radius: var(--radius);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
+  transition:
+    background-color 80ms ease-out,
+    opacity 80ms ease-out;
+}
+.trd-cta:hover {
+  background: color-mix(in srgb, var(--primary) 88%, var(--foreground));
+}
+.trd-cta:disabled {
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  box-shadow: none;
+  pointer-events: none;
+}
+.trd-cta:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.trd-ring {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+}
+.trd-ring svg {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+}
+.trd-ring circle {
+  fill: none;
+  stroke-width: 2;
+}
+.trd-ring__track {
+  stroke: currentColor;
+  opacity: 0.25;
+}
+.trd-ring__arc {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 900ms linear;
+}
+.trd-ring[data-expired='true'] .trd-ring__arc {
+  opacity: 0;
+}
+.trd-ring__glyph {
+  position: relative;
+}
+.trd-ticket__fresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim);
+}
+.trd-ticket__fresh button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--primary);
+}
+.trd-ticket__fresh button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+/* ── Sheets (confirm, wallet, token picker) ────────────────────────────────── */
+
+.trd-modal__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: color-mix(in srgb, var(--background) 55%, transparent);
+  backdrop-filter: blur(6px) saturate(0.9);
+}
+.trd-modal {
+  display: flex;
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100% - 32px);
+  flex-direction: column;
+  border-radius: var(--radius-dialog);
+  background: color-mix(in srgb, var(--popover) 97%, transparent);
+  box-shadow:
+    0 0 0 0.5px var(--border),
+    inset 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent),
+    0 30px 80px rgba(0, 0, 0, 0.45),
+    0 4px 14px rgba(0, 0, 0, 0.2);
+  outline: none;
+  overflow: hidden;
+}
+.trd-modal--wide {
+  max-width: 480px;
+}
+.trd-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 14px 8px 20px;
+}
+.trd-modal__head h2 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-modal__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 20px 16px;
+  overflow-y: auto;
+}
+.trd-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--hairline);
+}
+.trd-modal__foot > .trd-modal__note {
+  margin-right: auto;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.trd-field > label,
+.trd-field > .trd-field__label {
+  font-size: 12px;
+  font-weight: 500;
+}
+.trd-field__help {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-field__error {
+  font-size: 11.5px;
+  color: var(--danger);
+}
+.trd-warn {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.trd-warn svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--danger);
+}
+.trd-warn[data-tone='warn'] {
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-warn[data-tone='warn'] svg {
+  color: var(--warn);
+}
+.trd-secret {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  word-break: break-all;
+  user-select: text;
+}
+.trd-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trd-choice label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  font-size: 12.5px;
+  cursor: default;
+}
+.trd-choice label:has(input:checked) {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.trd-choice input {
+  grid-row: 1 / span 2;
+  align-self: start;
+  margin-top: 2px;
+  accent-color: var(--primary);
+}
+.trd-choice b {
+  font-weight: 500;
+}
+.trd-choice span {
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+/* Confirm sheet: the two legs as a statement. */
+.trd-confirm__legs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.trd-confirm__leg {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.trd-confirm__leg small {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-confirm__leg b {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.trd-confirm__leg b span {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+.trd-confirm__min {
+  align-self: flex-end;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-confirm__arrow {
+  align-self: center;
+  color: var(--dim);
+}
+
+/* Token picker list. */
+.trd-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-picker__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--foreground);
+  user-select: text;
+}
+.trd-picker__search input::placeholder {
+  color: var(--dim);
+}
+.trd-picker__group {
+  padding: 8px 4px 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.trd-picker__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0 -8px;
+  overflow-y: auto;
+}
+.trd-pick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 10px;
+  border-radius: var(--radius-control);
+  text-align: left;
+  transition: background-color 80ms ease-out;
+}
+.trd-pick:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-pick:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.trd-pick__right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.trd-pick__right small {
+  font-size: 10px;
+  color: var(--dim);
+}
+
+@keyframes trd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.trd-spin {
+  animation: trd-spin 0.9s linear infinite;
+}
+
+/* ── Settings › Trading ────────────────────────────────────────────────────── */
+
+.trd-stg__probe {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.trd-stg__probe[data-verdict='ok'] {
+  color: var(--ok);
+}
+.trd-stg__probe[data-verdict='bad'] {
+  color: var(--danger);
+}
+.trd-stg__probe code {
+  font-size: 11px;
+}
+.trd-stg__keylink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--primary);
+}
+.trd-stg__keylink:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+.trd-stg__unit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* ── Strip layout (desk viewport under 1000px) ─────────────────────────────
+   Last in the file on purpose: these override the base rail/hero rules. */
+
+@container desk-viewport (max-width: 999px) {
+  .trd {
+    grid-template-columns: minmax(0, 1fr) var(--trd-ticket);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* One horizontal row, content height, nothing centred vertically. */
+  .trd-rail {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    height: auto;
+    max-height: 96px;
+    padding: 6px 12px 6px 16px;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .trd-rail__head {
+    flex-shrink: 0;
+    padding: 0 4px 0 0;
+  }
+  .trd-rail__list {
+    flex: 0 1 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    overflow: visible;
+  }
+  .trd-wallet {
+    width: 176px;
+    flex-shrink: 0;
+    padding: 5px 8px 5px 10px;
+  }
+  .trd-rail__add {
+    flex-shrink: 0;
+    height: 26px;
+    margin: 0;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+  .trd-budget {
+    flex-shrink: 0;
+    width: 232px;
+    margin: 0 0 0 auto;
+    padding: 5px 10px;
+  }
+  .trd-budget__meter {
+    margin: 4px 0 3px;
+  }
+  .trd-budget__text {
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* A compact hero: the strip already took a band of height. */
+  .trd-hero {
+    gap: 8px;
+    padding: 10px 20px 10px;
+  }
+  .trd-hero__value > b {
+    font-size: 30px;
+  }
+  .trd-hero__stats {
+    gap: 8px 12px;
+  }
+  .trd-stat {
+    gap: 0;
+  }
+  .trd-stat__value {
+    font-size: 12.5px;
+  }
+  .trd-alloc {
+    gap: 4px;
+  }
+  .trd-alloc__bar {
+    height: 4px;
+  }
+  .trd-alloc__legend {
+    font-size: 10.5px;
+  }
+}
+
+/* Fewer columns before the table would overlap: 24h and avg cost go first.
+   After the base table rules so the smaller min-width wins. */
+@container desk (max-width: 819px) {
+  .trd-table .trd-col--change,
+  .trd-table .trd-col--cost {
+    display: none;
+  }
+  .trd-table {
+    min-width: 640px;
+  }
+}

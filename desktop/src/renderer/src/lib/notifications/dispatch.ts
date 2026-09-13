@@ -56,6 +56,8 @@ function targetTag(target: NotifyTarget): string {
       return target.key
     case 'jobs':
       return target.jobId ?? 'all'
+    case 'trading':
+      return target.orderId ?? 'all'
     default:
       return target.type
   }
@@ -67,6 +69,8 @@ const TONE: Record<NotifyEvent['kind'], 'success' | 'error' | 'warning' | 'info'
   approval: 'warning',
   job: 'success',
   jobFailed: 'error',
+  trade: 'success',
+  tradeFailed: 'error',
   gateway: 'error',
   test: 'info',
 }

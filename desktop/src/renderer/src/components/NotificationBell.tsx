@@ -1,6 +1,7 @@
 import './notification-bell.css'
 import {
   AlertTriangle,
+  ArrowLeftRight,
   Bell,
   BellOff,
   CalendarClock,
@@ -32,6 +33,8 @@ const ICON: Record<NotifyKind, typeof Bell> = {
   approval: ShieldAlert,
   job: CalendarClock,
   jobFailed: AlertTriangle,
+  trade: ArrowLeftRight,
+  tradeFailed: AlertTriangle,
   gateway: XCircle,
   test: CheckCircle2,
 }
@@ -41,6 +44,8 @@ const TONE: Record<NotifyKind, 'ok' | 'warn' | 'danger' | 'dim'> = {
   approval: 'warn',
   job: 'ok',
   jobFailed: 'danger',
+  trade: 'ok',
+  tradeFailed: 'danger',
   gateway: 'danger',
   test: 'dim',
 }

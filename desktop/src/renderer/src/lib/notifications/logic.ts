@@ -67,6 +67,10 @@ export function eventWanted(s: NotificationSettings, ev: NotifyEvent): boolean {
       return s.jobs === 'all'
     case 'jobFailed':
       return s.jobs !== 'off'
+    case 'trade':
+      return s.trades === 'all'
+    case 'tradeFailed':
+      return s.trades !== 'off'
     case 'gateway':
       return s.gateway
     case 'test':

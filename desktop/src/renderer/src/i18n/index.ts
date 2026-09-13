@@ -7,6 +7,7 @@ import { setup } from './en/setup'
 import { shell } from './en/shell'
 import { skills } from './en/skills'
 import { theme } from './en/theme'
+import { trading } from './en/trading'
 
 const en = {
   ...shell,
@@ -18,6 +19,7 @@ const en = {
   ...settings,
   ...setup,
   ...notifications,
+  ...trading,
 } as const
 
 export type MessageKey = keyof typeof en

@@ -1,7 +1,9 @@
-import { CalendarClock, PenSquare, Sparkles, type LucideIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { CalendarClock, CandlestickChart, PenSquare, Sparkles, type LucideIcon } from 'lucide-react'
+import { Link, useLocation } from 'react-router'
 import { t, type MessageKey } from '~/i18n'
+import { usePendingApprovals } from '~/stores/trading'
 import { useUi } from '~/stores/ui'
+import { badgeText } from '~/views/trading/logic'
 
 interface Action {
   label: MessageKey
@@ -11,10 +13,21 @@ interface Action {
   to?: string
   /** Or open a panel over the window instead of navigating. */
   panel?: 'jobs' | 'skills'
+  /** A page that is a place: shown as selected while on it. */
+  page?: boolean
+  /** Shows the pending-approvals count. */
+  badge?: 'approvals'
 }
 
 export const QUICK_ACTIONS: readonly Action[] = [
   { to: '/sessions', label: 'sidebar.new', icon: PenSquare, shortcut: ['⌘', 'N'] },
+  {
+    to: '/trading',
+    label: 'sidebar.trading',
+    icon: CandlestickChart,
+    page: true,
+    badge: 'approvals',
+  },
   { panel: 'skills', label: 'sidebar.skills', icon: Sparkles },
   { panel: 'jobs', label: 'sidebar.jobs', icon: CalendarClock },
 ]
@@ -25,6 +38,8 @@ export function QuickActions() {
   const skillsOpen = useUi((s) => s.skillsOpen)
   const openJobs = useUi((s) => s.openJobs)
   const openSkills = useUi((s) => s.openSkills)
+  const { pathname } = useLocation()
+  const approvals = usePendingApprovals()
   const panels = {
     jobs: { open: jobsOpen, show: openJobs },
     skills: { open: skillsOpen, show: openSkills },
@@ -32,7 +47,8 @@ export function QuickActions() {
 
   return (
     <nav aria-label={t('shell.brand')} className="flex flex-col gap-px px-2">
-      {QUICK_ACTIONS.map(({ to, panel, label, icon: Icon, shortcut }) => {
+      {QUICK_ACTIONS.map(({ to, panel, label, icon: Icon, shortcut, page, badge }) => {
+        const count = badge === 'approvals' ? badgeText(approvals) : ''
         const body = (
           <>
             <Icon
@@ -41,6 +57,15 @@ export function QuickActions() {
               aria-hidden
             />
             <span className="flex-1 truncate">{t(label)}</span>
+            {count ? (
+              <span
+                className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warn/15 px-1 font-mono text-[10px] font-semibold text-warn"
+                data-testid="approvals-badge"
+                aria-label={count}
+              >
+                {count}
+              </span>
+            ) : null}
             {shortcut ? (
               <span className="flex gap-0.5" aria-hidden>
                 {shortcut.map((k) => (
@@ -66,8 +91,14 @@ export function QuickActions() {
             </button>
           )
         }
+        const here = page && to && pathname.startsWith(to)
         return (
-          <Link key={label} to={to ?? '/'} className="mac-row">
+          <Link
+            key={label}
+            to={to ?? '/'}
+            className="mac-row"
+            aria-current={here ? 'page' : undefined}
+          >
             {body}
           </Link>
         )

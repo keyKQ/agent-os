@@ -97,6 +97,19 @@ function useShellShortcuts() {
 
   useKeyboardShortcut(
     {
+      combo: 'mod+shift+t',
+      description: t('settings.shortcuts.trading'),
+      category,
+      allowInInputs: true,
+    },
+    (e) => {
+      e.preventDefault()
+      void navigate('/trading')
+    },
+  )
+
+  useKeyboardShortcut(
+    {
       combo: 'mod+,',
       description: t('settings.shortcuts.settings'),
       category,

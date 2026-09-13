@@ -77,6 +77,16 @@ export const notifications = {
   'settings.notifications.jobs.off': 'Never',
   'settings.notifications.jobs.failures': 'Failures',
   'settings.notifications.jobs.all': 'Every run',
+  'settings.notifications.trades': 'A swap settles',
+  'settings.notifications.trades.help':
+    'Every confirmed or failed swap, yours or the agent’s. Approvals are the switch above.',
+  'settings.notifications.trades.all': 'Every swap',
+  'notify.trade.approval.title': 'Swap needs approval',
+  'notify.trade.approval.body': 'The agent proposed a swap above your threshold.',
+  'notify.trade.confirmed.title': 'Swap confirmed',
+  'notify.trade.failed.title': 'Swap failed',
+  'notify.trade.expired.title': 'Swap approval lapsed',
+  'notify.trade.rejected.title': 'Swap rejected',
   'settings.notifications.gateway': 'The gateway stops on its own',
   'settings.notifications.gateway.help': 'A crash or a lost port, not a stop you asked for.',
 

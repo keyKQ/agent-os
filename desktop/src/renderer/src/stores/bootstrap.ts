@@ -106,7 +106,7 @@ function startFakeBoot(): boolean {
   }))
   const discovery = {
     source: mode === 'update' ? ('found' as const) : ('missing' as const),
-    cliPath: mode === 'update' ? '/Users/you/.local/bin/agentos' : null,
+    cliPath: mode === 'update' ? '/opt/agentos/bin/agentos' : null,
     version: mode === 'update' ? '2026.8.23' : null,
     appVersion: '2026.9.12',
     relation: mode === 'update' ? ('older' as const) : null,
@@ -159,7 +159,7 @@ function startFakeBoot(): boolean {
           phase: 'failed',
           error: '"Install the AgentOS engine" failed: stage failed (exit 1)',
           finishedAt: Date.now(),
-          logPath: '/Users/you/.agentos/logs/bootstrap-fake.log',
+          logPath: '/opt/agentos/logs/bootstrap-fake.log',
         })
         return
       }

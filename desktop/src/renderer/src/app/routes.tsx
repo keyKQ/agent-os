@@ -1,6 +1,7 @@
 import { createHashRouter, Navigate } from 'react-router'
 import { ChatView } from '~/views/chat/ChatView'
 import { ProjectView } from '~/views/projects/ProjectView'
+import { TradingView } from '~/views/trading/TradingView'
 import { AppShell } from './AppShell'
 
 // Hash routing: the packaged app loads index.html from disk (file://), where
@@ -24,6 +25,8 @@ export const router = createHashRouter([
       { index: true, element: <Navigate to="/sessions" replace /> },
       { path: 'sessions/:key?', Component: ChatView },
       { path: 'projects/:id', Component: ProjectView },
+      // The trading desk is a page too: wallets, holdings, the swap ticket.
+      { path: 'trading', Component: TradingView },
     ],
   },
 ])

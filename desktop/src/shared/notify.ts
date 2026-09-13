@@ -6,13 +6,22 @@
 
 /** What happened. Drives the icon in the bell list and the per-event toggle. */
 export type NotifyKind =
-  'reply' | 'replyFailed' | 'approval' | 'job' | 'jobFailed' | 'gateway' | 'test'
+  | 'reply'
+  | 'replyFailed'
+  | 'approval'
+  | 'job'
+  | 'jobFailed'
+  | 'trade'
+  | 'tradeFailed'
+  | 'gateway'
+  | 'test'
 
 /** Where a click should land. */
 export type NotifyTarget =
   | { type: 'session'; key: string }
   | { type: 'jobs'; jobId?: string }
   | { type: 'approvals' }
+  | { type: 'trading'; orderId?: string }
   | { type: 'settings' }
   | { type: 'none' }
 

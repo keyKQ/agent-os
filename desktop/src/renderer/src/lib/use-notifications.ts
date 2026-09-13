@@ -35,6 +35,7 @@ export function useNotificationSignals(): void {
   useSessionRunSignals()
   useApprovalSignal()
   useJobSignals()
+  useTradingSignals()
   useGatewaySignal()
   useBadgeSync()
   useActivation()
@@ -173,6 +174,69 @@ function useJobSignals(): void {
   }, [rpc, connected])
 }
 
+/**
+ * The desk. An agent swap above the threshold asks for a decision; a swap
+ * that settles (confirmed, failed, lapsed, rejected) is news too. Both are
+ * gateway broadcasts, so nothing is polled.
+ */
+function useTradingSignals(): void {
+  const rpc = useRpc()
+  const connected = useConnection((s) => s.state === 'connected')
+  useEffect(() => {
+    if (!connected) return
+    const offRequested = rpc.on('trading.approval.requested', (payload) => {
+      const order = (payload as { order?: TradingOrderLike } | undefined)?.order
+      const preview = useSettings.getState().settings.notifications.preview
+      void notify({
+        kind: 'approval',
+        title: t('notify.trade.approval.title'),
+        subtitle: preview && order ? orderLine(order) : undefined,
+        body: t('notify.trade.approval.body'),
+        target: { type: 'trading', orderId: order?.orderId },
+      })
+    })
+    const offFinished = rpc.on('trading.order.finished', (payload) => {
+      const order = (payload as { order?: TradingOrderLike } | undefined)?.order
+      if (!order) return
+      const preview = useSettings.getState().settings.notifications.preview
+      const ok = order.status === 'confirmed'
+      const title =
+        order.status === 'confirmed'
+          ? t('notify.trade.confirmed.title')
+          : order.status === 'expired'
+            ? t('notify.trade.expired.title')
+            : order.status === 'rejected'
+              ? t('notify.trade.rejected.title')
+              : t('notify.trade.failed.title')
+      void notify({
+        kind: ok ? 'trade' : 'tradeFailed',
+        title,
+        subtitle: preview ? orderLine(order) : undefined,
+        body: !ok && preview && order.reason ? excerpt(order.reason) || undefined : undefined,
+        target: { type: 'trading', orderId: order.orderId },
+      })
+    })
+    return () => {
+      offRequested()
+      offFinished()
+    }
+  }, [rpc, connected])
+}
+
+interface TradingOrderLike {
+  orderId?: string
+  status?: string
+  reason?: string | null
+  amountIn?: string
+  tokenIn?: { symbol?: string }
+  tokenOut?: { symbol?: string }
+}
+
+function orderLine(order: TradingOrderLike): string {
+  const a = order.amountIn ? `${order.amountIn} ` : ''
+  return `${a}${order.tokenIn?.symbol ?? ''} → ${order.tokenOut?.symbol ?? ''}`.trim()
+}
+
 /** The gateway went from running to error on its own (a crash, a port grab). */
 function useGatewaySignal(): void {
   const status = useGateway((s) => s.status)
@@ -219,6 +283,14 @@ function useActivation(): void {
           break
         case 'settings':
           openSettings('gateway')
+          break
+        case 'trading':
+          useUi.getState().closeSettings()
+          useUi.getState().closeJobs()
+          useUi.getState().closeSkills()
+          void navigate(
+            target.orderId ? `/trading?order=${encodeURIComponent(target.orderId)}` : '/trading',
+          )
           break
         case 'approvals':
         case 'none':

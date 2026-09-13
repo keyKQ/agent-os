@@ -1,0 +1,223 @@
+import { ArrowDown, TriangleAlert } from 'lucide-react'
+import { useId, useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '~/components/ui/button'
+import { t } from '~/i18n'
+import { useNow } from '~/lib/use-now'
+import { useSwap } from '~/stores/trading'
+import {
+  errorText,
+  formatAmount,
+  formatPct,
+  formatUsd,
+  impactTone,
+  needsRetype,
+  quoteCountdown,
+  retypeMatches,
+  walletLabel,
+} from './logic'
+import { Sheet } from './parts'
+import { isProviderBlocked, QuoteWarnings } from './SwapPanel'
+import { providerLabel, type Order, type Quote, type Token, type Wallet } from './types'
+
+/**
+ * The only door a swap leaves through. Restates both legs, the wallet, the
+ * facts; above 1,000 USD it asks for the amount to be typed again; a price
+ * older than its window must be refreshed before Swap now enables.
+ */
+export function ConfirmSwap({
+  quote,
+  fetchedAt,
+  wallet,
+  tokenIn,
+  tokenOut,
+  amount,
+  slippagePct,
+  refreshing,
+  onRefresh,
+  onClose,
+  onSent,
+  onSwitchProvider,
+}: {
+  quote: Quote
+  fetchedAt: number
+  wallet: Wallet
+  tokenIn: Token
+  tokenOut: Token
+  amount: string
+  slippagePct: number | undefined
+  refreshing: boolean
+  onRefresh: () => void
+  onClose: () => void
+  onSent: (orders: Order[]) => void
+  /** Where a geo-blocked provider is fixed (Settings › Trading). */
+  onSwitchProvider?: () => void
+}) {
+  const now = useNow(1000)
+  const stale = quoteCountdown(fetchedAt, now).expired
+  const retype = needsRetype(quote.valueUsd)
+  const [typed, setTyped] = useState('')
+  const retypeOk = !retype || retypeMatches(typed, amount)
+  const swap = useSwap()
+  const retypeId = useId()
+  const impact = impactTone(quote.priceImpactPct)
+
+  function send() {
+    swap.mutate(
+      {
+        chainId: quote.chainId,
+        wallets: [wallet.address],
+        tokenIn: tokenIn.address,
+        tokenOut: tokenOut.address,
+        amountIn: amount,
+        ...(slippagePct !== undefined ? { slippagePct } : {}),
+      },
+      {
+        onSuccess: (res) => {
+          const orders = res?.orders ?? []
+          const failed = orders.find((o) => o.status === 'failed' || o.status === 'rejected')
+          if (failed) {
+            toast.error(`${t('trading.swap.failed')}: ${failed.reason ?? ''}`, { id: 'trd-swap' })
+          } else {
+            toast.success(t('trading.swap.sent'), {
+              id: 'trd-swap',
+              description: t('trading.swap.sent.body'),
+            })
+          }
+          onSent(orders)
+        },
+        onError: (err) => {
+          if (isProviderBlocked(err)) {
+            toast.error(t('trading.provider.blocked'), {
+              id: 'trd-swap',
+              action: onSwitchProvider
+                ? { label: t('trading.provider.switch'), onClick: onSwitchProvider }
+                : undefined,
+            })
+            return
+          }
+          toast.error(`${t('trading.swap.error')}: ${errorText(err)}`, { id: 'trd-swap' })
+        },
+      },
+    )
+  }
+
+  return (
+    <Sheet
+      title={t('trading.confirm.title')}
+      role="alertdialog"
+      onClose={swap.isPending ? () => {} : onClose}
+      note={
+        <>
+          {t('trading.confirm.from')} <b>{walletLabel(wallet)}</b>
+        </>
+      }
+      foot={
+        <>
+          <Button disabled={swap.isPending} onClick={onClose}>
+            {t('trading.confirm.cancel')}
+          </Button>
+          {stale ? (
+            <Button
+              variant="primary"
+              disabled={refreshing}
+              onClick={onRefresh}
+              data-testid="confirm-refresh"
+            >
+              {t('trading.swap.requote')}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              disabled={swap.isPending || !retypeOk}
+              onClick={send}
+              data-testid="confirm-send"
+            >
+              {swap.isPending ? t('trading.confirm.sending') : t('trading.confirm.cta')}
+            </Button>
+          )}
+        </>
+      }
+    >
+      <div className="trd-confirm__legs">
+        <div className="trd-confirm__leg">
+          <small>{t('trading.confirm.pay')}</small>
+          <b>
+            {formatAmount(amount)}
+            <span>{tokenIn.symbol}</span>
+          </b>
+        </div>
+        <ArrowDown className="trd-confirm__arrow size-3.5" strokeWidth={2} aria-hidden />
+        <div className="trd-confirm__leg">
+          <small>{t('trading.confirm.receive')}</small>
+          <b>
+            {formatAmount(quote.amountOut)}
+            <span>{tokenOut.symbol}</span>
+          </b>
+        </div>
+        <span className="trd-confirm__min">
+          {t('trading.confirm.atLeast')} {formatAmount(quote.minOut)} {tokenOut.symbol}
+        </span>
+      </div>
+
+      <div className="trd-facts">
+        <div className="trd-fact">
+          <span>{t('trading.orders.value')}</span>
+          <b>{formatUsd(quote.valueUsd)}</b>
+        </div>
+        <div className="trd-fact">
+          <span>
+            {t('trading.swap.impact')}{' '}
+            {quote.provider ? (
+              <span className="text-dim">
+                {t('trading.provider.via')} {providerLabel(quote.provider)}
+              </span>
+            ) : null}
+          </span>
+          <b data-tone={impact}>{formatPct(quote.priceImpactPct)}</b>
+        </div>
+        <div className="trd-fact">
+          <span>{t('trading.swap.gas')}</span>
+          <b>{formatUsd(quote.gasUsd)}</b>
+        </div>
+        <div className="trd-fact">
+          <span>{t('trading.swap.slippage')}</span>
+          <b>{formatPct(quote.slippagePct)}</b>
+        </div>
+      </div>
+
+      {impact === 'danger' ? (
+        <div className="trd-warn" data-tone="warn" role="status">
+          <TriangleAlert className="size-3.5" strokeWidth={2} aria-hidden />
+          <span>{t('trading.confirm.impactHigh')}</span>
+        </div>
+      ) : null}
+      {stale ? (
+        <div className="trd-warn" data-tone="warn" role="status" data-testid="confirm-stale">
+          <TriangleAlert className="size-3.5" strokeWidth={2} aria-hidden />
+          <span>{t('trading.confirm.stale')}</span>
+        </div>
+      ) : null}
+
+      <QuoteWarnings warnings={quote.warnings} />
+
+      {retype ? (
+        <div className="trd-field">
+          <label htmlFor={retypeId}>{t('trading.confirm.retype')}</label>
+          <input
+            id={retypeId}
+            className="mac-input"
+            data-mono="true"
+            inputMode="decimal"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={t('trading.confirm.retype.placeholder')}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            data-testid="confirm-retype"
+          />
+        </div>
+      ) : null}
+    </Sheet>
+  )
+}
