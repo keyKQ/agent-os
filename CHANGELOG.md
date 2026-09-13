@@ -18,6 +18,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `agentos upgrade --source auto|pypi|github`: the GitHub release wheel is used
   when it is ahead of PyPI (a failed PyPI publish no longer strands the
   upgrade) or PyPI is unreachable. `--check --json` reports both sources.
+- Gateway RPC `providers.probe`: try a provider with a key *before* it is
+  saved — list its models and send a 1-token turn — returning the verdict,
+  the model list and the error text (never the key). The macOS app's
+  provider form has a **Test key** button on it, fills the Default model menu
+  from the provider's own list, and links to the page where the key is
+  issued; the first-run "all set" screen uses the same probe.
 - Gateway RPCs `updates.apply` (runs `agentos upgrade` as a detached job that
   survives the gateway restart), `updates.status` and `updates.verifyData`;
   the Control UI's update banner gained an **Update now** button that follows

@@ -263,9 +263,11 @@ tag (`RECOMMENDED_PROVIDER` in `views/settings/logic.ts`); picking one opens
 its own screen with the Settings pane's `ProviderForm`; saving restarts the
 managed gateway itself (the step's state lives in `stores/bootstrap.ts` so the
 reconnect cannot bounce it back to the grid) and ends on "You're all set",
-where `providers.status { probeModels: true }` tries the saved key against the
-provider for real: a rejected key shows the error with **Edit key** /
-**Continue anyway**. The stage carries a
+where `providers.probe` tries the saved key against the provider for real (its
+model list, then a 1-token turn): a rejected key shows the error with
+**Edit key** / **Continue anyway**. The form itself has **Test key** (same
+RPC with the key as typed), fills Default model from the provider's list, and
+links to the provider's key page (`views/settings/provider-links.ts`). The stage carries a
 three-step rail (Install → Provider → Ready) across the top. `Skip for now`
 hands over to Home, which shows a "Choose a provider" card until one is
 configured. Settings › Advanced has **Reinstall engine** and

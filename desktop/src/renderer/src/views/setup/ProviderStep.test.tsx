@@ -79,15 +79,11 @@ const snapshot = {
 }
 
 let probeResult: unknown = {
-  providers: [
-    {
-      providerId: 'opencap',
-      active: true,
-      buildable: true,
-      error: null,
-      modelProbe: { attempted: true, status: 'ok', count: 12, error: null },
-    },
-  ],
+  ok: true,
+  models: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, name: `m${i}` })),
+  model: 'm0',
+  latencyMs: 500,
+  error: null,
 }
 
 function renderStep(onDone = vi.fn()) {
@@ -106,7 +102,7 @@ beforeEach(() => {
   rpcCall.mockImplementation(async (method: string) => {
     if (method === 'config.snapshot') return snapshot
     if (method === 'onboarding.provider.configure') return { restartRequired: true }
-    if (method === 'providers.status') return probeResult
+    if (method === 'providers.probe') return probeResult
     return {}
   })
   useConnection.getState().setState('connected')
@@ -147,10 +143,7 @@ describe('ProviderStep', () => {
     await waitFor(() =>
       expect(screen.getByTestId('setup-key-verdict')).toHaveAttribute('data-verdict', 'ok'),
     )
-    expect(rpcCall).toHaveBeenCalledWith('providers.status', {
-      provider: 'opencap',
-      probeModels: true,
-    })
+    expect(rpcCall).toHaveBeenCalledWith('providers.probe', { providerId: 'opencap' })
     expect(screen.getByTestId('setup-key-verdict')).toHaveTextContent('12 models available')
     fireEvent.click(screen.getByRole('button', { name: 'Start chatting' }))
     expect(onDone).toHaveBeenCalledTimes(1)
@@ -184,17 +177,7 @@ describe('ProviderStep across a gateway restart', () => {
 
 describe('ProviderStep key verification', () => {
   it('flags a rejected key and offers to edit it', async () => {
-    probeResult = {
-      providers: [
-        {
-          providerId: 'opencap',
-          active: true,
-          buildable: true,
-          error: null,
-          modelProbe: { attempted: true, status: 'error', count: 0, error: '401 Unauthorized' },
-        },
-      ],
-    }
+    probeResult = { ok: false, models: [], model: 'm0', latencyMs: 300, error: '401 Unauthorized' }
     useBootstrap.setState({ provider: { selected: null, saved: 'opencap' } })
     renderStep()
     await waitFor(() =>

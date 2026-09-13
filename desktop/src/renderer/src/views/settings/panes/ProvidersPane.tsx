@@ -1,12 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Check, Eye, EyeOff, LoaderCircle } from 'lucide-react'
-import { useId, useState } from 'react'
+import { AlertTriangle, Check, ExternalLink, Eye, EyeOff, LoaderCircle } from 'lucide-react'
+import { useEffect, useId, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { configuredProvider, type ProviderSpec, type SetupConfig } from '@/views/setup/logic'
 import type { SettingsSnapshot } from '@/views/settings/snapshot'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
+import { desktopApi } from '~/lib/desktop-api'
 import { cn } from '~/lib/utils'
 import { useGateway } from '~/stores/gateway'
 import {
@@ -28,6 +29,7 @@ import {
   type ProviderDraft,
 } from '../logic'
 import { Card, Head, Notice, Pill, Row, Value } from '../parts'
+import { providerKeyUrl } from '../provider-links'
 import { ProviderLogo } from '../ProviderLogo'
 import { useConfigSnapshot, withRevision } from '../use-snapshot'
 
@@ -37,6 +39,13 @@ interface ConfigureResult {
 }
 interface SetResult {
   restartRequired?: boolean
+}
+interface ProbeResult {
+  ok: boolean
+  models: { id: string; name?: string; contextWindow?: number }[]
+  model?: string
+  latencyMs?: number
+  error: string | null
 }
 
 function errorText(err: unknown): string {
@@ -251,6 +260,7 @@ export function ProviderForm({
   saving,
   disabled,
   onSave,
+  submitLabel,
 }: {
   config: SetupConfig
   spec: ProviderSpec
@@ -259,6 +269,8 @@ export function ProviderForm({
   saving: boolean
   disabled: boolean
   onSave: (draft: ProviderDraft) => void
+  /** Overrides the primary button's label (first run: "Save and continue"). */
+  submitLabel?: string
 }) {
   const rpc = useRpc()
   const ids = { key: useId(), env: useId(), url: useId(), proxy: useId(), model: useId() }
@@ -285,9 +297,53 @@ export function ProviderForm({
     queryFn: () => rpc.call<CatalogModel[]>('models.list', { provider: spec.providerId }),
   })
   const modelListId = useId()
-  const options = modelOptions(models.data ?? [], spec.providerId, draft.model)
+
+  // "Test key": one round trip to the provider with the key as typed — its
+  // model list, then a 1-token turn — so a wrong key shows up here, not on
+  // the first message, and the model menu is the provider's own list.
+  const probe = useMutation({
+    mutationFn: () =>
+      rpc.call<ProbeResult>('providers.probe', {
+        providerId: spec.providerId,
+        apiKey: draft.apiKey.trim() || undefined,
+        apiKeyEnv: draft.apiKeyEnv.trim() || undefined,
+        baseUrl: draft.baseUrl.trim() || undefined,
+        model: draft.model.trim() || undefined,
+      }),
+  })
+  const probed = probe.data
+  const probeVerdict: 'idle' | 'checking' | 'ok' | 'bad' = probe.isPending
+    ? 'checking'
+    : probe.isError
+      ? 'bad'
+      : probed
+        ? probed.ok
+          ? 'ok'
+          : 'bad'
+        : 'idle'
+  const probeError = probe.error
+    ? probe.error instanceof Error
+      ? probe.error.message
+      : String(probe.error)
+    : (probed?.error ?? '')
+  // A stored or env key can be tried without typing anything: do it once,
+  // so the model menu is populated the moment the form opens.
+  const canAutoProbe = !custom && (hasStoredKey || hasEnvKey)
+  const runProbe = probe.mutate
+  useEffect(() => {
+    if (canAutoProbe) runProbe()
+  }, [canAutoProbe, runProbe])
+
+  const providerModels: CatalogModel[] = (probed?.models ?? []).map((m) => ({
+    id: m.id,
+    name: m.name ?? m.id,
+    provider: spec.providerId,
+  }))
+  const catalogModels = providerModels.length > 0 ? providerModels : (models.data ?? [])
+  const options = modelOptions(catalogModels, spec.providerId, draft.model)
   // A provider without a key has no live catalog: nothing to check the model against.
-  const hasCatalog = (models.data?.length ?? 0) > 0
+  const hasCatalog = catalogModels.length > 0
+  const keyUrl = providerKeyUrl(spec.providerId)
 
   const keyHelp = needsKey
     ? t('settings.providers.key.missing')
@@ -309,6 +365,19 @@ export function ProviderForm({
               ? `${t('settings.providers.deployment.local')} `
               : `${t('settings.providers.deployment.cloud')} `}
           {spec.whatYouNeed?.join(' ') ?? ''}
+          {keyUrl ? (
+            <>
+              {' '}
+              <button
+                type="button"
+                className="prov-keylink"
+                onClick={() => void desktopApi().app.openExternal(keyUrl)}
+              >
+                {t('settings.providers.key.get')}
+                <ExternalLink className="size-3" strokeWidth={2} aria-hidden />
+              </button>
+            </>
+          ) : null}
         </>
       }
       action={
@@ -344,7 +413,8 @@ export function ProviderForm({
             disabled={!dirty || saving || needsKey || invalid || disabled}
             onClick={() => onSave(draft)}
           >
-            {switching ? `${t('settings.providers.switchTo')} ${label}` : t('settings.save')}
+            {submitLabel ??
+              (switching ? `${t('settings.providers.switchTo')} ${label}` : t('settings.save'))}
           </Button>
         </>
       }
@@ -382,11 +452,36 @@ export function ProviderForm({
           label={t('settings.providers.key')}
           htmlFor={ids.key}
           help={
-            custom && !keyHelp ? (
-              t('settings.providers.custom.key.help')
-            ) : keyHelp ? (
-              <span className={needsKey ? 'stg-error' : undefined}>{keyHelp}</span>
-            ) : undefined
+            <>
+              {custom && !keyHelp ? (
+                t('settings.providers.custom.key.help')
+              ) : keyHelp ? (
+                <span className={needsKey ? 'stg-error' : undefined}>{keyHelp}</span>
+              ) : null}
+              {probeVerdict !== 'idle' ? (
+                <span className="prov-probe" data-verdict={probeVerdict} data-testid="key-probe">
+                  {probeVerdict === 'checking' ? (
+                    <>
+                      <LoaderCircle className="stg-spin size-3" strokeWidth={2} aria-hidden />
+                      {t('settings.providers.key.testing')}
+                    </>
+                  ) : probeVerdict === 'ok' ? (
+                    <>
+                      <Check className="size-3" strokeWidth={2.5} aria-hidden />
+                      {t('settings.providers.key.works')}
+                      {probed?.models.length
+                        ? ` ${probed.models.length} ${t('settings.providers.key.worksModels')}`
+                        : ''}
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="size-3" strokeWidth={2} aria-hidden />
+                      {t('settings.providers.key.failed')} <code>{probeError}</code>
+                    </>
+                  )}
+                </span>
+              ) : null}
+            </>
           }
           align="start"
         >
@@ -423,6 +518,19 @@ export function ProviderForm({
               )}
             </Button>
           </span>
+          <Button
+            disabled={
+              disabled ||
+              probe.isPending ||
+              (Boolean(spec.requiresApiKey) && !draft.apiKey.trim() && !hasStoredKey && !hasEnvKey)
+            }
+            onClick={() => probe.mutate()}
+            data-testid="key-probe-button"
+          >
+            {probe.isPending
+              ? t('settings.providers.key.testing')
+              : t('settings.providers.key.test')}
+          </Button>
         </Row>
       ) : null}
 
@@ -468,7 +576,10 @@ export function ProviderForm({
               <span>{t('settings.providers.model.help')}</span>
               {hasCatalog ? (
                 <span>
-                  {models.data!.length} {t('settings.providers.catalog')}
+                  {catalogModels.length} {t('settings.providers.catalog')}
+                  {providerModels.length > 0
+                    ? ` ${t('settings.providers.model.fromProvider')}`
+                    : ''}
                 </span>
               ) : null}
             </>

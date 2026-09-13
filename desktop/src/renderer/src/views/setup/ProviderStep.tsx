@@ -133,6 +133,7 @@ export function ProviderStep({ onDone }: { onDone: () => void }) {
             saving={save.isPending}
             disabled={Boolean(snapshot.writeBlocked)}
             onSave={(draft) => save.mutate(draft)}
+            submitLabel={t('settings.providers.saveContinue')}
           />
         </div>
       </div>
@@ -190,18 +191,16 @@ export function ProviderStep({ onDone }: { onDone: () => void }) {
   )
 }
 
-interface ProviderStatusRow {
-  providerId: string
-  active?: boolean
-  buildable?: boolean
-  error?: string | null
-  modelProbe?: { attempted: boolean; status: string; count: number; error: string | null }
+interface ProbeResult {
+  ok: boolean
+  models: { id: string; name?: string }[]
+  error: string | null
 }
 
 /**
- * "All set", with the key actually tried: `providers.status` with
- * `probeModels` asks the provider for its model list using the saved key, so
- * a wrong key shows up here instead of on the first message.
+ * "All set", with the key actually tried: `providers.probe` lists the
+ * provider's models and sends one token with the saved key, so a wrong key
+ * shows up here instead of on the first message.
  */
 function Ready({
   providerId,
@@ -219,21 +218,17 @@ function Ready({
     queryKey: ['setup', 'provider-probe', providerId],
     retry: false,
     staleTime: Infinity,
-    queryFn: () =>
-      rpc.call<{ providers: ProviderStatusRow[] }>('providers.status', {
-        provider: providerId,
-        probeModels: true,
-      }),
+    queryFn: () => rpc.call<ProbeResult>('providers.probe', { providerId }),
   })
-  const row = probe.data?.providers?.find((r) => r.providerId === providerId)
   const verdict: 'checking' | 'ok' | 'bad' | 'unknown' = probe.isPending
     ? 'checking'
-    : row?.modelProbe?.status === 'ok'
+    : probe.data?.ok
       ? 'ok'
-      : row?.modelProbe?.status === 'error' || row?.error
+      : probe.data
         ? 'bad'
         : 'unknown'
-  const detail = row?.modelProbe?.error ?? row?.error ?? probe.error?.message ?? ''
+  const detail = probe.data?.error ?? probe.error?.message ?? ''
+  const modelCount = probe.data?.models.length ?? 0
 
   return (
     <div className="setup__ready" data-testid="setup-ready" data-verdict={verdict}>
@@ -264,7 +259,7 @@ function Ready({
           <>
             <Check className="size-3.5" aria-hidden />
             {t('setup.ready.keyOk')}
-            {row?.modelProbe?.count ? ` ${row.modelProbe.count} ${t('setup.ready.models')}.` : ''}
+            {modelCount ? ` ${modelCount} ${t('setup.ready.models')}.` : ''}
           </>
         ) : verdict === 'bad' ? (
           <>
