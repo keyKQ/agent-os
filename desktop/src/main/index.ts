@@ -77,6 +77,12 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     electronApp.setAppUserModelId('dev.agentos.desktop')
+    // A dev run is Electron's own bundle, so its Dock icon is Electron's;
+    // the packaged app carries the icon in the bundle.
+    if (!app.isPackaged) {
+      const icon = path.resolve(__dirname, '../../resources/icon.png')
+      if (existsSync(icon)) app.dock?.setIcon(icon)
+    }
     // `zoom: true` matters: the default swallows ⌘− and ⌘⇧= in
     // before-input-event, which also silences the View menu's zoom
     // accelerators (Electron drops menu shortcuts for prevented input).

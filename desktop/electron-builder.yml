@@ -15,6 +15,8 @@ extraResources:
 asar: true
 mac:
   category: public.app-category.developer-tools
+  # 1024x1024 PNG rendered by scripts/make-icon.py; electron-builder derives the .icns.
+  icon: resources/icon.png
   target:
     # electron-updater on macOS updates from the zip; the dmg is what people
     # download by hand. Both are published so either path works.

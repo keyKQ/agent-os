@@ -40,6 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   config; `install.sh --manifest` and `--stage NAME --json` expose the
   installer's stages, each running in its own process and subshell so a
   failure still yields a `{"ok":false}` frame.
+- macOS app: its own icon (the AgentOS mark on a dark squircle, rendered at
+  1024 px by `desktop/scripts/make-icon.py`) instead of Electron's, in the
+  DMG, Applications, the Dock and notifications.
 - macOS app: Settings › About updates the engine (runs `agentos upgrade
   --no-restart`, restarts the gateway it spawned, confirms the version and
   data over RPC, warns before interrupting active sessions) and the app
