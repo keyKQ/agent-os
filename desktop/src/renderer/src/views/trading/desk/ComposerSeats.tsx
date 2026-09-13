@@ -3,6 +3,7 @@ import {
   ChevronDown,
   Lock,
   Repeat,
+  Rocket,
   Scale,
   Settings2,
   TrendingDown,
@@ -47,6 +48,7 @@ export function ComposerSeats({
   onOpenSettings,
   onOpenWallets,
   onSwitchProvider,
+  onStartMission,
   onQuick,
 }: {
   limits: Limits | null
@@ -60,6 +62,8 @@ export function ComposerSeats({
   onOpenWallets: () => void
   /** Switching the swap route is allowed from the desk; limits are not. */
   onSwitchProvider?: (id: ProviderId) => void
+  /** Opens the mission contract; rendered as the first chip so it lines up with the capsule. */
+  onStartMission?: () => void
   onQuick: (kind: MissionKind) => void
 }) {
   return (
@@ -102,6 +106,18 @@ export function ComposerSeats({
       </button>
       <span className="trd-seats__spacer" />
       <div className="trd-quick" role="group" aria-label={t('trading.quick.title')}>
+        {onStartMission ? (
+          <button
+            type="button"
+            className="trd-quick__chip trd-quick__chip--mission app-no-drag"
+            onClick={onStartMission}
+            data-testid="mission-start"
+            tabIndex={typing ? -1 : 0}
+          >
+            <Rocket className="size-3" strokeWidth={2} aria-hidden />
+            {t('trading.mission.start')}
+          </button>
+        ) : null}
         {QUICK.map(({ kind, icon: Icon, key }) => (
           <button
             key={kind}

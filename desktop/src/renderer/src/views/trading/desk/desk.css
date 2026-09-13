@@ -315,6 +315,25 @@
 
 /* ── Seats ────────────────────────────────────────────────────────────────── */
 
+/* Everything docked over the capsule shares the capsule's column, so nothing
+   floats off to the pane's edge. */
+.trd-dock {
+  width: 100%;
+  max-width: var(--chat-col);
+  margin: 0 auto;
+}
+.trd-dock:empty {
+  display: none;
+}
+.trd-seatstack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trd-quick__chip--mission {
+  color: var(--primary);
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--primary) 45%, var(--border));
+}
 .trd-seats {
   display: flex;
   align-items: center;

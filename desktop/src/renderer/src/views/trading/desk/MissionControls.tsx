@@ -76,6 +76,7 @@ export function MissionControls({
   onRun,
   onSetEnabled,
   onRemove,
+  showStart = true,
 }: {
   missions: RawJob[]
   running: ReadonlySet<string>
@@ -86,6 +87,8 @@ export function MissionControls({
   onRun: (job: RawJob) => void
   onSetEnabled: (job: RawJob, enabled: boolean) => void
   onRemove: (job: RawJob) => void
+  /** The seats row carries its own Start chip when the controls sit above it. */
+  showStart?: boolean
 }) {
   return (
     <div className="trd-mctl" data-testid="mission-controls">
@@ -159,15 +162,17 @@ export function MissionControls({
           </div>
         )
       })}
-      <button
-        type="button"
-        className="trd-mctl__start app-no-drag"
-        onClick={onStart}
-        data-testid="mission-start"
-      >
-        <Zap className="size-3" strokeWidth={2.25} aria-hidden />
-        {t('trading.mission.start')}
-      </button>
+      {showStart ? (
+        <button
+          type="button"
+          className="trd-mctl__start app-no-drag"
+          onClick={onStart}
+          data-testid="mission-start"
+        >
+          <Zap className="size-3" strokeWidth={2.25} aria-hidden />
+          {t('trading.mission.start')}
+        </button>
+      ) : null}
     </div>
   )
 }

@@ -249,7 +249,7 @@ export function useDeskInstruments(
       />
     ),
     dockAbove: (
-      <>
+      <div className="trd-dock">
         {desk.gate.needsKey ? (
           <Notice
             tone="info"
@@ -279,35 +279,41 @@ export function useDeskInstruments(
           running={missions.running}
           pendingApprovals={pendingOrders.length}
         />
-        <MissionControls
-          missions={missions.missions}
-          running={missions.running}
-          pendingApprovals={pendingOrders.length}
-          busy={missions.busy}
-          onStart={() => setContract({ kind: 'custom' })}
-          onEdit={(job) => setContract({ kind: 'custom', job })}
-          onRun={missions.runNow}
-          onSetEnabled={missions.setEnabled}
-          onRemove={missions.remove}
-        />
-      </>
+      </div>
     ),
     seats: (
-      <ComposerSeats
-        limits={desk.limits}
-        provider={desk.gate.provider}
-        providers={tradingStatus.data?.providers ?? []}
-        switching={switchProvider.isPending}
-        wallet={primaryWallet}
-        typing={composerValue.length > 0}
-        onOpenSettings={() => openSettings('trading')}
-        onSwitchProvider={(id) => switchProvider.mutate(id)}
-        onOpenWallets={() => {
-          setBookTab('portfolio')
-          desk.onOpenBookTab('portfolio')
-        }}
-        onQuick={(kind) => setContract({ kind })}
-      />
+      <div className="trd-seatstack">
+        {missions.missions.length ? (
+          <MissionControls
+            missions={missions.missions}
+            running={missions.running}
+            pendingApprovals={pendingOrders.length}
+            busy={missions.busy}
+            onStart={() => setContract({ kind: 'custom' })}
+            onEdit={(job) => setContract({ kind: 'custom', job })}
+            onRun={missions.runNow}
+            onSetEnabled={missions.setEnabled}
+            onRemove={missions.remove}
+            showStart={false}
+          />
+        ) : null}
+        <ComposerSeats
+          limits={desk.limits}
+          onStartMission={() => setContract({ kind: 'custom' })}
+          provider={desk.gate.provider}
+          providers={tradingStatus.data?.providers ?? []}
+          switching={switchProvider.isPending}
+          wallet={primaryWallet}
+          typing={composerValue.length > 0}
+          onOpenSettings={() => openSettings('trading')}
+          onSwitchProvider={(id) => switchProvider.mutate(id)}
+          onOpenWallets={() => {
+            setBookTab('portfolio')
+            desk.onOpenBookTab('portfolio')
+          }}
+          onQuick={(kind) => setContract({ kind })}
+        />
+      </div>
     ),
     modal: contract ? (
       <MissionContract
