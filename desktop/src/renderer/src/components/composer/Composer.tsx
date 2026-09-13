@@ -50,6 +50,11 @@ export interface ComposerProps {
    * the line and ⌘Enter sends. Settings > General.
    */
   enterToSend?: boolean
+  /** A row that sits between the tray and the capsule (the desk's seats). */
+  seats?: ReactNode
+  /** Overrides the default placeholder (the desk rotates real orders). */
+  placeholder?: string
+  onFocusChange?: (focused: boolean) => void
 }
 
 const MIN_TEXTAREA_HEIGHT = 26
@@ -79,6 +84,9 @@ export function Composer({
   onEnqueueCurrent,
   autoFocus = true,
   enterToSend = true,
+  seats,
+  placeholder,
+  onFocusChange,
 }: ComposerProps) {
   const [value, setValue] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -281,6 +289,7 @@ export function Composer({
     <div className="composer-shell">
       {routerFxDock}
       {tray}
+      {seats}
       {slashMenu}
       <form
         className="composer"
@@ -321,7 +330,9 @@ export function Composer({
           value={value}
           onChange={onChange}
           onKeyDown={onKeyDown}
-          placeholder={t('composer.placeholder')}
+          onFocus={() => onFocusChange?.(true)}
+          onBlur={() => onFocusChange?.(false)}
+          placeholder={placeholder ?? t('composer.placeholder')}
           aria-label={t('composer.placeholder')}
           aria-autocomplete={slashListboxId ? 'list' : undefined}
           aria-expanded={slashListboxId ? Boolean(slashActiveDescendant) : undefined}

@@ -1,0 +1,86 @@
+import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { renderDesk, WALLET } from '../test-utils'
+import { MissionContract } from './MissionContract'
+
+const limits = { dailyCapUsd: 1000, spentTodayUsd: 0, thresholdUsd: 100, approvalTtlSeconds: 900 }
+
+describe('MissionContract', () => {
+  it('prefills a DCA mission, shows the prompt it composes, and creates the job', async () => {
+    const onCreate = vi.fn(async () => ({}))
+    const onClose = vi.fn()
+    renderDesk(
+      <MissionContract
+        kind="dca"
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={onClose}
+        onSend={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    expect(screen.getByTestId('contract-name')).toHaveValue('DCA ETH')
+    expect(screen.getByTestId('contract-interval')).toHaveValue('86400')
+    expect(screen.getByTestId('engine-limits')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('contract-preview-toggle'))
+    const prompt = screen.getByTestId('contract-prompt').textContent ?? ''
+    expect(prompt).toContain('[Trading desk mission] DCA ETH')
+    expect(prompt).toContain('orders above $100.00 wait for approval')
+    expect(prompt).toContain('Dry run')
+    fireEvent.click(screen.getByTestId('contract-submit'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    const [form, text] = onCreate.mock.calls[0] as unknown as [
+      { kind: string; name: string },
+      string,
+    ]
+    expect(form.kind).toBe('dca')
+    expect(text).toBe(prompt)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('refuses an empty goal and names the missing field', () => {
+    renderDesk(
+      <MissionContract
+        kind="custom"
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={null}
+        onClose={vi.fn()}
+        onSend={vi.fn()}
+        onCreate={vi.fn(async () => ({}))}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    // Pristine: the button is disabled but no copy scolds the user yet.
+    expect(screen.getByTestId('contract-submit')).toBeDisabled()
+    expect(screen.queryByText('Give the mission a name')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByTestId('contract-name'), { target: { value: 'Mine' } })
+    expect(screen.getByTestId('contract-submit')).toBeDisabled()
+    expect(screen.getByText('Say what the mission should do')).toBeInTheDocument()
+  })
+
+  it('sends a one-shot swap into the chat instead of scheduling it', async () => {
+    const onSend = vi.fn()
+    const onCreate = vi.fn(async () => ({}))
+    renderDesk(
+      <MissionContract
+        kind="swap"
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={vi.fn()}
+        onSend={onSend}
+        onCreate={onCreate}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    expect(screen.queryByTestId('contract-interval')).toBeNull()
+    expect(screen.getByTestId('contract-submit')).toHaveTextContent('Send')
+    fireEvent.click(screen.getByTestId('contract-submit'))
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1))
+    expect(String(onSend.mock.calls[0]?.[0])).toContain('Goal: Swap 10 USDC to ETH on Base.')
+    expect(onCreate).not.toHaveBeenCalled()
+  })
+})

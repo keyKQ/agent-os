@@ -238,7 +238,11 @@ export function useLimits(wallet: string | null) {
     enabled: connected && Boolean(wallet),
     queryFn: async () => {
       await rpc.waitForConnection()
-      return rpc.call<Limits>('trading.limits', { wallet })
+      const raw = await rpc.call<Limits & { approvalThresholdUsd?: number }>('trading.limits', {
+        wallet,
+      })
+      // The engine names the threshold `approvalThresholdUsd`; the desk reads `thresholdUsd`.
+      return { ...raw, thresholdUsd: raw.thresholdUsd ?? raw.approvalThresholdUsd ?? 0 }
     },
     refetchInterval: 30_000,
   })
