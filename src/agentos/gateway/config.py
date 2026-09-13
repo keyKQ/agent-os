@@ -2032,6 +2032,53 @@ class UpdatesConfig(BaseModel):
     notify: bool = True
 
 
+class TradingConfig(BaseSettings):
+    """Wallet + Uniswap trading settings (``[trading]``).
+
+    The wallet vault, ledger and swap execution live in the engine
+    (``agentos.trading``); the desktop app and the ``wallet-trading`` skill
+    are clients of the same RPC surface. ``uniswap_api_key`` is redacted in
+    every public snapshot like any other ``*_api_key``; when empty the key is
+    read from the environment variable named by ``uniswap_api_key_env``.
+    Money limits are US dollars and apply to agent-initiated swaps only.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AGENTOS_TRADING_",
+        validate_assignment=True,
+    )
+
+    enabled: bool = True
+    # Swap provider: Uniswap Trading API (default, needs an API key) or the
+    # KyberSwap aggregator (no key; geo-restricted in some countries).
+    provider: Literal["uniswap", "kyber"] = "uniswap"
+    uniswap_api_key: str = ""
+    uniswap_api_key_env: str = "UNISWAP_API_KEY"
+    kyber_client_id: str = "agentos"
+    # Chain id (as a string, TOML keys are strings) -> JSON-RPC URL override.
+    # When a chain has no entry, RPC_BASE_URL / RPC_ROBINHOOD_URL are tried
+    # before the public default.
+    rpc_urls: dict[str, str] = Field(default_factory=dict)
+    approval_threshold_usd: float = Field(default=100.0, ge=0)
+    daily_cap_usd: float = Field(default=1000.0, ge=0)
+    approval_ttl_seconds: int = Field(default=900, ge=30)
+    # None = let the Uniswap API pick (``autoSlippage: DEFAULT``).
+    default_slippage_pct: float | None = Field(default=None, ge=0, le=50)
+    unlock_mode: Literal["auto", "manual"] = "auto"
+    sync_interval_seconds: int = Field(default=30, ge=5)
+    price_ttl_seconds: int = Field(default=20, ge=1)
+
+    def resolved_uniswap_api_key(self) -> str:
+        """The API key to send: explicit config value, else the named env var."""
+        explicit = (self.uniswap_api_key or "").strip()
+        if explicit:
+            return explicit
+        env_name = (self.uniswap_api_key_env or "").strip()
+        if env_name:
+            return os.environ.get(env_name, "").strip()
+        return ""
+
+
 class BudgetsConfig(BaseModel):
     """Money spend ceilings — hard stop plus warn thresholds.
 
@@ -2251,6 +2298,7 @@ class GatewayConfig(BaseSettings):
     budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
 
     updates: UpdatesConfig = Field(default_factory=UpdatesConfig)
+    trading: TradingConfig = Field(default_factory=TradingConfig)
 
     # Component enable flags
     control_ui: ControlUiConfig = Field(default_factory=ControlUiConfig)

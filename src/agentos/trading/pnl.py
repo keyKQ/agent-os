@@ -1,0 +1,155 @@
+"""FIFO lot accounting and portfolio aggregation. Pure, unit-tested.
+
+Amounts are integers in the token's base units; money is float USD. A lot is
+a quantity acquired at one cost **per raw unit** (``cost_usd_per_raw``), so
+the math never needs the token's decimals until a number is displayed.
+Selling consumes lots oldest-first and realises proceeds minus cost.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import ROUND_DOWN, Decimal
+
+
+@dataclass
+class Lot:
+    lot_id: int | None
+    amount_raw: int
+    cost_usd_per_raw: float
+    acquired_at: float
+
+    @property
+    def cost_usd(self) -> float:
+        return max(0, self.amount_raw) * self.cost_usd_per_raw
+
+
+@dataclass
+class Consumption:
+    lot_id: int | None
+    amount_raw: int
+    cost_usd: float
+
+
+@dataclass
+class SellResult:
+    consumed: list[Consumption] = field(default_factory=list)
+    cost_usd: float = 0.0
+    proceeds_usd: float = 0.0
+    # Sold more than the lots held (history gap on an imported wallet).
+    unmatched_raw: int = 0
+
+    @property
+    def pnl_usd(self) -> float:
+        return self.proceeds_usd - self.cost_usd
+
+
+def to_human(amount_raw: int, decimals: int) -> Decimal:
+    if decimals <= 0:
+        return Decimal(amount_raw)
+    return Decimal(amount_raw) / (Decimal(10) ** decimals)
+
+
+def to_raw(amount: str | Decimal | float | int, decimals: int) -> int:
+    value = Decimal(str(amount))
+    if value < 0:
+        raise ValueError("amount must be positive")
+    scaled = value * (Decimal(10) ** decimals)
+    return int(scaled.to_integral_value(rounding=ROUND_DOWN))
+
+
+def format_amount(amount_raw: int, decimals: int, *, max_places: int = 8) -> str:
+    """Human decimal string without exponent noise or trailing zeros."""
+    human = to_human(amount_raw, decimals)
+    places = min(decimals, max_places)
+    if places > 0:
+        human = human.quantize(Decimal(1).scaleb(-places), rounding=ROUND_DOWN)
+    text = format(human, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def per_raw(cost_usd_per_token: float, decimals: int) -> float:
+    """Cost per raw unit from a cost per whole token."""
+    return float(cost_usd_per_token) / float(10**decimals)
+
+
+def per_token(cost_usd_per_raw: float, decimals: int) -> float:
+    return float(cost_usd_per_raw) * float(10**decimals)
+
+
+def sell_fifo(lots: list[Lot], amount_raw: int, proceeds_usd: float | None) -> SellResult:
+    """Consume ``amount_raw`` from ``lots`` (mutated in place, oldest first)."""
+    result = SellResult()
+    remaining = int(amount_raw)
+    if remaining <= 0:
+        return result
+    total = remaining
+    for lot in sorted(lots, key=lambda entry: entry.acquired_at):
+        if remaining <= 0:
+            break
+        if lot.amount_raw <= 0:
+            continue
+        take = min(lot.amount_raw, remaining)
+        cost = take * lot.cost_usd_per_raw
+        lot.amount_raw -= take
+        remaining -= take
+        result.consumed.append(Consumption(lot.lot_id, take, cost))
+        result.cost_usd += cost
+    result.unmatched_raw = remaining
+    if proceeds_usd is not None and total:
+        matched = total - remaining
+        result.proceeds_usd = proceeds_usd * (matched / total)
+    return result
+
+
+@dataclass
+class HoldingPnl:
+    amount_raw: int
+    cost_usd: float
+    realized_usd: float
+    price_usd: float | None
+    decimals: int
+
+    @property
+    def amount(self) -> float:
+        return float(to_human(self.amount_raw, self.decimals))
+
+    @property
+    def value_usd(self) -> float | None:
+        if self.price_usd is None:
+            return None
+        return self.amount * self.price_usd
+
+    @property
+    def avg_cost_usd(self) -> float | None:
+        if self.amount_raw <= 0 or self.cost_usd <= 0:
+            return None
+        return self.cost_usd / self.amount if self.amount > 0 else None
+
+    @property
+    def unrealized_usd(self) -> float | None:
+        value = self.value_usd
+        if value is None or self.cost_usd <= 0:
+            return None
+        return value - self.cost_usd
+
+    @property
+    def unrealized_pct(self) -> float | None:
+        unrealized = self.unrealized_usd
+        if unrealized is None or self.cost_usd <= 0:
+            return None
+        return unrealized / self.cost_usd * 100.0
+
+
+def holding_from_lots(
+    lots: list[Lot], *, decimals: int, price_usd: float | None, realized_usd: float
+) -> HoldingPnl:
+    return HoldingPnl(
+        amount_raw=sum(max(0, lot.amount_raw) for lot in lots),
+        cost_usd=sum(lot.cost_usd for lot in lots),
+        realized_usd=realized_usd,
+        price_usd=price_usd,
+        decimals=decimals,
+    )

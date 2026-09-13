@@ -412,7 +412,9 @@ def _has_unproven_live_change(changed_paths: set[str]) -> bool:
         for path in changed_paths
         if not any(other.startswith(f"{path}.") for other in changed_paths if other != path)
     }
-    hot_prefixes = ("llm", "image_generation", "audio")
+    # ``trading`` is read per call by the trading service (provider, limits,
+    # keys), so a write there never needs a restart.
+    hot_prefixes = ("llm", "image_generation", "audio", "trading")
     search_paths = {
         "search_provider",
         "search_api_key",

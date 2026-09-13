@@ -1,0 +1,657 @@
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
+from agentos.trading.service import TradingError, TradingService
+from tests.test_trading.conftest import PASSWORD
+from tests.test_trading.fakes import (
+    AAPL,
+    ROUTER,
+    USDC,
+    WETH,
+    FakeChain,
+    FakePrices,
+    FakeUniswap,
+    decode_fake_raw,
+    transfer_log,
+)
+
+
+def _events(service: TradingService, name: str) -> list[dict]:
+    return [payload for event, payload in service.events if event == name]  # type: ignore[attr-defined]
+
+
+def _wire_swap_effects(
+    chain: FakeChain,
+    wallet: str,
+    *,
+    out_token: str = WETH,
+    out_amount: int = 5 * 10**14,
+    status: int = 1,
+):
+    """Make eth_sendRawTransaction move balances and mint a receipt, like a node would."""
+
+    def on_send(raw: str) -> str:
+        tx = decode_fake_raw(raw)
+        chain._seq += 1
+        tx_hash = "0x" + format(0xFEED00 + chain._seq, "x").rjust(64, "0")
+        gas_wei = 100_000 * 10**8
+        chain.nonces[wallet.lower()] = tx.get("nonce", 0) + 1
+        if tx["to"].lower() == ROUTER and status == 1:
+            data_in = int(tx["value"])
+            chain.native[wallet.lower()] -= data_in + gas_wei
+            if data_in == 0:
+                chain.set_erc20(USDC, wallet, chain.get_erc20(USDC, wallet) - 10 * 10**6)
+            if out_token == NATIVE_ADDRESS:
+                chain.native[wallet.lower()] += out_amount
+                logs = []
+            else:
+                chain.set_erc20(out_token, wallet, chain.get_erc20(out_token, wallet) + out_amount)
+                logs = [
+                    transfer_log(
+                        tx_hash=tx_hash,
+                        log_index=3,
+                        block=chain.block,
+                        token=out_token,
+                        sender=ROUTER,
+                        recipient=wallet,
+                        amount=out_amount,
+                    )
+                ]
+            chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8, logs=logs)
+        elif tx["to"].lower() == USDC:  # approval
+            chain.native[wallet.lower()] -= gas_wei
+            chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8)
+        else:
+            chain.native[wallet.lower()] -= gas_wei
+            chain.receipt(tx_hash, status=status, gas_used=100_000, gas_price=10**8)
+        return tx_hash
+
+    chain.on_send = on_send
+
+
+class TestStatusAndWallets:
+    async def test_status_reports_config_and_vault(self, service: TradingService) -> None:
+        status = await service.status(check_rpc=True)
+        assert status["apiKeyConfigured"] is True
+        assert [c["chainId"] for c in status["chains"]] == [8453, 4663]
+        assert all(c["healthy"] for c in status["chains"])
+        assert status["limits"] == {
+            "approvalThresholdUsd": 100.0,
+            "dailyCapUsd": 1000.0,
+            "approvalTtlSeconds": 900,
+        }
+        assert status["initialized"] is False and status["unlocked"] is False
+
+    async def test_probe(self, service: TradingService, fake_uniswap: FakeUniswap) -> None:
+        assert (await service.probe())["ok"] is True
+        bad = await service.probe("nope")
+        assert bad["ok"] is False and bad["error"]
+        service.config.uniswap_api_key = ""
+        assert (await service.probe())["error"] == "No Uniswap API key configured"
+
+    async def test_create_wallet_stamps_block_and_mirrors(
+        self, service: TradingService, base_chain: FakeChain, robinhood_chain: FakeChain
+    ) -> None:
+        service.vault.setup(PASSWORD, "auto")
+        wallet = await service.create_wallet("Main")
+        assert wallet["primary"] is True
+        assert wallet["createdBlock"] == {"8453": base_chain.block, "4663": robinhood_chain.block}
+        assert service.wallet_dicts()[0]["chains"] == [8453, 4663]
+        assert _events(service, "trading.changed")[-1]["reason"] == "wallet"
+        second = await service.import_wallet("Second", private_key="0x" + "11" * 32)
+        assert second["primary"] is False and second["imported"] is True
+        with pytest.raises(TradingError, match="privateKey or keystoreJson"):
+            await service.import_wallet("x")
+        await service.remove_wallet(second["address"], PASSWORD)
+        assert len(service.wallet_dicts()) == 1
+
+    async def test_wallet_selectors(self, funded_service: TradingService) -> None:
+        service = funded_service
+        second = await service.import_wallet("Second", private_key="0x" + "22" * 32)
+        primary = service.test_wallet  # type: ignore[attr-defined]
+        assert [w.address for w in service._wallets_for(None)] == [primary]
+        assert [w.address for w in service._wallets_for("all")] == [primary, second["address"]]
+        assert [w.address for w in service._wallets_for([second["address"], "Main"])] == [
+            second["address"],
+            primary,
+        ]
+        assert [w.address for w in service._wallets_for("second")] == [second["address"]]
+        with pytest.raises(TradingError):
+            service._wallets_for(42)
+
+
+class TestTokensAndBalances:
+    async def test_resolve_token_prefers_stock_tokens(self, service: TradingService) -> None:
+        aapl = await service.resolve_token(ROBINHOOD, "AAPL")
+        assert aapl.address == AAPL and aapl.stock_token
+        eth = await service.resolve_token(BASE, "eth")
+        assert eth.native
+        usdc = await service.resolve_token(BASE, USDC)
+        assert usdc.symbol == "USDC" and usdc.decimals == 6
+        with pytest.raises(TradingError, match="Unknown token symbol"):
+            await service.resolve_token(BASE, "NOPE")
+        with pytest.raises(TradingError, match="required"):
+            await service.resolve_token(BASE, "")
+
+    async def test_search_and_on_chain_metadata_fallback(
+        self, service: TradingService, base_chain: FakeChain
+    ) -> None:
+        rows = await service.search_tokens(BASE, "USDC")
+        assert rows[0]["address"] == USDC and rows[0]["priceUsd"] == 1.0
+        unknown = "0x9999000000000000000000000000000000000009"
+        base_chain.tokens[unknown] = ("XYZ", "Xyz Coin", 9)
+        meta = await service.token_meta(BASE, unknown)
+        assert (meta.symbol, meta.decimals, meta.verified) == ("XYZ", 9, False)
+        assert service.ledger.get_token(8453, unknown)["symbol"] == "XYZ"
+
+    async def test_balances_and_portfolio(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        await service.sync_all()
+        balances = await service.balances()
+        by_token = {b["token"]["address"]: b for b in balances if b["chainId"] == 8453}
+        assert by_token[NATIVE_ADDRESS]["amount"] == "1" and by_token[NATIVE_ADDRESS][
+            "valueUsd"
+        ] == pytest.approx(2000.0)
+        assert by_token[USDC]["amount"] == "1000" and by_token[USDC]["valueUsd"] == pytest.approx(
+            1000.0
+        )
+        # Both balances were first seen by the sync -> opening lots at spot.
+        portfolio = await service.portfolio()
+        assert portfolio["totals"]["valueUsd"] == pytest.approx(3000.0)
+        holdings = {h["token"]["address"]: h for h in portfolio["holdings"]}
+        assert holdings[NATIVE_ADDRESS]["costUsd"] == pytest.approx(2000.0)
+        assert holdings[USDC]["costUsd"] == pytest.approx(1000.0)
+        assert holdings[USDC]["unrealizedUsd"] == pytest.approx(0.0)
+        assert portfolio["totals"]["costUsd"] == pytest.approx(3000.0)
+        assert sum(h["allocationPct"] for h in portfolio["holdings"]) == pytest.approx(100.0)
+        assert portfolio["wallets"][0]["wallet"]["address"] == wallet
+        assert (await service.portfolio(wallet))["totals"]["valueUsd"] == pytest.approx(3000.0)
+
+
+class TestQuote:
+    async def test_quote_shape_and_guard(
+        self, funded_service: TradingService, fake_uniswap: FakeUniswap
+    ) -> None:
+        service = funded_service
+        quote = await service.quote(
+            chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="10"
+        )
+        assert quote["amountIn"] == "10" and quote["amountInRaw"] == str(10 * 10**6)
+        assert quote["amountOut"] == "0.0005" and quote["valueUsd"] == pytest.approx(10.0)
+        assert quote["rate"] == pytest.approx(0.00005)
+        assert quote["guard"]["decision"] == "allow"
+        agent_quote = await service.quote(
+            chain=BASE,
+            wallet=None,
+            token_in="USDC",
+            token_out="ETH",
+            amount_in="250",
+            initiator="agent",
+        )
+        assert agent_quote["guard"]["decision"] == "needs_approval"
+        with pytest.raises(TradingError, match="greater than zero"):
+            await service.quote(
+                chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="0"
+            )
+        fake_uniswap.quote_error = (404, {"errorCode": "NoRouteFoundError"})
+        with pytest.raises(TradingError) as info:
+            await service.quote(
+                chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="1"
+            )
+        assert info.value.code == "trading.no_route"
+
+
+class TestSwapFlow:
+    async def test_manual_swap_end_to_end(
+        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        fake_uniswap.approval_needed = True
+        _wire_swap_effects(base_chain, wallet)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=0.5,
+            initiator="manual",
+            session_key=None,
+            note="test",
+            wait=True,
+        )
+        order = orders[0]
+        assert order["status"] == "confirmed", order
+        assert (
+            order["approvalTxHash"]
+            and order["txHash"]
+            and order["explorerUrl"].startswith("https://basescan.org/tx/")
+        )
+        assert order["receivedOut"] == "0.0005" and order["deliveredToken"]["address"] == WETH
+        assert order["valueUsd"] == pytest.approx(10.0) and order["initiator"] == "manual"
+        # Two txs went out: approval then swap, both from the wallet, EIP-1559.
+        assert len(base_chain.sent) == 2
+        swap_tx = decode_fake_raw(base_chain.sent[1])
+        assert (
+            swap_tx["to"].lower() == ROUTER and swap_tx["type"] == 2 and swap_tx["chainId"] == 8453
+        )
+        assert swap_tx["nonce"] == 1 and swap_tx["gas"] == 250_000
+        # The /swap body is the whole quote response, not a {quote: …} wrapper.
+        swap_request = [r for r in fake_uniswap.requests if r.url.path.endswith("/swap")][-1]
+        body = json.loads(swap_request.content)
+        assert body["routing"] == "CLASSIC" and body["requestId"].startswith("req-")
+        assert "permitData" not in body and body["simulateTransaction"] is True and body["deadline"]
+        assert (
+            json.loads(swap_request.headers["x-agent-info"])["decision_origin"] == "human_mediated"
+        )
+        # Ledger: swap entry + approval entry, lots moved, manual swaps do not count toward the cap.
+        kinds = [e["kind"] for e in service.ledger.list_entries(wallet=wallet)]
+        assert "swap" in kinds and "approval" in kinds
+        history = service.history(wallet=wallet)["entries"]
+        swap_entry = next(e for e in history if e["kind"] == "swap")
+        assert (
+            swap_entry["amountIn"] == "10"
+            and swap_entry["amountOut"] == "0.0005"
+            and swap_entry["initiator"] == "manual"
+        )
+        assert swap_entry["gasUsd"] == pytest.approx(0.02)
+        positions = {p.token: p for p in service.ledger.positions(wallet)}
+        assert positions[WETH].amount_raw == 5 * 10**14 and positions[
+            WETH
+        ].cost_usd == pytest.approx(10.0)
+        assert service.limits(wallet)["spentTodayUsd"] == 0.0
+        finished = _events(service, "trading.order.finished")
+        assert finished and finished[-1]["order"]["status"] == "confirmed"
+
+    async def test_agent_swap_within_limits_counts_toward_cap(
+        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key="agent:main:x",
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed" and orders[0]["sessionKey"] == "agent:main:x"
+        assert service.limits(wallet)["spentTodayUsd"] == pytest.approx(10.0)
+        quote_request = [r for r in fake_uniswap.requests if r.url.path.endswith("/quote")][-1]
+        assert json.loads(quote_request.headers["x-agent-info"]) == {
+            "integration_name": "agentos",
+            "decision_origin": "autonomous",
+            "version": json.loads(quote_request.headers["x-agent-info"])["version"],
+        }
+
+    async def test_agent_swap_above_threshold_waits_then_approves(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="250",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key=None,
+            note=None,
+        )
+        order = orders[0]
+        assert order["status"] == "awaiting_approval" and "threshold" in order["reason"]
+        assert order["expiresAt"] and base_chain.sent == []
+        assert (
+            _events(service, "trading.approval.requested")[-1]["order"]["orderId"]
+            == order["orderId"]
+        )
+        assert service.list_orders()["pendingApprovals"] == 1
+        # Waiting from the agent side returns once the human decides.
+        waiter = asyncio.create_task(service.wait_order(order["orderId"], timeout_s=5))
+        await asyncio.sleep(0.01)
+        approved = await service.approve(order["orderId"], wait=True)
+        assert approved["status"] == "confirmed"
+        assert (await waiter)["status"] == "confirmed"
+        assert service.limits(wallet)["spentTodayUsd"] == pytest.approx(250.0)
+        with pytest.raises(TradingError, match="is confirmed"):
+            await service.approve(order["orderId"])
+
+    async def test_reject_and_expire(self, funded_service: TradingService) -> None:
+        service = funded_service
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="250",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key=None,
+            note=None,
+        )
+        rejected = await service.reject(orders[0]["orderId"], "not now")
+        assert rejected["status"] == "rejected" and rejected["reason"] == "user: not now"
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="250",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key=None,
+            note=None,
+        )
+        service._now = lambda: __import__("time").time() + 1000  # past the 900 s TTL
+        expired = await service.expire_orders()
+        assert [o["orderId"] for o in expired] == [orders[0]["orderId"]]
+        assert service.get_order(orders[0]["orderId"])["status"] == "expired"
+        with pytest.raises(TradingError, match="is expired"):
+            await service.reject(orders[0]["orderId"])
+
+    async def test_daily_cap_rejects_outright(self, funded_service: TradingService) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        service.ledger.add_daily_spend(wallet.lower(), 995.0)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key=None,
+            note=None,
+        )
+        assert orders[0]["status"] == "rejected" and "daily cap" in orders[0]["reason"]
+
+    async def test_batch_one_wallet_fails_others_proceed(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        empty = await service.import_wallet("Empty", private_key="0x" + "33" * 32)
+        _wire_swap_effects(base_chain, wallet)
+        orders = await service.swap(
+            chain=BASE,
+            wallets="all",
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        by_wallet = {o["wallet"]: o for o in orders}
+        assert by_wallet[wallet]["status"] == "confirmed"
+        assert by_wallet[empty["address"]]["status"] == "failed"
+        assert "trading.insufficient_balance" in by_wallet[empty["address"]]["reason"]
+
+    async def test_amount_pct_and_native_gas_reserve(
+        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        fake_uniswap.tx_value = str(10**18 - 10**15)
+        _wire_swap_effects(base_chain, wallet, out_token=USDC, out_amount=1990 * 10**6)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="ETH",
+            token_out="USDC",
+            amount_in=None,
+            amount_pct=100,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed"
+        assert orders[0]["amountIn"] == "0.999"  # 1 ETH minus the 0.001 gas reserve
+        tx = decode_fake_raw(base_chain.sent[-1])
+        assert tx["value"] == 10**18 - 10**15
+
+    async def test_reverted_swap_is_failed_with_gas_entry(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet, status=0)
+        base_chain.on_send = (lambda inner: lambda raw: _revert(base_chain, inner, raw))(
+            base_chain.on_send
+        )
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "failed" and "reverted" in orders[0]["reason"]
+        assert service.ledger.list_entries(wallet=wallet, kind="gas")
+
+    async def test_simulation_failure_blocks_broadcast(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        base_chain.revert_calls = True
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "failed" and "simulation" in orders[0]["reason"]
+        assert base_chain.sent == []
+
+    async def test_weth_delivered_instead_of_eth_and_unwrap(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet, out_token=WETH, out_amount=5 * 10**14)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="ETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        order = orders[0]
+        assert order["status"] == "confirmed"
+        assert order["tokenOut"]["native"] is True
+        assert order["deliveredToken"]["address"] == WETH and order["receivedOut"] == "0.0005"
+        positions = {p.token: p for p in service.ledger.positions(wallet)}
+        assert positions[WETH].amount_raw == 5 * 10**14
+
+        def unwrap_send(raw: str) -> str:
+            tx = decode_fake_raw(raw)
+            assert tx["to"].lower() == WETH and tx["data"].startswith("0x2e1a7d4d")
+            amount = int(tx["data"][10:], 16)
+            base_chain.set_erc20(WETH, wallet, base_chain.get_erc20(WETH, wallet) - amount)
+            base_chain.native[wallet.lower()] += amount - 100_000 * 10**8
+            tx_hash = "0x" + "77" * 32
+            base_chain.receipt(tx_hash, status=1)
+            return tx_hash
+
+        base_chain.on_send = unwrap_send
+        result = await service.unwrap(BASE, None)
+        assert result["txHash"] == "0x" + "77" * 32 and result["amount"] == "0.0005"
+        positions = {p.token: p for p in service.ledger.positions(wallet)}
+        assert WETH not in positions
+        assert (
+            positions[NATIVE_ADDRESS].amount_raw == 10**18 + 5 * 10**14
+        )  # opening lot + unwrapped
+        assert positions[NATIVE_ADDRESS].cost_usd == pytest.approx(2000.0 + 10.0)
+        assert service.ledger.list_entries(wallet=wallet, kind="unwrap")
+        with pytest.raises(TradingError, match="nothing to unwrap"):
+            await service.unwrap(BASE, None)
+
+    async def test_swap_validation_errors(self, funded_service: TradingService) -> None:
+        service = funded_service
+        common = dict(
+            chain=BASE,
+            wallets=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+        )
+        with pytest.raises(TradingError, match="same token"):
+            await service.swap(
+                token_in="USDC", token_out=USDC, amount_in="1", amount_pct=None, **common
+            )
+        with pytest.raises(TradingError, match="amountIn or amountPct"):
+            await service.swap(
+                token_in="USDC", token_out="WETH", amount_in=None, amount_pct=None, **common
+            )
+        with pytest.raises(TradingError, match="between 0 and 100"):
+            await service.swap(
+                token_in="USDC", token_out="WETH", amount_in=None, amount_pct=150, **common
+            )
+        service.config.uniswap_api_key = ""
+        with pytest.raises(TradingError, match="No Uniswap API key"):
+            await service.swap(
+                token_in="USDC", token_out="WETH", amount_in="1", amount_pct=None, **common
+            )
+        service.config.uniswap_api_key = "test-key"
+        service.vault.lock()
+        service.vault.unlock_path.unlink()
+        with pytest.raises(TradingError, match="locked"):
+            await service.swap(
+                token_in="USDC", token_out="WETH", amount_in="1", amount_pct=None, **common
+            )
+
+    async def test_chart_and_lot_cost_override(
+        self, funded_service: TradingService, fake_prices: FakePrices
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        fake_prices.candles = [[1, 1, 2, 0.5, 1.5, 9]]
+        chart = await service.chart(BASE, WETH, "1d")
+        assert chart["source"] == "geckoterminal" and chart["points"][0]["c"] == 1.5
+        await service.sync_all()
+        snaps = await service.chart(ROBINHOOD, AAPL, "1w")
+        assert snaps["source"] == "snapshots"
+        entry = next(
+            e
+            for e in service.history(wallet=wallet, kind="deposit")["entries"]
+            if e["tokenOut"]["native"]
+        )
+        repriced = service.set_lot_cost(entry["id"], 1234.0)
+        assert repriced["costBasisSource"] == "manual" and repriced["valueUsd"] == pytest.approx(
+            1234.0
+        )
+        portfolio = await service.portfolio(wallet)
+        eth = next(h for h in portfolio["holdings"] if h["token"]["address"] == NATIVE_ADDRESS)
+        assert eth["costUsd"] == pytest.approx(1234.0)
+
+
+def _revert(chain: FakeChain, inner, raw: str) -> str:
+    tx = decode_fake_raw(raw)
+    if tx["to"].lower() == ROUTER:
+        chain._seq += 1
+        tx_hash = "0x" + format(0xBAD000 + chain._seq, "x").rjust(64, "0")
+        chain.native[tx["from"].lower() if "from" in tx else next(iter(chain.native))] -= (
+            100_000 * 10**8
+        )
+        chain.receipt(tx_hash, status=0)
+        return tx_hash
+    return inner(raw)
+
+
+class TestBackgroundLoop:
+    async def test_tick_and_stop(self, funded_service: TradingService) -> None:
+        service = funded_service
+        service._background = True
+        service.ensure_started()
+        assert service._task is not None
+        await service.tick()
+        assert service.last_sync_at is not None
+        await service.stop()
+        assert service._task is None
+
+
+class TestRealSigning:
+    def test_sign_tx_recovers_sender(self) -> None:
+        from eth_account import Account
+
+        from agentos.trading.service import _sign_permit, _sign_tx
+
+        key = bytes.fromhex("11" * 32)
+        raw = _sign_tx(
+            {
+                "chainId": 8453,
+                "nonce": 0,
+                "to": "0x" + "22" * 20,
+                "value": 1,
+                "data": "0x",
+                "gas": 21_000,
+                "maxFeePerGas": 10**9,
+                "maxPriorityFeePerGas": 10**6,
+                "type": 2,
+            },
+            key,
+        )
+        assert raw.startswith("0x")
+        assert Account.recover_transaction(raw) == Account.from_key(key).address
+        permit = {
+            "domain": {"name": "Permit2", "chainId": 8453, "verifyingContract": "0x" + "33" * 20},
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "PermitSingle": [
+                    {"name": "spender", "type": "address"},
+                    {"name": "nonce", "type": "uint256"},
+                ],
+            },
+            "values": {"spender": "0x" + "44" * 20, "nonce": 1},
+        }
+        assert _sign_permit(permit, key).startswith("0x") and len(_sign_permit(permit, key)) == 132

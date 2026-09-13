@@ -1,0 +1,499 @@
+"""Minimal async JSON-RPC client for EVM chains.
+
+Deliberately small: the trading subsystem needs balances, ERC-20 metadata,
+Transfer logs, gas data and raw-transaction broadcast. ABI encoding for the
+handful of ERC-20 selectors is done by hand so no ABI library is pulled in.
+Every request goes out with a ``User-Agent`` (the Robinhood public RPC
+answers 403 without one) and batched JSON-RPC is used wherever a page of
+reads would otherwise be N round-trips.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from agentos import __version__
+
+USER_AGENT = f"agentos-trading/{__version__}"
+
+# keccak256("Transfer(address,address,uint256)")
+TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+# keccak256("Approval(address,address,uint256)")
+APPROVAL_TOPIC = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925"
+
+SEL_BALANCE_OF = "0x70a08231"
+SEL_DECIMALS = "0x313ce567"
+SEL_SYMBOL = "0x95d89b41"
+SEL_NAME = "0x06fdde03"
+SEL_ALLOWANCE = "0xdd62ed3e"
+SEL_APPROVE = "0x095ea7b3"
+
+UINT256_MAX = (1 << 256) - 1
+
+
+class EvmRpcError(RuntimeError):
+    """A JSON-RPC level error (the node answered with ``error``)."""
+
+    def __init__(self, message: str, *, code: int | None = None, data: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.data = data
+
+
+class EvmTransportError(RuntimeError):
+    """HTTP/transport failure talking to the node."""
+
+
+# ── ABI helpers ────────────────────────────────────────────────────────────
+
+
+def pad_address(address: str) -> str:
+    return address.lower().removeprefix("0x").rjust(64, "0")
+
+
+def pad_uint(value: int) -> str:
+    if value < 0 or value > UINT256_MAX:
+        raise ValueError("uint256 out of range")
+    return format(value, "x").rjust(64, "0")
+
+
+def encode_call(selector: str, *words: str) -> str:
+    return selector + "".join(words)
+
+
+def decode_uint(hex_data: str | None) -> int:
+    if not hex_data or hex_data == "0x":
+        return 0
+    return int(hex_data, 16)
+
+
+def decode_string(hex_data: str | None) -> str:
+    """Decode an ABI ``string`` return, tolerating ``bytes32``-style symbols."""
+    if not hex_data or hex_data == "0x":
+        return ""
+    raw = bytes.fromhex(hex_data.removeprefix("0x"))
+    if len(raw) == 32:
+        # Old tokens (MKR-style) return a bytes32.
+        return raw.rstrip(b"\x00").decode("utf-8", errors="replace")
+    if len(raw) < 64:
+        return ""
+    offset = int.from_bytes(raw[:32], "big")
+    if offset + 32 > len(raw):
+        return ""
+    length = int.from_bytes(raw[offset : offset + 32], "big")
+    start = offset + 32
+    return raw[start : start + length].decode("utf-8", errors="replace")
+
+
+def topic_address(topic: str) -> str:
+    return "0x" + topic.removeprefix("0x")[-40:].lower()
+
+
+@dataclass(frozen=True)
+class TransferLog:
+    tx_hash: str
+    log_index: int
+    block_number: int
+    token: str
+    sender: str
+    recipient: str
+    amount: int
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return (self.tx_hash, self.log_index)
+
+
+def parse_transfer_log(log: dict[str, Any]) -> TransferLog | None:
+    topics = log.get("topics") or []
+    if len(topics) != 3 or str(topics[0]).lower() != TRANSFER_TOPIC:
+        # ERC-721 transfers carry 4 topics; anything else is not an ERC-20 Transfer.
+        return None
+    try:
+        return TransferLog(
+            tx_hash=str(log["transactionHash"]).lower(),
+            log_index=int(str(log.get("logIndex", "0x0")), 16),
+            block_number=int(str(log.get("blockNumber", "0x0")), 16),
+            token=str(log["address"]).lower(),
+            sender=topic_address(str(topics[1])),
+            recipient=topic_address(str(topics[2])),
+            amount=decode_uint(str(log.get("data") or "0x0")),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+# ── Client ─────────────────────────────────────────────────────────────────
+
+
+class EvmClient:
+    """One node, one URL. Safe to share across tasks."""
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        http: httpx.AsyncClient | None = None,
+        timeout: float = 10.0,
+        max_log_span: int = 2000,
+    ) -> None:
+        self.url = url
+        self._own_http = http is None
+        self._http = http or httpx.AsyncClient(timeout=timeout)
+        self._timeout = timeout
+        self.max_log_span = max(1, int(max_log_span))
+        self._next_id = 1
+
+    async def aclose(self) -> None:
+        if self._own_http:
+            await self._http.aclose()
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "content-type": "application/json",
+            "accept": "application/json",
+            "user-agent": USER_AGENT,
+        }
+
+    async def _post(self, payload: Any) -> Any:
+        try:
+            response = await self._http.post(
+                self.url, json=payload, headers=self._headers(), timeout=self._timeout
+            )
+        except httpx.HTTPError as exc:
+            raise EvmTransportError(f"{self.url}: {exc}") from exc
+        if response.status_code >= 400:
+            raise EvmTransportError(f"{self.url}: HTTP {response.status_code}")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise EvmTransportError(f"{self.url}: invalid JSON response") from exc
+
+    @staticmethod
+    def _unwrap(item: Any) -> Any:
+        if not isinstance(item, dict):
+            raise EvmTransportError("malformed JSON-RPC response")
+        error = item.get("error")
+        if error:
+            if isinstance(error, dict):
+                raise EvmRpcError(
+                    str(error.get("message") or "rpc error"),
+                    code=error.get("code"),
+                    data=error.get("data"),
+                )
+            raise EvmRpcError(str(error))
+        return item.get("result")
+
+    async def call(self, method: str, params: Sequence[Any] | None = None) -> Any:
+        req_id = self._next_id
+        self._next_id += 1
+        payload = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": list(params or [])}
+        return self._unwrap(await self._post(payload))
+
+    async def batch(self, calls: Sequence[tuple[str, Sequence[Any]]]) -> list[Any]:
+        """Issue many calls in one round-trip; results keep the input order.
+
+        A node that does not support batching answers with a single object;
+        that is treated as a transport error and the caller falls back to
+        sequential calls.
+        """
+        if not calls:
+            return []
+        payload = []
+        ids: list[int] = []
+        for method, params in calls:
+            req_id = self._next_id
+            self._next_id += 1
+            ids.append(req_id)
+            payload.append(
+                {"jsonrpc": "2.0", "id": req_id, "method": method, "params": list(params)}
+            )
+        try:
+            raw = await self._post(payload)
+        except EvmTransportError:
+            raise
+        if not isinstance(raw, list):
+            # Sequential fallback for nodes without batch support.
+            return [await self.call(m, p) for m, p in calls]
+        by_id: dict[int, Any] = {}
+        for item in raw:
+            if isinstance(item, dict) and "id" in item:
+                try:
+                    by_id[int(item["id"])] = item
+                except (TypeError, ValueError):
+                    continue
+        results: list[Any] = []
+        for req_id in ids:
+            item = by_id.get(req_id)
+            if item is None:
+                raise EvmTransportError("batch response missing an id")
+            results.append(self._unwrap(item))
+        return results
+
+    # ── reads ──────────────────────────────────────────────────────────
+
+    async def chain_id(self) -> int:
+        return decode_uint(await self.call("eth_chainId"))
+
+    async def block_number(self) -> int:
+        return decode_uint(await self.call("eth_blockNumber"))
+
+    async def get_block(self, number: int | str) -> dict[str, Any] | None:
+        tag = number if isinstance(number, str) else hex(number)
+        result = await self.call("eth_getBlockByNumber", [tag, False])
+        return result if isinstance(result, dict) else None
+
+    async def block_timestamp(self, number: int) -> int | None:
+        block = await self.get_block(number)
+        if not block:
+            return None
+        return decode_uint(str(block.get("timestamp") or "0x0"))
+
+    async def get_balance(self, address: str, block: str = "latest") -> int:
+        return decode_uint(await self.call("eth_getBalance", [address, block]))
+
+    async def eth_call(self, to: str, data: str, block: str = "latest") -> str:
+        result = await self.call("eth_call", [{"to": to, "data": data}, block])
+        return str(result or "0x")
+
+    async def erc20_balance_of(self, token: str, owner: str) -> int:
+        return decode_uint(
+            await self.eth_call(token, encode_call(SEL_BALANCE_OF, pad_address(owner)))
+        )
+
+    async def erc20_balances(self, owner: str, tokens: Iterable[str]) -> dict[str, int]:
+        token_list = [t.lower() for t in tokens]
+        if not token_list:
+            return {}
+        calls: list[tuple[str, Sequence[Any]]] = [
+            (
+                "eth_call",
+                [{"to": token, "data": encode_call(SEL_BALANCE_OF, pad_address(owner))}, "latest"],
+            )
+            for token in token_list
+        ]
+        out: dict[str, int] = {}
+        results = await self._batch_lenient(calls)
+        for token, result in zip(token_list, results, strict=True):
+            out[token] = decode_uint(result) if isinstance(result, str) else 0
+        return out
+
+    async def _batch_lenient(self, calls: Sequence[tuple[str, Sequence[Any]]]) -> list[Any]:
+        """Batch, but a per-item RPC error becomes ``None`` instead of raising."""
+        if not calls:
+            return []
+        payload = []
+        ids: list[int] = []
+        for method, params in calls:
+            req_id = self._next_id
+            self._next_id += 1
+            ids.append(req_id)
+            payload.append(
+                {"jsonrpc": "2.0", "id": req_id, "method": method, "params": list(params)}
+            )
+        raw = await self._post(payload)
+        if not isinstance(raw, list):
+            results: list[Any] = []
+            for method, params in calls:
+                try:
+                    results.append(await self.call(method, params))
+                except EvmRpcError:
+                    results.append(None)
+            return results
+        by_id: dict[int, Any] = {}
+        for item in raw:
+            if isinstance(item, dict) and "id" in item:
+                try:
+                    by_id[int(item["id"])] = item
+                except (TypeError, ValueError):
+                    continue
+        out: list[Any] = []
+        for req_id in ids:
+            item = by_id.get(req_id)
+            if item is None or not isinstance(item, dict) or item.get("error"):
+                out.append(None)
+            else:
+                out.append(item.get("result"))
+        return out
+
+    async def erc20_metadata(self, token: str) -> tuple[str, str, int]:
+        """``(symbol, name, decimals)``; unknown fields degrade to ``("", "", 18)``."""
+        calls: list[tuple[str, Sequence[Any]]] = [
+            ("eth_call", [{"to": token, "data": SEL_SYMBOL}, "latest"]),
+            ("eth_call", [{"to": token, "data": SEL_NAME}, "latest"]),
+            ("eth_call", [{"to": token, "data": SEL_DECIMALS}, "latest"]),
+        ]
+        symbol_raw, name_raw, decimals_raw = await self._batch_lenient(calls)
+        symbol = decode_string(symbol_raw) if isinstance(symbol_raw, str) else ""
+        name = decode_string(name_raw) if isinstance(name_raw, str) else ""
+        decimals = (
+            decode_uint(decimals_raw)
+            if isinstance(decimals_raw, str) and decimals_raw not in ("", "0x")
+            else 18
+        )
+        if decimals > 77:
+            decimals = 18
+        return symbol.strip("\x00 "), name.strip("\x00 "), decimals
+
+    async def erc20_allowance(self, token: str, owner: str, spender: str) -> int:
+        data = encode_call(SEL_ALLOWANCE, pad_address(owner), pad_address(spender))
+        return decode_uint(await self.eth_call(token, data))
+
+    async def get_code(self, address: str) -> str:
+        return str(await self.call("eth_getCode", [address, "latest"]) or "0x")
+
+    # ── logs ───────────────────────────────────────────────────────────
+
+    async def get_logs(
+        self,
+        *,
+        from_block: int,
+        to_block: int,
+        topics: Sequence[str | None | list[str]],
+        address: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+            "topics": list(topics),
+        }
+        if address:
+            params["address"] = address
+        result = await self.call("eth_getLogs", [params])
+        return [item for item in (result or []) if isinstance(item, dict)]
+
+    async def transfer_logs(
+        self,
+        wallet: str,
+        *,
+        from_block: int,
+        to_block: int,
+        max_span: int | None = None,
+        pause_s: float = 0.0,
+    ) -> list[TransferLog]:
+        """Every ERC-20 Transfer to or from ``wallet`` in the block range.
+
+        Chunked to the node's tolerance; a chunk the node refuses (too many
+        results, range too large) is halved and retried down to a single
+        block before the error is surfaced.
+        """
+        if to_block < from_block:
+            return []
+        padded = "0x" + pad_address(wallet)
+        span = max(1, int(max_span or self.max_log_span))
+        seen: dict[tuple[str, int], TransferLog] = {}
+        start = from_block
+        while start <= to_block:
+            end = min(to_block, start + span - 1)
+            try:
+                incoming = await self.get_logs(
+                    from_block=start, to_block=end, topics=[TRANSFER_TOPIC, None, padded]
+                )
+                outgoing = await self.get_logs(
+                    from_block=start, to_block=end, topics=[TRANSFER_TOPIC, padded]
+                )
+            except EvmRpcError:
+                if span == 1:
+                    raise
+                span = max(1, span // 2)
+                continue
+            for log in [*incoming, *outgoing]:
+                parsed = parse_transfer_log(log)
+                if parsed is not None:
+                    seen[parsed.key] = parsed
+            start = end + 1
+            if pause_s > 0 and start <= to_block:
+                await asyncio.sleep(pause_s)
+        return sorted(seen.values(), key=lambda t: (t.block_number, t.log_index))
+
+    # ── transactions ───────────────────────────────────────────────────
+
+    async def nonce(self, address: str, block: str = "pending") -> int:
+        return decode_uint(await self.call("eth_getTransactionCount", [address, block]))
+
+    async def estimate_gas(self, tx: dict[str, Any]) -> int:
+        return decode_uint(await self.call("eth_estimateGas", [tx]))
+
+    async def simulate(self, tx: dict[str, Any]) -> str:
+        """``eth_call`` the transaction as the sender; raises on revert."""
+        call_tx = {k: v for k, v in tx.items() if k in {"from", "to", "data", "value", "gas"}}
+        return str(await self.call("eth_call", [call_tx, "latest"]) or "0x")
+
+    async def fee_data(self) -> tuple[int, int]:
+        """``(maxFeePerGas, maxPriorityFeePerGas)`` from ``eth_feeHistory``.
+
+        Falls back to ``eth_gasPrice`` when the node does not serve fee
+        history; the priority tip is then a small fraction of the base fee.
+        """
+        try:
+            history = await self.call("eth_feeHistory", [5, "latest", [50]])
+        except EvmRpcError:
+            history = None
+        if isinstance(history, dict) and history.get("baseFeePerGas"):
+            base_fees = [decode_uint(str(x)) for x in history["baseFeePerGas"]]
+            rewards = history.get("reward") or []
+            tips = [decode_uint(str(r[0])) for r in rewards if r]
+            base = base_fees[-1] if base_fees else 0
+            tip = max(tips) if tips else max(base // 20, 1)
+            tip = max(tip, 1)
+            return base * 2 + tip, tip
+        gas_price = decode_uint(await self.call("eth_gasPrice"))
+        tip = max(gas_price // 20, 1)
+        return gas_price + tip, tip
+
+    async def send_raw_transaction(self, raw_hex: str) -> str:
+        result = await self.call("eth_sendRawTransaction", [raw_hex])
+        return str(result).lower()
+
+    async def get_transaction_receipt(self, tx_hash: str) -> dict[str, Any] | None:
+        result = await self.call("eth_getTransactionReceipt", [tx_hash])
+        return result if isinstance(result, dict) else None
+
+    async def wait_for_receipt(
+        self,
+        tx_hash: str,
+        *,
+        timeout_s: float = 120.0,
+        interval_s: float = 1.5,
+    ) -> dict[str, Any] | None:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            receipt = await self.get_transaction_receipt(tx_hash)
+            if receipt is not None and receipt.get("blockNumber"):
+                return receipt
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(interval_s)
+
+
+def receipt_succeeded(receipt: dict[str, Any] | None) -> bool:
+    if not receipt:
+        return False
+    return decode_uint(str(receipt.get("status") or "0x0")) == 1
+
+
+def receipt_gas_wei(receipt: dict[str, Any]) -> int:
+    gas_used = decode_uint(str(receipt.get("gasUsed") or "0x0"))
+    price = decode_uint(str(receipt.get("effectiveGasPrice") or "0x0"))
+    return gas_used * price
+
+
+def receipt_transfers(receipt: dict[str, Any]) -> list[TransferLog]:
+    logs = receipt.get("logs") or []
+    out: list[TransferLog] = []
+    for log in logs:
+        if not isinstance(log, dict):
+            continue
+        entry = dict(log)
+        entry.setdefault("transactionHash", receipt.get("transactionHash"))
+        entry.setdefault("blockNumber", receipt.get("blockNumber"))
+        parsed = parse_transfer_log(entry)
+        if parsed is not None:
+            out.append(parsed)
+    return out
