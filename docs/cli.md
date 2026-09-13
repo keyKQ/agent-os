@@ -8,7 +8,11 @@ Run:
 ```sh
 agentos --help
 agentos <command> --help
+agentos --version
 ```
+
+`--version` prints the installed version and exits, so the version is
+available without `uv tool list` or `pip show`.
 
 ## Main Commands
 
@@ -382,6 +386,22 @@ When the current install was built from a local directory (detected via PEP 610
 never prompts, blocks, or changes the exit code. `--json` reports the same as
 `sourceDirectory` (`null` for a release install).
 
+On **Windows** the managed gateway is stopped *before* the installer runs and
+started again afterwards. Windows refuses to replace a file a live process holds
+open, and the managed gateway runs the tool venv's own interpreter — leaving it
+up is what produced `Access is denied` on
+`…\uv\tools\use-agent-os\Scripts`, and a half-replaced directory with
+`agentos` no longer on PATH. `--no-restart` keeps its promise not to touch the
+gateway, so an upgrade with that flag can still hit the lock. POSIX is
+unchanged: files are replaced under the running gateway, which is restarted
+afterwards.
+
+If the installer is refused anyway, the failure names the recovery instead of
+only echoing the installer's error: stop the gateway and close every other
+AgentOS process, re-run the printed command from a fresh terminal, and — if
+`agentos` is then not found — put uv's tool bin directory back on PATH with
+`uv tool update-shell`.
+
 Exit codes: **0** success (upgraded + verified, or `--check`/`--dry-run`);
 **3** this install method needs a manual command (printed); **1** the upgrade
 failed, timed out, the post-restart version could not be verified, or the data
@@ -475,6 +495,18 @@ channels types` is the authoritative catalog. On upgrade, config entries for
 retired built-in channel types are removed only after AgentOS creates the
 normal secure config backup.
 
+Slack webhook entries accept `--field webhook_path=/slack/team-a/events`
+when added with `channels add slack`. An omitted or empty field selects the
+automatic path: the first enabled webhook account in config order keeps
+`/slack/events` regardless of how many other webhook accounts are enabled, so
+adding a second account never changes an already-configured account's Request
+URL; every other enabled webhook account with no explicit path gets
+`/slack/events/<account_name>`. Disabled and Socket Mode entries do not count,
+or count as "first". An explicit path takes precedence. Configure each Slack
+app's Request URLs to match its path. Duplicate webhook paths with overlapping
+HTTP methods are rejected at gateway startup. See
+[Slack modes](channels.md#slack-modes).
+
 ```sh
 agentos channels types
 agentos channels describe telegram
@@ -526,6 +558,25 @@ Raw config:
 agentos config get llm.provider
 agentos config set port 18791
 ```
+
+A long-lived gateway keeps per-session state in memory — stream replay
+buffers, usage scopes, plan-mode flags, approval elevations. Every one of
+those sits behind a shared bounded registry whose ceilings are config keys:
+
+```sh
+agentos config set registry_session_max_entries 512
+agentos config set registry_cache_max_entries 512
+agentos config set registry_cache_ttl_seconds 900
+```
+
+`registry_session_max_entries` bounds session-scoped state,
+`registry_cache_max_entries` and `registry_cache_ttl_seconds` bound the
+time-scoped caches.
+
+Session state is normally dropped the moment a session is deleted, aborted or
+completed; the ceiling is the backstop for sessions that never emit a terminal
+event. Raise `registry_session_max_entries` on a gateway that runs many
+simultaneous sessions.
 
 For Ollama models that do not reliably support native tool calls, set
 `tools.enabled = false` in the config file to run in plain-text mode. Keep it

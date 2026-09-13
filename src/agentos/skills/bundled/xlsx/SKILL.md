@@ -97,6 +97,7 @@ python {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
 [
   {"op": "set_cell", "sheet": "Q3", "row": 2, "col": 2, "value": "=SUM(B3:B10)"},
   {"op": "set_cell", "sheet": "Q3", "row": 5, "col": 1, "value": "Net margin"},
+  {"op": "set_cell", "sheet": "Q3", "row": 6, "col": 1, "value": null},
   {"op": "rename_sheet", "old": "Sheet1", "new": "Summary"}
 ]
 ```
@@ -104,12 +105,24 @@ python {baseDir}/scripts/edit_xlsx.py book.xlsx ops.json --out edited.xlsx
 Rules:
 
 - Rows and columns are 1-based (Excel convention).
+- An explicit `"value": null` **clears** the cell and keeps its style. It is
+  the only way to empty a cell through this op list.
+- Omitting `value` entirely is a malformed operation: it is skipped and not
+  counted in `applied`, so a typo cannot silently wipe a cell.
+- `0`, `false` and `""` are values, not absence. Note that Excel has no
+  empty-string cell, so `""` reads back as empty — use `null` when you mean
+  "clear this cell".
 - Strings starting with `=` are written as formulas (`cell.value = "=..."`),
-  matching openpyxl behavior. To write a literal `=hello` use `'=hello`
-  (Excel's leading-apostrophe escape) or pass an explicit `as_text: true`.
+  matching openpyxl behavior. To write a literal `=hello`, pass
+  `as_text: true` — either as `{"value": "=hello", "as_text": true}` or with
+  Excel's leading-apostrophe escape, `{"value": "'=hello", "as_text": true}`.
+  Both produce the same cell: the value is stored as `=hello` in a text cell,
+  and the apostrophe is carried on the cell's `quotePrefix` style flag rather
+  than inside the value. The apostrophe is only consumed when it escapes a
+  formula, so a value that genuinely begins with one (`'tis`) keeps it.
 - Datetimes go in as ISO 8601 strings (`"2026-05-06T09:00:00"`); the helper
   parses them back to `datetime` objects so Excel renders the cell with date
-  format.
+  format. Pass `as_text: true` to keep such a string as text instead.
 - Editing a cell does not recalculate dependent formulas. Excel and
   LibreOffice recalculate on open. If you need cached values immediately,
   use a calculation engine (out of scope here).
@@ -140,6 +153,13 @@ Spec:
   ]
 }
 ```
+
+`merged` accepts range strings (`["A1:C1"]`), objects with a `range` key
+(`[{"range": "A1:C1"}]`), or a mixture of both. The string format matches
+the `merged` list returned by `inspect_xlsx.py`. This compatibility applies
+to merge metadata only; inspected `rows` contain cell objects rather than
+the plain values required by the creation spec. Invalid range coordinates
+raise an error from openpyxl.
 
 For programmatic use:
 

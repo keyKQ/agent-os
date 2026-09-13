@@ -852,8 +852,10 @@ async def _handle_cron_update(params: dict | None, ctx: RpcContext) -> dict[str,
         patch["schedule_kind"] = sched_kind
         patch["schedule_value"] = sched_value
         schedule_raw = params.get("schedule")
-        schedule_tz_was_supplied = (
-            isinstance(schedule_raw, dict) and "tz" in schedule_raw
+        # ``timezone`` is an alias of ``tz`` inside ``schedule`` too, so an
+        # explicit ``"timezone": ""`` is a clear, not an omission.
+        schedule_tz_was_supplied = isinstance(schedule_raw, dict) and (
+            "tz" in schedule_raw or "timezone" in schedule_raw
         )
         if sched_kind == ScheduleKind.CRON and (
             sched_tz or tz_was_supplied or schedule_tz_was_supplied
@@ -1061,7 +1063,9 @@ async def _handle_cron_remove(params: dict | None, ctx: RpcContext) -> None:
     if not isinstance(params, dict) or "id" not in params:
         raise ValueError("params.id is required")
     scheduler = _require_scheduler(ctx)
-    await scheduler.remove_job(params["id"])
+    removed = await scheduler.remove_job(params["id"])
+    if not removed:
+        raise KeyError(f"Cron job not found: {params['id']}")
     return None
 
 

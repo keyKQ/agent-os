@@ -105,6 +105,12 @@ class SlackChannel:
     token: str
     slack_channel_id: str
     channel_id: str = "slack"
+    # The gateway entry name (``SlackChannelEntry.name``). Session keys embed
+    # it (``agent:<id>:<entry name>:group:<channel>``), so approvals are bound
+    # to it, not to ``channel_id`` -- which stays the adapter type id that
+    # keys ``pending_overflow_policy_per_channel``. The registry fills it in
+    # for every managed entry; the default only covers a hand-built adapter.
+    name: str = "slack"
     sender_id: str = "slack-user"
     bot_user_id: str | None = None
     reply_in_thread: bool = False
@@ -135,7 +141,6 @@ class SlackChannel:
     )
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
     _connected: bool = field(default=False, init=False, repr=False)
-    _last_thread_ts: str | None = field(default=None, init=False, repr=False)
     _last_message_at: datetime | None = field(default=None, init=False, repr=False)
     _dedupe: EventDedupeCache = field(
         default_factory=lambda: EventDedupeCache(max_size=10_000),
@@ -146,6 +151,7 @@ class SlackChannel:
     _socket_stop: asyncio.Event | None = field(default=None, init=False, repr=False)
     _background_tasks: set[asyncio.Task] = field(default_factory=set, init=False, repr=False)
     supports_slash_commands: bool = True
+    webhook_path: str = ""
 
     @property
     def transport_name(self) -> str:
@@ -339,10 +345,6 @@ class SlackChannel:
         if thread_ts is not None and ts is not None:
             metadata["is_thread_root"] = thread_ts == ts
 
-        # Track last thread_ts for reply_in_thread auto-threading
-        if thread_ts is not None:
-            self._last_thread_ts = thread_ts
-
         return IncomingMessage(
             sender_id=event.get("user", self.sender_id),
             channel_id=event.get("channel", self.slack_channel_id),
@@ -398,8 +400,12 @@ class SlackChannel:
             channel = str(meta["channel"])
         if "thread_ts" in meta:
             thread_ts = meta["thread_ts"]
-        elif thread_ts is None and self.reply_in_thread and self._last_thread_ts:
-            thread_ts = self._last_thread_ts
+        # No account-wide fallback anchor here on purpose: one shared
+        # ``thread_ts`` serves every channel, thread and user, so an outgoing
+        # message without its own anchor would land in whichever conversation
+        # last spoke. A reply that needs a thread carries one already, via
+        # ``build_reply_message``/``streaming_reply_kwargs``; anything else
+        # belongs in the channel, un-threaded.
         if not channel:
             log.error("slack.send_failed", channel="", error="no_target_channel")
             raise RuntimeError("Slack send has no target channel")
@@ -745,9 +751,13 @@ class SlackChannel:
     # Gateway Webhook (T012)
     # ------------------------------------------------------------------
 
-    def create_webhook_route(self, path: str = "/slack/events") -> Route:
+    def create_webhook_route(self, path: str | None = None) -> Route:
         """Return a Starlette Route for handling Slack Events API webhooks."""
-        return Route(path, endpoint=self._handle_webhook, methods=["POST"])
+        return Route(
+            path or self.webhook_path or "/slack/events",
+            endpoint=self._handle_webhook,
+            methods=["POST"],
+        )
 
     async def _handle_webhook(self, request: Request) -> Response:
         """Handle an incoming Slack Events API request."""
@@ -912,7 +922,7 @@ class SlackChannel:
                 session_mode = parts[3]
                 session_peer = parts[4]
                 expected_peer = channel_id if session_mode in ("group", "channel") else user_id
-                if session_channel != self.channel_id or session_peer != expected_peer:
+                if session_channel != self.name or session_peer != expected_peer:
                     log.warning(
                         "slack.interactive_mismatch",
                         session_key=session_key,

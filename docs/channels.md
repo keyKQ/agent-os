@@ -143,7 +143,14 @@ from the same person starts a fresh session.
 
 The thread routing table (which address and subject a reply goes back to) is
 rebuilt from each inbound message and kept in memory only, so a gateway
-restart does not affect replying to live conversations.
+restart does not affect replying to live conversations. A reply into a thread
+the table no longer knows -- a scheduled job or artifact delivery that fires
+after a restart, before the correspondent has written again -- is refused with
+`email.send has no recipient for unknown thread` rather than guessed: the thread
+key is the inbound `Message-ID`, which looks like a mailbox but whose domain the
+original sender chose. Cron and heartbeat deliveries that are configured with an
+address (cron `channel_id: "alerts@example.com"`, heartbeat `to:`) do not depend
+on the table.
 
 Quoted history below a reply is stripped before the text reaches the model, and
 HTML-only mail is flattened to text. Replies are sent as plain text: mail
@@ -247,6 +254,29 @@ plus `signing_secret`, and the gateway must be reachable by Slack. The secret
 is mandatory, not advisory: without it the endpoint answers Slack's
 `url_verification` handshake and rejects everything else with `401`, because an
 unsigned POST cannot be attributed to Slack.
+
+Leave `webhook_path` empty or omit it to select the automatic path. The first
+enabled Slack webhook account in your config (by configuration order, not
+name) keeps `/slack/events` regardless of how many other webhook accounts are
+enabled — adding a second account never changes an already-configured
+account's Request URL. Every other enabled Slack webhook account with no
+explicit `webhook_path` gets `/slack/events/<account_name>`, for example
+`/slack/events/team-b`. Disabled entries and Socket Mode accounts do not
+affect this choice or count toward "first".
+
+A non-empty `webhook_path` always overrides the automatic path. You can set it
+with `agentos channels add slack --name team-a --field webhook_path=/slack/team-a/events`
+alongside the token and signing-secret fields above. Automatic account names
+(for every account but the first) must use letters, digits, `.`, `_`, `~`, or
+`-` and cannot be `.` or `..`; otherwise set an explicit path. Configure each
+Slack app's Events API and Interactivity Request URLs to use its matching
+public URL; use the same URL for slash commands (`command_request_url` or the
+exported manifest).
+
+Restart the gateway after changing paths. Duplicate channel webhook paths with
+overlapping HTTP methods cause a startup error naming the conflicting entries,
+instead of silently routing every request to the first account. Socket Mode
+does not register a webhook route and is unaffected.
 
 Leave `slack_channel_id` empty when the adapter should reply to the incoming
 conversation. Set it only when you want a default fallback channel. Enable

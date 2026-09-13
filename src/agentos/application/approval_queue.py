@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from agentos.paths import state_dir
+from agentos.util.bounded_registry import BoundedRegistry
 
 VALID_APPROVAL_MODES = frozenset({"auto-approve", "auto-deny", "prompt"})
 VALID_ELEVATED_MODES = frozenset({"on", "bypass", "full"})
@@ -52,8 +53,20 @@ class ApprovalQueue:
         self._timeout = default_timeout
         self._poll_interval = max(0.01, float(poll_interval))
         self._global_settings = ApprovalSettings()
-        self._node_settings: dict[str, ApprovalSettings] = {}
-        self._session_elevated_modes: dict[str, str] = {}
+        # Node ids are an operational set rather than a per-session one, so
+        # the ceiling is a backstop nothing reaches; eviction falls back to
+        # the global settings, which is the same answer an unconfigured
+        # node already gets. Note the direction: a node pinned to a stricter
+        # policy than the global one (say ``auto-deny``) would fail *open* to
+        # the global setting if it were ever evicted, which is why the ceiling
+        # is sized so it cannot be.
+        self._node_settings: BoundedRegistry[str, ApprovalSettings] = BoundedRegistry(
+            name="ApprovalQueue._node_settings",
+        )
+        self._session_elevated_modes: BoundedRegistry[str, str] = BoundedRegistry(
+            name="ApprovalQueue._session_elevated_modes",
+            session_of=lambda key, _value: key,
+        )
 
         self._db_path = Path(db_path or os.fspath(_DEFAULT_APPROVAL_QUEUE_PATH))
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +185,15 @@ class ApprovalQueue:
         if entry.resolved:
             return entry.approved
         t = timeout if timeout is not None else self._timeout
-        deadline = time.monotonic() + t
+        now = time.monotonic()
+        deadline = now + t
+        # The approval's overall lifespan (created_at + default_timeout) is a
+        # wall-clock fact, but it is compared against a monotonic deadline, so
+        # convert it once here rather than re-reading time.time() after the
+        # loop. Windows' wall clock ticks at ~15.6ms; read afresh after a 20ms
+        # monotonic wait it can still show the approval as younger than its
+        # lifespan and leave a timed-out approval pending forever.
+        lifespan_deadline = now + max(0.0, entry.created_at + self._timeout - time.time())
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -187,6 +208,13 @@ class ApprovalQueue:
             entry = self.get(approval_id)
             if entry.resolved:
                 return entry.approved
+
+        if time.monotonic() < lifespan_deadline:
+            # The caller's own timeout elapsed, but the approval's overall
+            # lifespan (created_at + default_timeout) hasn't -- leave it
+            # pending instead of denying it, so a human operator can still
+            # resolve it after this bounded wait call returns.
+            return False
         return self._deny_on_timeout_if_unresolved(approval_id)
 
     def _deny_on_timeout_if_unresolved(self, approval_id: str) -> bool:

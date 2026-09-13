@@ -40,6 +40,14 @@ export interface RoutePinState {
   /** Pinnable text tiers, config order. Empty while loading or when disabled. */
   tiers: RoutePinTier[]
   /**
+   * The tiers an image turn can land on — shown, never pinned. The router picks
+   * the vision route before holds are consulted, so a pin here could not take
+   * effect; they are kept apart from `tiers` so no caller can offer them as a
+   * choice. Several can be listed: the image branch picks at random among every
+   * vision-capable tier.
+   */
+  imageTiers: RoutePinTier[]
+  /**
    * Every model of the ACTIVE provider. Routing runs through one provider, so a
    * model from any other provider in the catalog would be sent to this one
    * under a name it does not know — those are filtered out server-side rather
@@ -60,10 +68,21 @@ export interface RoutePinState {
   /** The tier the router last actually used, pin or not. Labels the Auto state. */
   lastRoutedTier: string | null
   /**
+   * The model that tier resolved to on that turn, straight from the decision.
+   * The tier alone cannot be resolved to a model client-side for every route:
+   * `router.hold.get` reports pinnable TEXT tiers only, so an image turn names
+   * a tier the picker has no row for. The decision carries the model that ran,
+   * which is also the only honest source when several vision tiers are
+   * configured — the router picks among them per turn.
+   */
+  lastRoutedModel: string | null
+  /**
    * Set when the last turn was routed to a vision tier while a pin was active.
    * Image turns are chosen before holds are consulted in the router step, so a
    * pinned text tier genuinely does not run them — the picker says so rather
-   * than claiming a route the turn did not take.
+   * than claiming a route the turn did not take. It stays false while routing
+   * is automatic: there is no pin for an image turn to override, and saying
+   * otherwise names a selection the user never made.
    */
   imageOverride: boolean
   /** True while a pin/clear round-trip is in flight. */
@@ -81,6 +100,7 @@ interface HoldGetResult {
   provider?: string
   hold?: { tier?: string; model?: string; targetType?: string } | null
   tiers?: { tier?: string; model?: string }[]
+  imageTiers?: { tier?: string; model?: string }[]
 }
 
 const EMPTY_TIERS: RoutePinTier[] = []
@@ -91,6 +111,7 @@ interface HoldSlice {
   enabled: boolean
   provider: string
   tiers: RoutePinTier[]
+  imageTiers: RoutePinTier[]
   pinned: string | null
   pinnedModel: string | null
 }
@@ -98,17 +119,25 @@ interface HoldSlice {
 interface RoutedSlice {
   session: string
   lastRoutedTier: string | null
-  imageOverride: boolean
+  lastRoutedModel: string | null
+  /**
+   * Whether the last turn ran on a vision tier. Whether that OVERRODE anything
+   * depends on the hold, which lives in the other slice — the two are combined
+   * at the return rather than here, so a decision that arrives before the hold
+   * read lands is not permanently mislabelled.
+   */
+  imageRoute: boolean
 }
 
 const EMPTY_HOLD = {
   enabled: false,
   provider: '',
   tiers: EMPTY_TIERS,
+  imageTiers: EMPTY_TIERS,
   pinned: null,
   pinnedModel: null,
 } as const
-const EMPTY_ROUTED = { lastRoutedTier: null, imageOverride: false } as const
+const EMPTY_ROUTED = { lastRoutedTier: null, lastRoutedModel: null, imageRoute: false } as const
 
 export function useRoutePin(
   rpc: WsRpcClient,
@@ -155,18 +184,21 @@ export function useRoutePin(
         // which of the two the user actually chose, so the picker must not read
         // the tier as a tier selection.
         const byModel = result.hold?.targetType === 'model'
+        const readTiers = (rows: { tier?: string; model?: string }[] | undefined) =>
+          (Array.isArray(rows) ? rows : [])
+            .map((row) => ({
+              tier: routerFxNormalizeTier(row?.tier || ''),
+              model: typeof row?.model === 'string' ? row.model : '',
+            }))
+            .filter((row) => row.tier)
         setHold({
           session: forSession,
           enabled: result.enabled === true,
           provider: typeof result.provider === 'string' ? result.provider : '',
           pinned: byModel ? null : routerFxNormalizeTier(result.hold?.tier || '') || null,
           pinnedModel: byModel ? String(result.hold?.model || '') || null : null,
-          tiers: (Array.isArray(result.tiers) ? result.tiers : [])
-            .map((row) => ({
-              tier: routerFxNormalizeTier(row?.tier || ''),
-              model: typeof row?.model === 'string' ? row.model : '',
-            }))
-            .filter((row) => row.tier),
+          tiers: readTiers(result.tiers),
+          imageTiers: readTiers(result.imageTiers),
         })
       })
       .catch(() => {
@@ -236,10 +268,12 @@ export function useRoutePin(
       const tier = routerFxNormalizeTier(String(decision.tier || decision.routed_tier || ''))
       if (!tier) return
       const source = String(decision.source || decision.routing_source || '').toLowerCase()
+      const model = String(decision.model || decision.routed_model || '').trim()
       setRouted({
         session: forSession,
         lastRoutedTier: tier,
-        imageOverride: source === 'image_route' || tier === 'image_model',
+        lastRoutedModel: model || null,
+        imageRoute: source === 'image_route' || tier === 'image_model',
       })
     })
   }, [rpc, sessionKey])
@@ -330,15 +364,31 @@ export function useRoutePin(
       .map(([tier, cfg]) => ({ tier, model: cfg.model || '' }))
   }, [live.tiers, tierConfigs])
 
+  // Same fallback for the image rows, split on the flag the ROUTER splits on:
+  // `supports_image`, not `image_only`. A text tier that also takes images is a
+  // candidate for an image turn, and pinnability is a separate question the
+  // list above already answers.
+  const effectiveImageTiers = useMemo(() => {
+    if (live.imageTiers.length > 0) return live.imageTiers
+    if (!tierConfigs) return EMPTY_TIERS
+    return Object.entries(tierConfigs)
+      .filter(([, cfg]) => cfg.supportsImage || cfg.imageOnly)
+      .map(([tier, cfg]) => ({ tier, model: cfg.model || '' }))
+  }, [live.imageTiers, tierConfigs])
+
+  const isPinned = live.pinned !== null || live.pinnedModel !== null
+
   return {
     enabled: live.enabled,
     tiers: effectiveTiers,
+    imageTiers: effectiveImageTiers,
     models,
     pinned: live.pinned,
     pinnedModel: live.pinnedModel,
-    isPinned: live.pinned !== null || live.pinnedModel !== null,
+    isPinned,
     lastRoutedTier: liveRouted.lastRoutedTier,
-    imageOverride: liveRouted.imageOverride,
+    lastRoutedModel: liveRouted.lastRoutedModel,
+    imageOverride: liveRouted.imageRoute && isPinned,
     busy,
     pin,
     pinModel,

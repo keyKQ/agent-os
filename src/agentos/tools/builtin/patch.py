@@ -110,6 +110,7 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                     ):
                         hunk.lines.append(body[i])
                         i += 1
+                    _trim_trailing_separators(hunk)
                     hunks.append(hunk)
                 else:
                     i += 1
@@ -124,6 +125,37 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
             i += 1
 
     return ops
+
+
+def _split_hunk_line(raw: str) -> tuple[str, str]:
+    """Return ``(prefix, content)`` for one hunk line.
+
+    Unified diffs write an empty context line as a bare ``""`` at least as
+    often as ``" "`` -- editors, terminals, CI log pipelines and most model
+    output strip the trailing space -- so an empty line is a context line
+    whose content is empty, not a line to skip.
+    """
+    if not raw:
+        return " ", ""
+    return raw[0], raw[1:]
+
+
+def _old_side_line_count(lines: list[str]) -> int:
+    """Number of hunk lines that consume a line of the original file."""
+    return sum(1 for raw in lines if _split_hunk_line(raw)[0] in (" ", "-"))
+
+
+def _trim_trailing_separators(hunk: Hunk) -> None:
+    """Drop blank lines that trail the hunk body but are not part of it.
+
+    A bare ``""`` inside a hunk is a blank context line (see
+    ``_split_hunk_line``), but a blank line that merely separates the hunk
+    from the next ``@@@`` / ``***`` marker is formatting, not context. The
+    header's old-side count tells the two apart: a trailing blank the count
+    does not account for is a separator.
+    """
+    while hunk.lines and hunk.lines[-1] == "" and _old_side_line_count(hunk.lines) > hunk.old_count:
+        hunk.lines.pop()
 
 
 def _parse_hunk_header(header: str) -> Hunk:
@@ -169,18 +201,25 @@ def _validate_path(path: str, root: Path | None = None) -> Path:
     return resolved
 
 
-def _memory_source_rel_path(path: str, root: Path) -> str | None:
-    resolved = _validate_path(path, root)
-    try:
-        rel = resolved.relative_to(root)
-    except ValueError:
-        return None
+def _memory_roots(root: Path) -> tuple[Path, ...]:
+    """The patch root plus every memory root the filesystem tools know about."""
+    from agentos.tools.builtin import filesystem
 
-    if rel.parts == ("MEMORY.md",):
-        return "MEMORY.md"
-    if len(rel.parts) >= 2 and rel.parts[0] == "memory" and rel.suffix == ".md":
-        return rel.as_posix()
-    return None
+    roots = [root]
+    for candidate in filesystem._memory_roots():
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+def _memory_source_rel_path(path: str, root: Path) -> str | None:
+    # Delegate to the filesystem tool's classifier so USER.md, memory.md and a
+    # memory_source_dir nested under the workspace refresh the snapshot the
+    # same way they do through write_file / edit_file.
+    from agentos.tools.builtin import filesystem
+
+    resolved = _validate_path(path, root)
+    return filesystem._memory_source_rel_path(resolved, roots=_memory_roots(root))
 
 
 def _bootstrap_source_rel_path(path: str, root: Path) -> str | None:
@@ -454,8 +493,30 @@ def _gate_patch_ops(
 # ---------------------------------------------------------------------------
 
 
-def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
+def _detect_newline(file_lines: list[str]) -> str:
+    """Return the line ending an added line should use for this file.
+
+    Picks the majority convention and breaks a tie with the first ending seen,
+    so a mixed-ending file keeps whichever style already dominates it. A file
+    with no line ending at all falls back to ``"\n"``.
+    """
+    crlf = sum(1 for line in file_lines if line.endswith("\r\n"))
+    lf = sum(1 for line in file_lines if line.endswith("\n") and not line.endswith("\r\n"))
+    if crlf == lf:
+        for line in file_lines:
+            if line.endswith("\r\n"):
+                return "\r\n"
+            if line.endswith("\n"):
+                return "\n"
+        return "\n"
+    return "\r\n" if crlf > lf else "\n"
+
+
+def _apply_hunk(file_lines: list[str], hunk: Hunk, newline: str = "\n") -> list[str]:
     """Apply a single hunk to file_lines (0-indexed list of lines with newlines).
+
+    ``newline`` is the line ending given to added lines; context and untouched
+    lines are copied verbatim so their own endings survive.
 
     Returns the new list of lines.
     """
@@ -470,15 +531,12 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     # Verify context and deleted lines match
     check_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix, content = _split_hunk_line(raw)
         if prefix in (" ", "-"):
             if check_pos >= len(result):
                 raise ValueError(f"Hunk context/delete at line {check_pos + 1} exceeds file length")
-            actual = result[check_pos].rstrip("\n")
-            expected = content.rstrip("\n")
+            actual = result[check_pos].rstrip("\r\n")
+            expected = content.rstrip("\r\n")
             if actual != expected:
                 raise ValueError(
                     f"Context mismatch at line {check_pos + 1}: "
@@ -490,21 +548,15 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
     new_lines: list[str] = []
     src_pos = pos
     for raw in hunk.lines:
-        if not raw:
-            continue
-        prefix = raw[0]
-        content = raw[1:]
+        prefix, content = _split_hunk_line(raw)
         if prefix == " ":
             new_lines.append(result[src_pos])
             src_pos += 1
         elif prefix == "-":
             src_pos += 1  # skip (delete)
         elif prefix == "+":
-            # Preserve newline style: add \n if original lines have it
-            if content.endswith("\n"):
-                new_lines.append(content)
-            else:
-                new_lines.append(content + "\n")
+            # Added lines take the file's own line ending, not a hardcoded \n.
+            new_lines.append(content.rstrip("\r\n") + newline)
 
     # Splice: replace [pos : pos + old_count] with new_lines
     return result[:pos] + new_lines + result[pos + hunk.old_count :]
@@ -513,9 +565,10 @@ def _apply_hunk(file_lines: list[str], hunk: Hunk) -> list[str]:
 def _updated_text(text: str, hunks: list[Hunk]) -> str:
     """Return *text* with every hunk applied, without touching the filesystem."""
     lines = text.splitlines(keepends=True)
+    newline = _detect_newline(lines)
     # Apply hunks in reverse order so earlier line numbers stay valid
     for hunk in sorted(hunks, key=lambda h: h.old_start, reverse=True):
-        lines = _apply_hunk(lines, hunk)
+        lines = _apply_hunk(lines, hunk, newline)
     return "".join(lines)
 
 
@@ -574,7 +627,12 @@ def _plan_ops(
                 # tool never decodes must not start failing on bad UTF-8.
                 current = pending.get(resolved) if resolved in pending else None
                 if current is None:
-                    current = resolved.read_text(encoding="utf-8")
+                    # newline="" disables universal-newline translation so a
+                    # CRLF file arrives with its \r intact; read_text() would
+                    # fold every ending to \n and the write below would then
+                    # re-emit os.linesep on every line of the file.
+                    with resolved.open("r", encoding="utf-8", newline="") as handle:
+                        current = handle.read()
                 content = _updated_text(current, op.hunks)
                 modified += 1
             else:
@@ -625,7 +683,11 @@ def _commit_staged(staged: list[_StagedOp]) -> None:
                 continue
             new_dirs.extend(reversed(_missing_ancestors(item.path)))
             item.path.parent.mkdir(parents=True, exist_ok=True)
-            item.path.write_text(item.content, encoding="utf-8")
+            # newline="" so the staged text is the sole authority on line
+            # endings: an update keeps the file's own convention and an add
+            # keeps the patch's, instead of both being rewritten to os.linesep.
+            with item.path.open("w", encoding="utf-8", newline="") as handle:
+                handle.write(item.content)
     except OSError as exc:
         _restore(backups, new_dirs)
         label = current.label if current is not None else "patch"

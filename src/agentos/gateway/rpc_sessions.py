@@ -259,14 +259,23 @@ async def _drain_task_runtime_for_session(
 
     try:
         rows = await task_runtime.list(session_key=session_key)
+        undrained = 0
         for row in rows:
-            if _task_status_value(getattr(row, "status", None)) in _ACTIVE_TASK_STATUSES:
+            if _task_status_value(getattr(row, "status", None)) not in _ACTIVE_TASK_STATUSES:
+                continue
+            try:
                 await asyncio.wait_for(
                     task_runtime.wait(row.task_id),
                     timeout=_RESET_RUNTIME_CANCEL_DRAIN_SECONDS,
                 )
-    except TimeoutError:
-        log.warning(f"sessions.{op}.task_runtime_drain_timeout", session_key=session_key)
+            except TimeoutError:
+                undrained += 1
+        if undrained:
+            log.warning(
+                f"sessions.{op}.task_runtime_drain_timeout",
+                session_key=session_key,
+                undrained_count=undrained,
+            )
     except Exception:
         log.warning(f"sessions.{op}.task_runtime_drain_failed", session_key=session_key)
 
@@ -402,6 +411,33 @@ def _require_key(params: dict | None) -> str:
     if not isinstance(key, str):
         raise ValueError("params.key must be a string")
     return canonicalize_session_key(key)
+
+
+_MAX_MESSAGES_ERROR = "params.maxMessages must be a non-negative integer"
+
+
+def _require_max_messages(params: dict | None, default: int = 20) -> int:
+    """Validate ``maxMessages`` before anything destructive can run.
+
+    ``bool`` is a subclass of ``int``, so an unguarded read let ``false``
+    through as ``0`` — wiping the entire transcript and still answering
+    ``ok: true`` — and ``true`` through as "keep only the newest message".
+    A non-numeric value instead reached the session manager's own
+    ``max_messages < 0`` check and raised ``TypeError``, which the dispatcher's
+    catch-all turned into a raw INTERNAL_ERROR carrying the Python error string.
+
+    ``0`` stays valid: it is the intentional wipe, already gated by the
+    checkpoint/force safety check in the handler.
+    """
+
+    value = (params or {}).get("maxMessages", default)
+    if isinstance(value, bool):
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    if not isinstance(value, int):
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    if value < 0:
+        raise ValueError(_MAX_MESSAGES_ERROR)
+    return value
 
 
 def _effective_agent_id_for_session(session: Any | None, session_key: str) -> str:
@@ -826,7 +862,11 @@ async def _handle_sessions_create(params: dict | None, ctx: RpcContext) -> dict:
     if not isinstance(params, dict):
         params = {}
     agent_id = normalize_agent_id(params.get("agentId", "main"))
-    display_name = params.get("displayName")
+    # Same normalizer ``sessions.rename`` and ``sessions.patch`` use: the name
+    # is user-typed (``/new <title>`` pastes arrive here verbatim) and is
+    # later rendered on a terminal, so control bytes, newlines and length
+    # are cut down before storage rather than on every read (#1618).
+    display_name = normalize_session_name(params.get("displayName"))
     message = params.get("message")
     model = _model_value(params.get("model")) or _agent_registry_model(ctx, agent_id)
     kind = params.get("kind") or params.get("sessionKind")
@@ -1053,7 +1093,20 @@ async def _handle_sessions_send(params: dict | None, ctx: RpcContext) -> dict:
         nonlocal message_text, persisted_entry, fresh_user_session
         get_transcript = getattr(ctx.session_manager, "get_transcript", None)
         if callable(get_transcript):
-            fresh_user_session = not bool(await get_transcript(key))
+            # Only emptiness is being asked, so one row answers it. Unbounded,
+            # this reads and deserialises the session's whole history on every
+            # user message -- `SessionStorage.get_transcript` turns `limit=None`
+            # into `LIMIT -1` and builds a `TranscriptEntry` per row. A 5k-entry
+            # session cost ~135ms against ~4ms for a single row, on the send
+            # path rather than a background job.
+            #
+            # The call is duck-typed, and session managers that predate the
+            # `limit` parameter (fakes included) accept the key alone, so the
+            # bound is only passed when the callable declares it.
+            if accepts_keyword_arg(get_transcript, "limit"):
+                fresh_user_session = not bool(await get_transcript(key, limit=1))
+            else:
+                fresh_user_session = not bool(await get_transcript(key))
         if raw_attachments:
             from agentos.gateway.transcripts import (
                 build_transcript_attachment_envelope,
@@ -2226,7 +2279,7 @@ async def _handle_sessions_truncate(params: dict | None, ctx: RpcContext) -> dic
     if ctx.session_manager is None:
         raise RpcUnavailableError("No session manager available")
 
-    max_messages = (params or {}).get("maxMessages", 20)
+    max_messages = _require_max_messages(params)
     force = bool((params or {}).get("force", False))
 
     turn_runner = ctx.turn_runner

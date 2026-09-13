@@ -121,6 +121,9 @@ non-TTY contexts fall back automatically.
 Top-level: `init`, `onboard`, `configure`, `doctor`, `upgrade`, `chat`,
 `agent`, `reset`, plus these groups (each supports `--help`):
 
+`agentos --version` prints the installed version and exits — use it rather
+than reading a version out of `uv tool list` or `pip show`.
+
 | Group | Subcommands |
 | --- | --- |
 | `gateway` | `run`, `start`, `status`, `stop`, `restart` (`--port`, `--bind`, `--listen`, `--config`, `--json`, `--debug`) |
@@ -148,6 +151,19 @@ Top-level: `init`, `onboard`, `configure`, `doctor`, `upgrade`, `chat`,
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; use
 `agentos channels types` as the authoritative catalog. Config migration backs up the
 file before removing entries for retired built-in channel types.
+
+Slack webhook entries use `webhook_path`. Omitted or empty means automatic: the
+first enabled webhook account in config order keeps `/slack/events` no matter
+how many other webhook accounts are enabled, so adding a second account never
+changes an already-configured account's Request URL. Every other enabled
+webhook account with no explicit path gets `/slack/events/<account_name>`.
+Disabled and Socket Mode entries do not count, or count as "first". Non-empty
+paths supplied with `channels add slack --field webhook_path=…` take
+precedence. Automatic names (for every account but the first) must use
+letters, digits, `.`, `_`, `~`, or `-` and cannot be `.` or `..`; use an
+explicit path for other names. Configure each Slack app's Events API,
+Interactivity, and slash-command Request URLs to match, then restart the gateway.
+Duplicate webhook paths with overlapping HTTP methods cause a startup error.
 
 Telegram direct messages always require pairing. Use `agentos channels pairing
 list <name>`, `approve <name> <code>`, `deny <name> <sender-id>`, or `revoke
@@ -205,7 +221,7 @@ Main `agentos.toml` sections (full commented reference:
 
 | Section | Controls |
 | --- | --- |
-| top-level | `workspace_dir`, `state_dir`, logging, `search_provider`/`search_api_key`, timeouts |
+| top-level | `workspace_dir`, `state_dir`, logging, `search_provider`/`search_api_key`, timeouts, and the in-memory registry ceilings `registry_session_max_entries` (default 512), `registry_cache_max_entries` (default 512), `registry_cache_ttl_seconds` (default 900) — how much per-session state one long-lived gateway process retains |
 | `[x_search]` | xAI-backed X (Twitter) search: `enabled`, `model` (default `grok-4.5`), `api_key`/`api_key_env` (`XAI_API_KEY`), `reasoning_effort`, `timeout_seconds`, `total_timeout_seconds`, `retries`. The `x_search` tool is hidden until a credential resolves |
 | `[browser]` | Browser automation via `agent-browser`: `enabled`, `headless`, `cdp_port` (0=managed; >0 attaches to your Chrome, localhost only) + `attach_confirmed`, `allowed_domains`, `persist_profile`, `dialog_policy`, `restrict_evaluate`. The `browser` tool is hidden until the binary is installed (`npm install -g agent-browser && agent-browser install`). See docs/features/browser.md |
 | `[llm]` | `provider`, `model`, `api_key`, `base_url`, `proxy`, `[llm.provider_routing]` |
@@ -344,6 +360,15 @@ failure the managed gateway is stopped, the snapshot restored and the gateway
 started again. The Control UI banner's **Update now** runs the same command as
 a detached job via the `updates.apply` / `updates.status` RPCs; the macOS app
 runs it with `--no-restart` and restarts the gateway it spawned.
+
+On Windows the managed gateway is stopped before the installer runs and started
+again afterwards — Windows cannot replace files a live process holds open, and
+the gateway runs the tool venv's own interpreter (that is the `Access is denied`
+on `…\uv\tools\use-agent-os\Scripts`). `--no-restart` opts out and can
+therefore still hit the lock. When the installer is refused anyway, the error
+names the recovery: stop the gateway, close every other AgentOS process, re-run
+the printed command from a fresh terminal, and restore uv's tool bin directory
+to PATH with `uv tool update-shell` if `agentos` has gone missing.
 
 Commands that reach the gateway compare CLI and gateway versions: a gateway
 **older** than the CLI warns (post-upgrade, before restart); a gateway

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from agentos.channels._telegram_formatting import render_telegram_html
+from agentos.channels._telegram_formatting import _plain_inline, render_telegram_html
 from agentos.channels.telegram import TelegramApiError, TelegramChannel, TelegramChannelConfig
 from agentos.channels.types import OutgoingMessage
 
@@ -51,6 +51,58 @@ if x < 2:
         '<pre><code class="language-python">'
         "if x &lt; 2:\n    print(&quot;&amp;&quot;)</code></pre>"
     ) in rendered
+
+
+def test_multiline_blockquote_is_grouped_into_a_single_tag() -> None:
+    """Issue #1532: Telegram's <blockquote> is a multiline element -- one tag
+    per source line rendered as a stack of separate quote bubbles instead of
+    one contiguous quote."""
+    rendered = render_telegram_html("> Line 1\n> Line 2")
+
+    assert rendered == "<blockquote>Line 1\nLine 2</blockquote>"
+
+
+def test_blockquote_empty_line_separates_paragraphs_without_leaking_raw_gt() -> None:
+    """A bare `>` line inside a quote must stay part of the quote as an empty
+    line, not fall through to inline rendering and leak a raw `&gt;`."""
+    rendered = render_telegram_html("> Paragraph 1\n>\n> Paragraph 2")
+
+    assert rendered == "<blockquote>Paragraph 1\n\nParagraph 2</blockquote>"
+    assert "&gt;" not in rendered
+
+
+def test_blockquote_marker_without_a_space_is_recognized() -> None:
+    rendered = render_telegram_html(">no space")
+
+    assert rendered == "<blockquote>no space</blockquote>"
+
+
+@pytest.mark.parametrize("indent", ["", " ", "  ", "   "])
+def test_blockquote_allows_up_to_three_leading_spaces(indent: str) -> None:
+    rendered = render_telegram_html(f"{indent}> quote")
+
+    assert rendered == "<blockquote>quote</blockquote>"
+
+
+def test_four_leading_spaces_is_not_a_blockquote_marker() -> None:
+    """Four or more leading spaces is CommonMark's indented-code-block
+    territory, not a blockquote -- the line falls through to plain
+    (escaped) inline rendering, same as before this fix."""
+    rendered = render_telegram_html("    > not a quote")
+
+    assert rendered == "    &gt; not a quote"
+
+
+def test_blockquote_stops_at_the_first_non_quote_line() -> None:
+    rendered = render_telegram_html("> quoted\nnot quoted")
+
+    assert rendered == "<blockquote>quoted</blockquote>\nnot quoted"
+
+
+def test_blockquote_content_still_gets_inline_formatting() -> None:
+    rendered = render_telegram_html("> **bold** and `code`")
+
+    assert rendered == "<blockquote><b>bold</b> and <code>code</code></blockquote>"
 
 
 def test_telegram_send_payload_auto_renders_html() -> None:
@@ -207,3 +259,82 @@ def test_mixed_ragged_rows_all_render_without_raw_pipes() -> None:
     assert "extra" not in rendered
     # No raw pipe characters.
     assert "|" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("url", "marker"),
+    [
+        ("https://example.com/foo__bar__baz", "__"),
+        ("https://example.com/a**b**c", "**"),
+        ("https://example.com/a~~b~~c", "~~"),
+        ("https://example.com/a*b*c", "*"),
+    ],
+)
+def test_link_href_survives_inline_formatting_markers(url: str, marker: str) -> None:
+    """A URL is an attribute value, not a place to look for Markdown.
+
+    The inline passes matched `**`, `__`, `~~` and `*` anywhere in the string,
+    so they rewrote the characters inside `href="..."`. Telegram then rejected
+    the whole message with "can't find end tag of href", which loses the reply
+    rather than degrading it.
+    """
+    rendered = render_telegram_html(f"[test]({url})")
+
+    assert rendered == f'<a href="{url}">test</a>'
+    assert "<b>" not in rendered
+    assert "<i>" not in rendered
+    assert "<s>" not in rendered
+
+
+def test_two_links_with_markers_both_survive() -> None:
+    """The placeholders are per-link, so several on one line stay distinct."""
+    rendered = render_telegram_html("[a](https://x.test/a__b__c) and [c](https://y.test/d__e__f)")
+
+    assert rendered == (
+        '<a href="https://x.test/a__b__c">a</a> and <a href="https://y.test/d__e__f">c</a>'
+    )
+
+
+def test_formatting_around_a_link_still_renders() -> None:
+    """Parking the URL must not disarm the inline passes for the rest."""
+    rendered = render_telegram_html("**bold** then [t](https://x.test/a__b__c)")
+
+    assert rendered == '<b>bold</b> then <a href="https://x.test/a__b__c">t</a>'
+
+
+def test_formatting_inside_link_text_still_renders() -> None:
+    """Only the URL is protected -- the link text is still Markdown.
+
+    Hiding the whole anchor would have been the simpler fix and would have
+    silently dropped this: `[**bold**](url)` is meant to come out bold.
+    """
+    assert render_telegram_html("[**bold** link](https://x.test/)") == (
+        '<a href="https://x.test/"><b>bold</b> link</a>'
+    )
+    assert render_telegram_html("[*em*](https://x.test/)") == (
+        '<a href="https://x.test/"><i>em</i></a>'
+    )
+
+
+def test_plain_inline_keeps_the_url_intact() -> None:
+    """The table-label path strips markers with `str.replace`.
+
+    That is worse than the HTML path: the characters are removed outright, so
+    `foo__bar__baz` became `foobarbaz` and the reader got a link that does not
+    resolve rather than a message Telegram refuses.
+    """
+    assert _plain_inline("[t](https://x.test/a__b__c)") == "t (https://x.test/a__b__c)"
+    assert _plain_inline("[t](https://x.test/a~~b~~c)") == "t (https://x.test/a~~b~~c)"
+    assert _plain_inline("[t](https://x.test/a**b**c)") == "t (https://x.test/a**b**c)"
+
+
+def test_plain_inline_still_strips_markers_outside_a_url() -> None:
+    """The stripping it exists for keeps working."""
+    assert _plain_inline("**bold** and __also__ and ~~gone~~") == "bold and also and gone"
+
+
+def test_a_url_inside_a_code_span_is_untouched() -> None:
+    """Code spans were already protected; that must not regress."""
+    assert render_telegram_html("`https://x.test/a__b__c`") == (
+        "<code>https://x.test/a__b__c</code>"
+    )

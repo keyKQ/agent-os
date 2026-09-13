@@ -17,6 +17,7 @@ const HOLD_GET_OK = {
     { tier: 'c0', model: 'deepseek-v4-flash' },
     { tier: 'c3', model: 'claude-opus-5' },
   ],
+  imageTiers: [{ tier: 'image_model', model: 'gpt-4o' }],
 }
 
 const MODELS_OK = [
@@ -187,20 +188,104 @@ describe('useRoutePin', () => {
     expect(result.current.imageOverride).toBe(false)
   })
 
-  it('flags an image route as an override of the pin', async () => {
+  it('keeps the model the decision names, not just the tier', async () => {
     const { rpc, emit } = fakeRpc()
     const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
     await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() =>
+      emit('session.event.router_decision', { tier: 'c2', model: 'glm-5.2', source: 'pilot' }),
+    )
+
+    expect(result.current.lastRoutedModel).toBe('glm-5.2')
+  })
+
+  it('reads the model from an image route, whose tier has no pinnable row', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    // `router.hold.get` reports text tiers only, so `image_model` can never be
+    // resolved to a model through `tiers` — the decision is the only source.
+    act(() =>
+      emit('session.event.router_decision', {
+        tier: 'image_model',
+        model: 'gpt-4o',
+        source: 'image_route',
+      }),
+    )
+
+    expect(result.current.tiers.some((row) => row.tier === 'image_model')).toBe(false)
+    expect(result.current.lastRoutedModel).toBe('gpt-4o')
+  })
+
+  it('accepts the persisted routed_model spelling of the decision', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'c1', routed_model: 'gpt-5.6-luna' }))
+
+    expect(result.current.lastRoutedModel).toBe('gpt-5.6-luna')
+  })
+
+  it('leaves the routed model null when the decision carries none', async () => {
+    const { rpc, emit } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'c1', model: '  ', source: 'pilot' }))
+
+    expect(result.current.lastRoutedTier).toBe('c1')
+    expect(result.current.lastRoutedModel).toBeNull()
+  })
+
+  it('flags an image route as an override of the pin', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
 
     act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
 
     expect(result.current.imageOverride).toBe(true)
   })
 
-  it('clears the override flag once a text turn routes normally again', async () => {
+  it('does not call an image route an override while routing is automatic', async () => {
     const { rpc, emit } = fakeRpc()
     const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
     await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
+
+    // Nothing was pinned, so the image tier overrode nothing.
+    expect(result.current.isPinned).toBe(false)
+    expect(result.current.lastRoutedTier).toBe('image_model')
+    expect(result.current.imageOverride).toBe(false)
+  })
+
+  it('drops the override flag when the pin it bypassed is cleared', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
+
+    act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
+    expect(result.current.imageOverride).toBe(true)
+
+    await act(async () => result.current.clear())
+
+    expect(result.current.imageOverride).toBe(false)
+  })
+
+  it('clears the override flag once a text turn routes normally again', async () => {
+    const { rpc, emit } = fakeRpc({
+      'router.hold.get': { ...HOLD_GET_OK, hold: { tier: 'c0' } },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.pinned).toBe('c0'))
 
     act(() => emit('session.event.router_decision', { tier: 'image_model', source: 'image_route' }))
     act(() => emit('session.event.router_decision', { tier: 'c1', source: 'pilot' }))
@@ -356,5 +441,60 @@ describe('useRoutePin', () => {
 
     // image_only tiers are not pinnable text routes and must not be offered.
     expect(result.current.tiers).toEqual([{ tier: 'c1', model: 'gpt-5.6-luna' }])
+  })
+
+  it('reads the image tiers the gateway reports', async () => {
+    const { rpc } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    expect(result.current.imageTiers).toEqual([{ tier: 'image_model', model: 'gpt-4o' }])
+    // Kept apart from the pinnable list: a hold on a vision tier never applies.
+    expect(result.current.tiers.some((row) => row.tier === 'image_model')).toBe(false)
+  })
+
+  it('reports no image tiers when an older gateway omits the field', async () => {
+    const { rpc } = fakeRpc({
+      'router.hold.get': {
+        enabled: true,
+        provider: 'opencap',
+        hold: null,
+        tiers: [{ tier: 'c0', model: 'deepseek-v4-flash' }],
+      },
+    })
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.enabled).toBe(true))
+
+    expect(result.current.imageTiers).toEqual([])
+  })
+
+  it('falls back to every vision-capable config tier, not only the image-only one', () => {
+    const { rpc } = fakeRpc()
+    const { result } = renderHook(() =>
+      useRoutePin(rpc, 'agent:main:main', {
+        c1: { model: 'gpt-5.6-luna', supportsImage: false, imageOnly: false },
+        c3: { model: 'claude-opus-5', supportsImage: true, imageOnly: false },
+        image_model: { model: 'minimax-m3', supportsImage: true, imageOnly: true },
+      }),
+    )
+
+    // The router's image branch picks among every supports_image tier, so the
+    // fallback splits on that flag rather than on image_only.
+    expect(result.current.imageTiers).toEqual([
+      { tier: 'c3', model: 'claude-opus-5' },
+      { tier: 'image_model', model: 'minimax-m3' },
+    ])
+  })
+
+  it('does not carry one session’s image tiers over to the next', async () => {
+    const { rpc } = fakeRpc()
+    const { result, rerender } = renderHook(({ key }) => useRoutePin(rpc, key), {
+      initialProps: { key: 'agent:main:one' },
+    })
+    await waitFor(() => expect(result.current.imageTiers).toHaveLength(1))
+
+    rerender({ key: 'agent:main:two' })
+
+    expect(result.current.imageTiers).toEqual([])
   })
 })

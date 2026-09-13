@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CheckIcon, RouteIcon } from 'lucide-react'
-import type { RoutePinApi } from './useRoutePin'
+import type { RoutePinApi, RoutePinTier } from './useRoutePin'
 import { t } from '@/i18n'
 import '@/i18n/en/chat'
 
@@ -15,15 +15,27 @@ import '@/i18n/en/chat'
  * tier. That distinction matters to the router, not to the person choosing, so
  * it stays out of the list and lives in the tier rows' own labels.
  *
+ * The vision tiers sit BELOW that list, outside the listbox, as plain text. An
+ * image turn is routed before holds are consulted, so those tiers are not
+ * choices — offering them as options would promise a pin that the router
+ * ignores. They are shown at all because otherwise the only way to learn what
+ * an image is handed to is to send one and read the label afterwards.
+ *
  * The button reports what is actually in force:
  *
  *   - tier pinned  → `c1 · gpt-5.6-luna`
  *   - model pinned → the model id alone; no tier was chosen
- *   - auto         → `Auto · c2`, the tier the router last picked, so "let it
- *                    decide" is still legible
- *   - image turn   → an override note, because an image turn is routed to a
- *                    vision tier before pins are consulted; the pin did not run
- *                    that turn and saying otherwise would misreport the bill
+ *   - auto         → `Auto · c2 · glm-5.2`, the tier the router last picked and
+ *                    the model it resolved to, so "let it decide" is still
+ *                    legible. The model comes from the routing decision, not
+ *                    from the tier rows: an image turn names `image_model`,
+ *                    which is not a pinnable tier and therefore has no row to
+ *                    look up.
+ *   - image turn   → an override note WHEN A PIN IS SET, because an image turn
+ *                    is routed to a vision tier before pins are consulted; the
+ *                    pin did not run that turn and saying otherwise would
+ *                    misreport the bill. On auto there is no pin to override,
+ *                    so the label alone tells the story.
  *
  * Disabled (not hidden) when no Pilot Router is configured, so the composer
  * does not reflow when the router is toggled.
@@ -142,6 +154,20 @@ export function RoutePicker({ route }: RoutePickerProps) {
     )
   }, [route.tiers, route.models, query])
 
+  // Vision tiers already offered above are dropped: a text tier that also takes
+  // images is pinnable and has a real row, so repeating it here would read as a
+  // second, different route. Filtered by the same needle as the options, so a
+  // search does not leave a stale row stranded under an empty list.
+  const imageRows = useMemo<RoutePinTier[]>(() => {
+    const pinnable = new Set(route.tiers.map((row) => row.tier))
+    const shown = route.imageTiers.filter((row) => !pinnable.has(row.tier))
+    const needle = query.trim().toLowerCase()
+    if (!needle) return shown
+    return shown.filter(
+      (row) => row.tier.toLowerCase().includes(needle) || row.model.toLowerCase().includes(needle),
+    )
+  }, [route.tiers, route.imageTiers, query])
+
   const selectedKey =
     route.pinnedModel !== null
       ? `m:${route.pinnedModel}`
@@ -152,23 +178,39 @@ export function RoutePicker({ route }: RoutePickerProps) {
   const pinnedModelLabel = route.pinned
     ? route.tiers.find((row) => row.tier === route.pinned)?.model || ''
     : ''
+  const autoLabel = !route.lastRoutedTier
+    ? t('chat.routeAuto')
+    : route.lastRoutedModel
+      ? t('chat.routeAutoWithTierModel', {
+          tier: route.lastRoutedTier,
+          model: route.lastRoutedModel,
+        })
+      : t('chat.routeAutoWithTier', { tier: route.lastRoutedTier })
   const label = route.pinnedModel
     ? route.pinnedModel
     : route.pinned
       ? pinnedModelLabel
         ? `${route.pinned} · ${pinnedModelLabel}`
         : route.pinned
-      : route.lastRoutedTier
-        ? t('chat.routeAutoWithTier', { tier: route.lastRoutedTier })
-        : t('chat.routeAuto')
+      : autoLabel
 
+  // The trigger is width-capped and ellipsises, so a long model id is readable
+  // only here — the auto title repeats the route in full rather than restating
+  // the generic "the router picks a tier" once a turn has actually routed.
+  const autoTitle =
+    route.lastRoutedTier && route.lastRoutedModel
+      ? t('chat.routeAutoRoutedTitle', {
+          tier: route.lastRoutedTier,
+          model: route.lastRoutedModel,
+        })
+      : t('chat.routeAutoTitle')
   const title = !route.enabled
     ? t('chat.routeDisabledTitle')
     : route.pinnedModel
       ? t('chat.routeModelPinnedTitle', { model: route.pinnedModel })
       : route.pinned
         ? t('chat.routePinnedTitle', { tier: route.pinned })
-        : t('chat.routeAutoTitle')
+        : autoTitle
 
   return (
     <div className="chat-route-wrap" ref={wrapRef}>
@@ -207,7 +249,9 @@ export function RoutePicker({ route }: RoutePickerProps) {
           />
           <ul id="chat-route-menu" className="chat-route-list" role="listbox">
             {rows.length === 0 ? (
-              <li className="chat-route-empty">{t('chat.routeNoMatch')}</li>
+              imageRows.length === 0 ? (
+                <li className="chat-route-empty">{t('chat.routeNoMatch')}</li>
+              ) : null
             ) : (
               rows.map((row) => (
                 <li role="none" key={row.key}>
@@ -228,6 +272,17 @@ export function RoutePicker({ route }: RoutePickerProps) {
               ))
             )}
           </ul>
+          {imageRows.length > 0 ? (
+            <div className="chat-route-image" title={t('chat.routeImageHintTitle')}>
+              <p className="chat-route-image__hint">{t('chat.routeImageHint')}</p>
+              {imageRows.map((row) => (
+                <p className="chat-route-image__row" key={row.tier}>
+                  <span className="chat-route-image__tier">{row.tier}</span>
+                  <span className="chat-route-image__model">{row.model}</span>
+                </p>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

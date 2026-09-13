@@ -9,7 +9,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -149,6 +149,41 @@ def _compaction_entry_payloads(entries: list[TranscriptEntry]) -> list[dict[str,
         }
         for e in entries
     ]
+
+
+@dataclass(frozen=True)
+class TranscriptSnapshot:
+    """Which persisted rows a running agent built its in-memory history from.
+
+    Captured by the turn runner right after it loads history, handed back on
+    ``persist_compaction_result`` so an inline compaction only rewrites and
+    archives rows the compactor actually saw. ``through_message_id`` is the
+    last such row; ``None`` means the agent holds no persisted rows at all
+    (for example right after a full compaction), so every transcript row is
+    newer than the snapshot. ``message_id`` is used rather than the row id
+    because a compaction rewrite re-inserts rows and renumbers them.
+    """
+
+    session_id: str
+    through_message_id: str | None
+
+
+def _split_at_snapshot(
+    entries: list[TranscriptEntry],
+    snapshot: TranscriptSnapshot,
+) -> tuple[list[TranscriptEntry], list[TranscriptEntry]] | None:
+    """Split *entries* into (rows inside the snapshot, rows appended after it).
+
+    Returns ``None`` when the anchor row is gone -- the transcript was reset,
+    truncated or compacted from under the caller -- so the stale result must
+    not be applied to it.
+    """
+    if snapshot.through_message_id is None:
+        return [], list(entries)
+    for index in range(len(entries) - 1, -1, -1):
+        if entries[index].message_id == snapshot.through_message_id:
+            return list(entries[: index + 1]), list(entries[index + 1 :])
+    return None
 
 
 def _transcript_preimage(entries: list[TranscriptEntry]) -> tuple[tuple[Any, ...], ...]:
@@ -492,7 +527,7 @@ class SessionManager:
 
     async def _rotate_session_id(self, node: SessionNode) -> SessionNode:
         old_session_id = node.session_id
-        await self._archive_session_identity(node)
+        await self._archive_session_identity(node, require_success=True)
         await self._storage.delete_transcript(old_session_id)
         await self._storage.delete_summaries(old_session_id)
         await self._storage.invalidate_context_states(
@@ -518,14 +553,23 @@ class SessionManager:
         await self._storage.upsert_session(node)
         return node
 
-    async def _archive_session_identity(self, node: SessionNode) -> bool:
+    async def _archive_session_identity(
+        self, node: SessionNode, *, require_success: bool = False
+    ) -> bool:
         """Best-effort raw archive before a same-key transcript reset.
 
         Returns ``True`` when a non-empty archive file was written to disk,
-        ``False`` when there was nothing to archive or the write failed. The
-        reset path uses the return value to decide whether a destructive
-        rotation is safe to fall back to when the memory-flush service is
-        unavailable.
+        ``False`` when there was nothing to archive — an empty session is
+        safe to rotate either way. A write *failure* on a non-empty session
+        is a different outcome from "nothing to archive" and must not be
+        folded into the same ``False``: with ``require_success=True`` (the
+        destructive :meth:`_rotate_session_id` path, which deletes the
+        transcript this archive is the only backup of) a failure raises
+        instead, aborting the reset with a clear error rather than silently
+        proceeding to delete an unarchived transcript.
+        :meth:`rotate_session_id_archive_only` keeps ``require_success``
+        false: it never deletes anything, so a failed backup there costs
+        nothing but the backup itself.
         """
 
         try:
@@ -550,7 +594,22 @@ class SessionManager:
             }
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             return True
-        except Exception:
+        except Exception as exc:
+            import structlog as _structlog
+
+            _structlog.get_logger(__name__).warning(
+                "session.archive_failed",
+                session_key=node.session_key,
+                session_id=node.session_id,
+                error=str(exc),
+                aborting_reset=require_success,
+            )
+            if require_success:
+                raise RuntimeError(
+                    f"Failed to archive session {node.session_key!r} before a "
+                    "destructive reset; aborting rather than deleting an "
+                    "unarchived transcript"
+                ) from exc
             return False
 
     async def rotate_session_id_archive_only(self, session_key: str) -> SessionNode:
@@ -1407,12 +1466,26 @@ class SessionManager:
         compaction_id: str | None = None,
         trigger_reason: str | None = None,
         flush_receipt_status: str | None = None,
-    ) -> None:
+        snapshot: TranscriptSnapshot | None = None,
+    ) -> TranscriptSnapshot | None:
         """Persist a pre-computed compaction result directly (no LLM re-compaction).
 
         Called by TurnRunner when Agent emits CompactionEvent. Writes the Agent's
         actual compaction output to DB, avoiding the double-compaction bug that
         would occur if we called compact() (which re-reads DB and re-runs LLM).
+
+        *snapshot* says which persisted rows the agent's history was built
+        from. Only those rows are replaced by ``kept_entries`` or archived
+        under the summary; anything appended after the snapshot (a queued
+        follow-up from ``sessions.send``) is re-appended verbatim -- same
+        ``message_id``, content, metadata and order -- and the summary's
+        coverage never reaches it. A snapshot whose session or anchor row no
+        longer exists is stale and the result is dropped rather than written
+        over a transcript the compactor never saw. Without a snapshot the
+        whole transcript is treated as seen (legacy callers).
+
+        Returns the snapshot to anchor the next compaction of the same
+        in-memory history on, or ``None`` when nothing was persisted.
         """
         session_key = canonicalize_session_key(session_key)
         import structlog as _structlog
@@ -1422,9 +1495,27 @@ class SessionManager:
         node = await self._storage.get_session(session_key)
         if node is None:
             _log.warning("persist_compaction.session_not_found", session_key=session_key)
-            return
+            return None
 
         entries = await self._storage.get_transcript(node.session_id)
+        newer_entries: list[TranscriptEntry] = []
+        if snapshot is not None:
+            split = (
+                _split_at_snapshot(entries, snapshot)
+                if snapshot.session_id == node.session_id
+                else None
+            )
+            if split is None:
+                _log.warning(
+                    "persist_compaction.stale_snapshot_not_persisted",
+                    session_key=session_key,
+                    snapshot_session_id=snapshot.session_id,
+                    session_id=node.session_id,
+                    entries=len(entries),
+                    kept=len(kept_entries),
+                )
+                return None
+            entries, newer_entries = split
         removed_entries = entries[: max(0, len(entries) - len(kept_entries))]
         preserved_entries = entries[len(removed_entries) :]
         if removed_entries and not summary:
@@ -1434,7 +1525,7 @@ class SessionManager:
                 removed=len(removed_entries),
                 kept=len(kept_entries),
             )
-            return
+            return None
 
         # Store summary out-of-band. New compactions must not prepend a
         # transcript system marker because history loading would make that
@@ -1490,7 +1581,18 @@ class SessionManager:
                 tool_call_id=raw.get("tool_call_id"),
                 turn_usage=raw.get("turn_usage"),
             )
+            # The transcript is ordered by created_at; a kept row minted now
+            # must not sort behind a follow-up that was appended earlier.
+            if newer_entries and entry.created_at > newer_entries[0].created_at:
+                entry.created_at = newer_entries[0].created_at
             rewritten_entries.append(entry)
+        next_snapshot = TranscriptSnapshot(
+            session_id=node.session_id,
+            through_message_id=rewritten_entries[-1].message_id if rewritten_entries else None,
+        )
+        # Rows the compactor never saw keep their identity and stay behind
+        # the kept tail, exactly where they were appended.
+        rewritten_entries.extend(newer_entries)
 
         node.compaction_count = (node.compaction_count or 0) + 1
         node.updated_at = _now_ms()
@@ -1507,7 +1609,9 @@ class SessionManager:
             session_key=session_key,
             summary_len=len(summary),
             kept=len(kept_entries),
+            preserved_newer=len(newer_entries),
         )
+        return next_snapshot
 
     async def truncate(self, session_key: str, max_messages: int = 20) -> dict:
         """Truncate transcript to the most recent *max_messages* entries.

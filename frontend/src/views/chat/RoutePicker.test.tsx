@@ -12,6 +12,7 @@ function route(overrides: Partial<RoutePinApi> = {}): RoutePinApi {
       { tier: 'c2', model: 'glm-5.2' },
       { tier: 'c3', model: 'claude-opus-5' },
     ],
+    imageTiers: [{ tier: 'image_model', model: 'gpt-4o' }],
     models: [
       // gpt-5.6-luna is also tier c1's model — the overlap the dedup handles.
       { id: 'gpt-5.6-luna', name: 'gpt-5.6-luna' },
@@ -22,6 +23,7 @@ function route(overrides: Partial<RoutePinApi> = {}): RoutePinApi {
     pinnedModel: null,
     isPinned: false,
     lastRoutedTier: null,
+    lastRoutedModel: null,
     imageOverride: false,
     busy: false,
     pin: vi.fn(),
@@ -46,6 +48,31 @@ describe('RoutePicker', () => {
   it('names the tier the router actually chose while on Auto', () => {
     render(<RoutePicker route={route({ lastRoutedTier: 'c2' })} />)
     expect(trigger()).toHaveTextContent('Auto · c2')
+  })
+
+  it('names the model the router actually used while on Auto', () => {
+    render(<RoutePicker route={route({ lastRoutedTier: 'c2', lastRoutedModel: 'glm-5.2' })} />)
+    expect(trigger()).toHaveTextContent('Auto · c2 · glm-5.2')
+  })
+
+  it('names the image model on an image turn, whose tier has no row to look up', () => {
+    render(
+      <RoutePicker route={route({ lastRoutedTier: 'image_model', lastRoutedModel: 'gpt-4o' })} />,
+    )
+    expect(trigger()).toHaveTextContent('Auto · image_model · gpt-4o')
+  })
+
+  it('spells the routed model out in the title, which the capped label elides', () => {
+    render(<RoutePicker route={route({ lastRoutedTier: 'c2', lastRoutedModel: 'glm-5.2' })} />)
+    expect(trigger()).toHaveAttribute(
+      'title',
+      'The Pilot Router routed the last turn to c2 · glm-5.2',
+    )
+  })
+
+  it('keeps the generic Auto title until a turn has actually routed', () => {
+    render(<RoutePicker route={route()} />)
+    expect(trigger()).toHaveAttribute('title', 'The Pilot Router picks a tier for each turn')
   })
 
   it('falls back to a bare Auto before any turn has been routed', () => {
@@ -173,6 +200,72 @@ describe('RoutePicker', () => {
     expect(pin).not.toHaveBeenCalled()
   })
 
+  it('reports the image tier so the vision model is knowable before sending one', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    expect(screen.getByText('Images route here automatically')).toBeInTheDocument()
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+  })
+
+  it('keeps the image tier out of the options, since a pin on it never applies', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    // Auto + 4 tiers + terra + grok, exactly as before: the image row is not
+    // one of them.
+    expect(screen.getAllByRole('option')).toHaveLength(7)
+    expect(screen.queryByRole('option', { name: /image_model/ })).not.toBeInTheDocument()
+  })
+
+  it('does not repeat a vision tier that is already pinnable in the list', () => {
+    // c3 takes images AND text, so it is a real, pinnable option; listing it
+    // again below would read as a second, different route.
+    render(
+      <RoutePicker
+        route={route({
+          imageTiers: [
+            { tier: 'c3', model: 'claude-opus-5' },
+            { tier: 'image_model', model: 'gpt-4o' },
+          ],
+        })}
+      />,
+    )
+    fireEvent.click(trigger())
+    expect(screen.getAllByText('c3')).toHaveLength(1)
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+  })
+
+  it('filters the image rows with the same search as the options', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'grok' } })
+    expect(screen.queryByText('image_model')).not.toBeInTheDocument()
+    expect(screen.queryByText('Images route here automatically')).not.toBeInTheDocument()
+  })
+
+  it('finds the image tier by its model id, which no option row carries', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'gpt-4o' } })
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+    expect(screen.getByText('image_model')).toBeInTheDocument()
+    // The image row IS the match, so the empty-list note would contradict it.
+    expect(screen.queryByText('No route matches')).not.toBeInTheDocument()
+  })
+
+  it('still reports no match when neither an option nor an image row survives', () => {
+    render(<RoutePicker route={route()} />)
+    fireEvent.click(trigger())
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'nothing-here' } })
+    expect(screen.getByText('No route matches')).toBeInTheDocument()
+  })
+
+  it('omits the section entirely when no tier takes images', () => {
+    render(<RoutePicker route={route({ imageTiers: [] })} />)
+    fireEvent.click(trigger())
+    expect(screen.queryByText('Images route here automatically')).not.toBeInTheDocument()
+  })
+
   it('flags the turns an image route took instead of the pin', () => {
     render(<RoutePicker route={route({ pinned: 'c0', imageOverride: true })} />)
     expect(screen.getByText('image route')).toBeInTheDocument()
@@ -181,6 +274,16 @@ describe('RoutePicker', () => {
   it('shows no override badge on ordinary text turns', () => {
     render(<RoutePicker route={route({ pinned: 'c0' })} />)
     expect(screen.queryByText('image route')).not.toBeInTheDocument()
+  })
+
+  it('shows no override badge on an image turn that overrode nothing', () => {
+    // Auto routing: the hook reports no override, so the label carries the
+    // image route on its own rather than a badge claiming a bypassed pin.
+    render(
+      <RoutePicker route={route({ lastRoutedTier: 'image_model', lastRoutedModel: 'gpt-4o' })} />,
+    )
+    expect(screen.queryByText('image route')).not.toBeInTheDocument()
+    expect(trigger()).toHaveTextContent('image_model · gpt-4o')
   })
 
   it('closes on Escape without reaching the composer abort chain', () => {

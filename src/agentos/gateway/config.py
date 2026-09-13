@@ -747,18 +747,18 @@ def _default_tiers() -> dict:
 def _bankr_tiers() -> dict:
     """Bankr LLM Gateway routing config.
 
-    Model ids are bare (e.g. ``deepseek-v4-flash``) as served by the Bankr
-    gateway at ``llm.bankr.bot``. ``deepseek-v4-flash`` shares its bare id with
-    the DeepSeek direct contract (393K max output); the bankr entry in
-    ``_PROVIDER_STATIC_FALLBACK`` (model_catalog) caps it at the gateway's 128K
-    output limit.
+    Model ids are bare (e.g. ``deepseek-v4.1-flash``) as served by the Bankr
+    gateway at ``llm.bankr.bot``. Where a bare id is shared with a direct
+    provider contract that allows more output than the gateway does (the older
+    ``deepseek-v4-flash``: 393K direct, 128K here), the bankr entry in
+    ``_PROVIDER_STATIC_FALLBACK`` (model_catalog) carries the gateway's cap.
     """
     return {
         "c0": _tier(
             provider="bankr",
-            model="deepseek-v4-flash",
+            model="deepseek-v4.1-flash",
             description=(
-                "fast DeepSeek V4 Flash route for trivial chat, short rewrites, extraction, and "
+                "fast DeepSeek V4.1 Flash route for trivial chat, short rewrites, extraction, and "
                 "low-risk simple Q&A"
             ),
             thinking_level="high",
@@ -818,9 +818,9 @@ def _opencap_tiers() -> dict:
     return {
         "c0": _tier(
             provider="opencap",
-            model="deepseek-v4-flash",
+            model="deepseek-v4.1-flash",
             description=(
-                "fast DeepSeek V4 Flash route for trivial chat, short rewrites, extraction, and "
+                "fast DeepSeek V4.1 Flash route for trivial chat, short rewrites, extraction, and "
                 "low-risk simple Q&A"
             ),
             thinking_level="high",
@@ -881,9 +881,9 @@ def _surplus_tiers() -> dict:
     return {
         "c0": _tier(
             provider="surplus",
-            model="deepseek-v4-flash",
+            model="deepseek-v4.1-flash",
             description=(
-                "fast DeepSeek V4 Flash route for trivial chat, short rewrites, extraction, and "
+                "fast DeepSeek V4.1 Flash route for trivial chat, short rewrites, extraction, and "
                 "low-risk simple Q&A"
             ),
             thinking_level="high",
@@ -1769,6 +1769,8 @@ class SlackChannelEntry(ConfiguredChannelEntry):
     token: str
     slack_channel_id: str = ""
     signing_secret: str | None = None
+    # Empty selects /slack/events for one webhook account, otherwise an account-named path.
+    webhook_path: str = ""
     reply_in_thread: bool = False
     # ``socket`` uses Slack Socket Mode (an outbound websocket long-connection)
     # and needs no public Request URL; ``webhook`` keeps the Events API
@@ -2448,6 +2450,12 @@ class GatewayConfig(BaseSettings):
     search_use_env_proxy: bool = False
     search_fallback_policy: Literal["off", "network"] = "off"
     search_diagnostics: bool = False
+
+    # Bounded registries — ceilings for the per-session dicts a long-lived
+    # gateway keeps in memory. See agentos.util.bounded_registry.
+    registry_session_max_entries: int = Field(default=512, ge=1)
+    registry_cache_max_entries: int = Field(default=512, ge=1)
+    registry_cache_ttl_seconds: float = Field(default=900.0, gt=0)
 
     # State/config paths
     state_dir: str | None = Field(default_factory=lambda: str(default_agentos_home() / "state"))
