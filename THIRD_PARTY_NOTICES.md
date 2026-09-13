@@ -248,6 +248,7 @@ are released under AgentOS's repository license (Apache-2.0; see `LICENSE`):
 - `title-card-image`
 - `tmux`
 - `video-still-animator`
+- `wallet-trading`
 - `weather`
 - `xlsx`
 - `advanced-dubbing-studio`

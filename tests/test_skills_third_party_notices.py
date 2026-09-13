@@ -46,6 +46,7 @@ ORIGINALS = {
     "voice-clone-lab",
     "voice-conversion-studio",
     "voiceover-studio",
+    "wallet-trading",
     "weather",
     "xlsx",
 }

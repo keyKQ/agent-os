@@ -66,6 +66,7 @@ DEFAULTS = (
         "tmux",
         "video-merger",
         "video-still-animator",
+        "wallet-trading",
         "weather",
         "xlsx",
     }

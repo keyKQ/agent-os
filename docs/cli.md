@@ -29,6 +29,8 @@ available without `uv tool list` or `pip show`.
 | `agentos agent` | Run a single automation-friendly agent turn. |
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
+| `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through Uniswap; orders, approvals, history, PnL. |
 | `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -775,6 +777,70 @@ project, `projects_list` returns knowledge text only for that project, and
 stays on the CLI/Web UI surface.
 
 Read: [`sessions.md`](sessions.md)
+
+## Wallets and trading
+
+```sh
+agentos wallet status
+agentos wallet setup --mode auto            # once; auto = password in ~/.agentos/wallets/unlock.key (0600)
+agentos wallet setup --mode manual          # or: unlock per gateway session, keys only in RAM
+agentos wallet unlock / lock
+agentos wallet create --label main
+agentos wallet import --label cold --private-key-stdin < key.txt
+agentos wallet import --label cold --keystore wallet.json
+agentos wallet export <addr> --keystore --out backup.json
+agentos wallet export <addr> --private-key   # prints the raw key; always asks the vault password
+agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes
+agentos wallet balances [<addr>] [--chain base|robinhood] [--json]
+
+agentos trade status                        # provider, API key, chains, limits, vault state
+agentos trade provider                      # show the swap provider (uniswap | kyber)
+agentos trade provider kyber                # switch it (= config set trading.provider kyber)
+agentos trade probe [--provider uniswap|kyber] [--api-key <key>]   # reachable? key valid?
+agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
+agentos trade quote --chain base --in ETH --out USDC --amount 0.01
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait
+agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA"
+agentos trade orders [--status awaiting_approval] / order <id> [--wait] / approve <id> / reject <id>
+agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw]
+agentos trade portfolio [--wallet <addr>]  # holdings, cost basis, realized + unrealized PnL
+agentos trade sync [--full]                 # re-read the chain into the ledger
+agentos trade limits <addr>                 # today's agent spend vs the daily cap
+```
+
+Wallets live in the engine's **vault** (`~/.agentos/wallets/`, keystore v3
+files encrypted with one vault password). Nothing here is tied to an OS
+keychain: `auto` mode keeps the password in `unlock.key` (mode 0600) so the
+gateway unlocks at boot and the agent can sign unattended; `manual` mode
+keeps keys only in the gateway's memory after `agentos wallet unlock`. Export
+always asks the vault password. Passwords are read from a hidden prompt or
+`AGENTOS_WALLET_PASSWORD` (`AGENTOS_KEYSTORE_PASSWORD` for an imported
+keystore) — never from the command line.
+
+Swaps run on Base (8453) and Robinhood Chain (4663) through one of two
+providers. **Uniswap** (the default, `trading.provider = "uniswap"`) uses
+the Uniswap Trading API and needs a key: `agentos config set
+trading.uniswap_api_key <key>` or Settings › Trading in the desktop app.
+**KyberSwap** (`agentos trade provider kyber`) needs no key, but its API is
+geo-restricted in some countries (Vietnam confirmed): calls then fail with
+the RPC error `trading.provider_blocked`, `agentos trade probe --provider
+kyber` reports `blocked: true`, and the fix is to switch back to Uniswap or
+use a VPN. `--in`/`--out` take `ETH`, an
+address, or a symbol; a symbol must resolve to exactly one *verified* token
+or the command exits 2 (`TOKEN_AMBIGUOUS`, `TOKEN_UNVERIFIED`,
+`TOKEN_NOT_FOUND`). Amounts are human units.
+
+Guardrails apply to **agent-initiated** swaps (a swap run inside an agent
+turn, where `AGENTOS_SESSION_KEY` is set, or `--as-agent`): an order above
+`trading.approval_threshold_usd` (default 100) waits as `awaiting_approval`
+for 15 minutes — approve it in the app or with `agentos trade approve <id>`;
+an order that would push a wallet past `trading.daily_cap_usd` (default
+1,000 per calendar day) is rejected. Swaps typed by a person are neither
+queued nor capped. `--wait` blocks until each order settles (`confirmed`,
+`failed`, `rejected`, `expired`).
+
+Read: [`features/trading.md`](features/trading.md)
 
 ## Memory
 

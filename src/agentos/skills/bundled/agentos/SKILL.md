@@ -134,6 +134,8 @@ than reading a version out of `uv tool list` or `pip show`.
 | `skills` | `init`, `list`, `search`, `view`, `install`, `uninstall`, `update`, `publish`, `tap add/list/remove` |
 | `sessions` | `list`, `show`, `rename`, `resume`, `abort`, `delete`, `export` |
 | `projects` | `list`, `create` (`--knowledge`/`--knowledge-file`), `show`, `update`, `delete`, `move <session> <project\|none>` — group sessions across agents; the knowledge text is injected into every member session's prompt |
+| `wallet` | `status`, `setup [--mode auto\|manual]`, `unlock`, `lock`, `list`, `create --label L`, `import --label L (--private-key-stdin \| --keystore FILE)`, `export ADDR (--keystore \| --private-key) [--out FILE]`, `rename ADDR L`, `remove ADDR [--yes]`, `primary ADDR`, `balances [ADDR] [--chain base\|robinhood]` — the engine's wallet vault (`~/.agentos/wallets/`); passwords come from a hidden prompt or `AGENTOS_WALLET_PASSWORD`, never argv |
+| `trade` | `status`, `provider [uniswap\|kyber]` (show/switch the swap provider: Uniswap needs `trading.uniswap_api_key`, KyberSwap needs no key but is geo-restricted in some countries → `trading.provider_blocked`), `probe [--provider uniswap\|kyber] [--api-key K]`, `tokens --chain C QUERY`, `quote --chain C --in T --out T --amount A [--wallet ADDR] [--slippage P]`, `swap --chain C --in T --out T (--amount A \| --pct P) [--wallet ADDR …\|--all-wallets] [--slippage P] [--note N] [--wait] [--as-agent]`, `orders [--status S]`, `order ID [--wait]`, `approve ID`, `reject ID [--reason R]`, `history`, `portfolio [--wallet ADDR]`, `sync [--full]`, `limits ADDR` — Uniswap swaps on Base/Robinhood Chain, orders, ledger and PnL; agent-initiated swaps obey `trading.approval_threshold_usd` and `trading.daily_cap_usd` (see the `wallet-trading` skill) |
 | `cron` | `list`, `status`, `add` (also takes `--session-key`, the chat a job reports into), `update` (both take `--job-kind`, `--script`, `--script-arg`, `--workdir`, `--elevated`, `--elevated-mode`, `--tool-policy`; the policy's `profile` must be one of `coding`/`full`/`memory_only`/`messaging`/`minimal`, or be omitted), `remove`, `run`, `runs` |
 | `channels` | `list`, `status`, `types`, `describe`, `native-commands`, `add`, `remove`, `enable`, `disable`, `edit`, `restart`, `logout`, `pairing …` |
 | `memory` | `status`, `index`, `list`, `search`, `show`, `ingest`, `curated`, `embedding-download`, `raw-fallbacks …` |
@@ -527,6 +529,22 @@ agentos sessions list --search api-refactor
 agentos projects create "Token research" --knowledge-file notes.md
 agentos projects move <session-id> <project-id>   # 'none' detaches
 agentos projects show <project-id>
+# Wallet vault + Uniswap trading (Base, Robinhood Chain). The vault password is
+# prompted or read from AGENTOS_WALLET_PASSWORD — never put it on the command
+# line. Swaps you run inside an agent turn are agent-initiated: above
+# trading.approval_threshold_usd they wait for the user in the app, and
+# trading.daily_cap_usd per wallet per day is enforced by the engine.
+agentos wallet setup --mode auto        # once; auto = unlock.key (0600), manual = per session
+agentos wallet create --label main / list / balances [--chain base|robinhood]
+agentos trade status --json             # provider, API key configured? vault unlocked? limits
+agentos trade provider kyber            # switch swap provider (uniswap default; kyber: no key, geo-restricted)
+agentos trade probe --provider kyber    # blocked: true => not reachable from this country
+agentos trade tokens --chain robinhood AAPL --json     # verified Stock Tokens are flagged
+agentos trade quote --chain base --in ETH --out USDC --amount 0.01 --json
+agentos trade swap --chain base --in ETH --out USDC --amount 0.01 --wait --json
+agentos trade orders --status awaiting_approval / approve <id> / reject <id>
+agentos trade portfolio / history / limits <addr>
+agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs
 # --job-kind decides what fires. Default 'auto' = reminder: --text is delivered
 # verbatim and NO LLM runs, so a job that should think needs agent_turn.

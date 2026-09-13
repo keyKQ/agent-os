@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Engine wallet vault and trading subsystem (`agentos.trading`): keystore v3
+  wallets under `~/.agentos/wallets/` with `auto`/`manual` unlock, Uniswap
+  Trading API swaps on Base and Robinhood Chain, a chain-rebuildable SQLite
+  ledger with FIFO cost basis and PnL, and code-enforced agent guardrails
+  (per-order approval threshold, per-wallet daily cap, approval expiry).
+  Exposed as `wallet.*` / `trading.*` gateway RPCs, configured under
+  `[trading]`; new runtime dependency `eth-account`.
+- `agentos wallet` (vault: `setup`, `unlock`, `lock`, `create`, `import`,
+  `export`, `rename`, `remove`, `primary`, `balances`) and `agentos trade`
+  (`status`, `provider`, `probe`, `tokens`, `quote`, `swap`, `orders`,
+  `order`, `approve`, `reject`, `history`, `portfolio`, `sync`, `limits`):
+  thin clients over the new `wallet.*` / `trading.*` gateway RPCs. Two swap
+  providers: Uniswap (default, needs `trading.uniswap_api_key`) and
+  KyberSwap (`agentos trade provider kyber`; no key, but geo-restricted in
+  some countries — `probe --provider kyber` reports `blocked` and swaps fail
+  with `trading.provider_blocked` instead of crashing). Symbols resolve
+  to exactly one verified token or the command exits 2; passwords come from a
+  hidden prompt or `AGENTOS_WALLET_PASSWORD`; a swap run inside an agent turn
+  is agent-initiated and subject to the approval threshold and daily cap.
+- Bundled `wallet-trading` skill: teaches the agent to trade on Base and
+  Robinhood Chain from the vault (swap, DCA on cron, buy-the-dip, rebalance),
+  what each order status means, and which guardrails it cannot bypass.
 - `agentos upgrade` snapshots `config.toml`, `auth.json`, `skills-lock.json`
   and every SQLite database under `~/.agentos/state/` before installing
   (`state/snapshots/pre-upgrade-<utc>/`, newest three kept, databases copied
