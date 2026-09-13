@@ -1943,3 +1943,21 @@ tr:focus-within .trd-row__actions {
     min-width: 640px;
   }
 }
+
+/* Dust toggle under the holdings table: quiet, one line, tabular count. */
+.trd-dust {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px 10px;
+  padding: 0 8px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.trd-dust:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}

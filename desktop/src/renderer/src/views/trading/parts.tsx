@@ -71,7 +71,13 @@ export function TokenLogo({ token, size = 22 }: { token: Token; size?: number })
   return (
     <span className="trd-asset__logo" style={{ width: size, height: size }} aria-hidden>
       {token.logoUrl && !broken ? (
-        <img src={token.logoUrl} alt="" onError={() => setBroken(true)} />
+        <img
+          src={token.logoUrl}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setBroken(true)}
+        />
       ) : (
         initials
       )}

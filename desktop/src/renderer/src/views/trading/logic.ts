@@ -282,6 +282,20 @@ export function isOrderSettled(order: Pick<Order, 'status'>): boolean {
 
 export type HoldingSort = 'value' | 'pnl' | 'change' | 'symbol' | 'allocation'
 
+/** Positions worth less than a cent: hidden by default so airdrop dust does not bury the book. */
+export const DUST_USD = 0.01
+
+export function splitDust(holdings: readonly Holding[]): { kept: Holding[]; dust: Holding[] } {
+  const kept: Holding[] = []
+  const dust: Holding[] = []
+  for (const h of holdings) {
+    // An unpriced position is not dust: we simply do not know.
+    if (h.valueUsd !== null && h.valueUsd < DUST_USD) dust.push(h)
+    else kept.push(h)
+  }
+  return { kept, dust }
+}
+
 export function sortHoldings(
   holdings: readonly Holding[],
   key: HoldingSort,

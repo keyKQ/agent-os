@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  splitDust,
   allocationSegments,
   amountFromPct,
   approvalSecondsLeft,
@@ -358,5 +359,15 @@ describe('compact cell formatting', () => {
     expect(formatAmountCompact('1234567.891')).toBe('1,234,567.891')
     expect(formatAmountCompact('0.0000001234')).toBe('1.23e-7')
     expect(formatAmountCompact('0')).toBe('0')
+  })
+})
+
+describe('splitDust', () => {
+  it('hides positions under a cent but keeps unpriced ones', () => {
+    const mk = (symbol: string, valueUsd: number | null) =>
+      ({ token: { symbol }, valueUsd }) as unknown as Parameters<typeof splitDust>[0][number]
+    const { kept, dust } = splitDust([mk('ETH', 0.26), mk('AGAI', 0.000015), mk('XYZ', null)])
+    expect(kept.map((h) => h.token.symbol)).toEqual(['ETH', 'XYZ'])
+    expect(dust.map((h) => h.token.symbol)).toEqual(['AGAI'])
   })
 })

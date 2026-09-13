@@ -78,6 +78,12 @@ class PriceInfo:
     fetched_at: float = field(default_factory=time.time)
 
 
+# The gas token has no DexScreener pair of its own; use CoinGecko's own art.
+NATIVE_LOGOS: dict[str, str] = {
+    "ETH": "https://assets.coingecko.com/coins/images/279/thumb/ethereum.png",
+}
+
+
 def native_token(chain: ChainSpec) -> TokenMeta:
     return TokenMeta(
         chain_id=chain.chain_id,
@@ -85,6 +91,7 @@ def native_token(chain: ChainSpec) -> TokenMeta:
         symbol=chain.native_symbol,
         name=chain.native_name,
         decimals=18,
+        logo_url=NATIVE_LOGOS.get(chain.native_symbol),
         native=True,
         verified=True,
     )

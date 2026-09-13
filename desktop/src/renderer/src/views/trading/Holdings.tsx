@@ -1,4 +1,12 @@
-import { ArrowDown, ArrowUp, ChartCandlestick, Coins, ArrowLeftRight } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  ChartCandlestick,
+  Coins,
+  ArrowLeftRight,
+  Eye,
+  EyeOff,
+} from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -14,6 +22,7 @@ import {
   sameToken,
   sortHoldings,
   type HoldingSort,
+  splitDust,
 } from './logic'
 import { UnwrapNote } from './Orders'
 import { AssetCell, Empty, Skeleton, Tick } from './parts'
@@ -43,7 +52,9 @@ export function Holdings({
     key: 'value',
     dir: 'desc',
   })
-  const rows = sortHoldings(holdings, sort.key, sort.dir)
+  const [showDust, setShowDust] = useState(false)
+  const { kept, dust } = splitDust(holdings)
+  const rows = sortHoldings(showDust ? holdings : kept, sort.key, sort.dir)
 
   function toggle(key: HoldingSort) {
     setSort((s) =>
@@ -227,6 +238,25 @@ export function Holdings({
               })}
         </tbody>
       </table>
+      {dust.length ? (
+        <button
+          type="button"
+          className="trd-dust app-no-drag"
+          onClick={() => setShowDust((v) => !v)}
+          aria-pressed={showDust}
+          data-testid="dust-toggle"
+        >
+          {showDust ? (
+            <EyeOff className="size-3" strokeWidth={2} aria-hidden />
+          ) : (
+            <Eye className="size-3" strokeWidth={2} aria-hidden />
+          )}
+          {dust.length}{' '}
+          {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}
+          {' · '}
+          {showDust ? t('trading.holdings.dust.hide') : t('trading.holdings.dust.show')}
+        </button>
+      ) : null}
     </div>
   )
 }
