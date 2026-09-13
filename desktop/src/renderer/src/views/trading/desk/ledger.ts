@@ -259,7 +259,8 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
       .filter((l) => !/^\s*exit_code=/.test(l))
     // The result body was projected away: describe the call from its
     // arguments instead of leaking the marker, and never style it as an error.
-    if (lines.every((l) => !l.trim() || PROJECTION_MARKER.test(l))) {
+    const firstLine = lines.find((l) => l.trim()) ?? ''
+    if (PROJECTION_MARKER.test(firstLine)) {
       return { ...EMPTY, summary: call.detail }
     }
     const first = (lines[0] ?? '').slice(0, 140)

@@ -59,7 +59,10 @@ describe('parseTradeResult', () => {
     const call = parseTradeCommand(
       'agentos trade quote --chain base --in ETH --out USDC --amount 0.0001',
     )!
-    const out = parseTradeResult(call, 'exit_code=0\n[tool_result_projection]')
+    const out = parseTradeResult(
+      call,
+      '[tool_result_projection]\ntool_result_handle: tr-809b\nsha256: cbf9e8',
+    )
     expect(out.summary).toBe(call.detail)
     expect(out.error).toBeNull()
   })
