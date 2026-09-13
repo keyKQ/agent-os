@@ -1,8 +1,27 @@
-import { Lock, Repeat, Scale, TrendingDown, Wallet as WalletIcon, Zap } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  ChevronDown,
+  Lock,
+  Repeat,
+  Scale,
+  Settings2,
+  TrendingDown,
+  Wallet as WalletIcon,
+  Zap,
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { MenuItem, MenuSep, PopMenu } from '~/components/menu/PopMenu'
 import { t, type MessageKey } from '~/i18n'
 import { formatUsd, walletLabel } from '../logic'
-import { providerLabel, type Limits, type ProviderId, type Wallet } from '../types'
+import {
+  PROVIDERS,
+  providerLabel,
+  type Limits,
+  type ProviderId,
+  type ProviderStatus,
+  type Wallet,
+} from '../types'
 import type { MissionKind } from './desk-logic'
 
 const QUICK: readonly { kind: MissionKind; icon: LucideIcon; key: MessageKey }[] = [
@@ -21,18 +40,26 @@ const QUICK: readonly { kind: MissionKind; icon: LucideIcon; key: MessageKey }[]
 export function ComposerSeats({
   limits,
   provider,
+  providers,
+  switching,
   wallet,
   typing,
   onOpenSettings,
   onOpenWallets,
+  onSwitchProvider,
   onQuick,
 }: {
   limits: Limits | null
   provider: ProviderId
+  /** Per-provider facts from trading.status; the menu explains each choice. */
+  providers?: readonly ProviderStatus[]
+  switching?: boolean
   wallet: Wallet | null
   typing: boolean
   onOpenSettings: () => void
   onOpenWallets: () => void
+  /** Switching the swap route is allowed from the desk; limits are not. */
+  onSwitchProvider?: (id: ProviderId) => void
   onQuick: (kind: MissionKind) => void
 }) {
   return (
@@ -50,10 +77,17 @@ export function ComposerSeats({
           {limits
             ? `${t('trading.seat.asksAbove')} ${formatUsd(limits.thresholdUsd)} · ${formatUsd(
                 limits.dailyCapUsd,
-              )}${t('trading.seat.perDay')} · ${providerLabel(provider)}`
-            : providerLabel(provider)}
+              )}${t('trading.seat.perDay')}`
+            : t('trading.seat.permission.unknown')}
         </span>
       </button>
+      <ProviderSeat
+        provider={provider}
+        providers={providers ?? []}
+        switching={Boolean(switching)}
+        onSwitch={onSwitchProvider}
+        onOpenSettings={onOpenSettings}
+      />
       <button
         type="button"
         className="trd-seat app-no-drag"
@@ -82,6 +116,91 @@ export function ComposerSeats({
           </button>
         ))}
       </div>
+    </div>
+  )
+}
+
+/** Which aggregator routes the swaps, changeable right here (it is not a limit). */
+function ProviderSeat({
+  provider,
+  providers,
+  switching,
+  onSwitch,
+  onOpenSettings,
+}: {
+  provider: ProviderId
+  providers: readonly ProviderStatus[]
+  switching: boolean
+  onSwitch?: (id: ProviderId) => void
+  onOpenSettings: () => void
+}) {
+  // The anchor rect is captured on click, so no ref is read during render.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const facts = (id: ProviderId): string => {
+    const row = providers.find((p) => p.id === id)
+    if (!row) return ''
+    if (row.blocked) return t('trading.seat.provider.blocked')
+    if (row.needsKey) {
+      return row.keyConfigured
+        ? t('trading.seat.provider.keyOk')
+        : t('trading.seat.provider.needsKey')
+    }
+    return t('trading.seat.provider.noKey')
+  }
+  return (
+    <div className="trd-seat__anchor">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="trd-seat app-no-drag"
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setAnchor((a) => (a ? null : rect))
+        }}
+        title={t('trading.seat.provider.title')}
+        aria-label={t('trading.seat.provider.title')}
+        aria-haspopup="menu"
+        aria-expanded={anchor !== null}
+        disabled={switching}
+        data-testid="provider-seat"
+      >
+        <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
+        <span className="trd-seat__text">{providerLabel(provider)}</span>
+        <ChevronDown className="size-3 opacity-70" strokeWidth={2} aria-hidden />
+      </button>
+      {anchor ? (
+        // Anchored so it flips above the seat: the composer sits at the window's foot.
+        <PopMenu
+          place={{ anchor, align: 'start' }}
+          triggerRef={triggerRef}
+          onClose={() => setAnchor(null)}
+          label={t('trading.seat.provider.title')}
+        >
+          {PROVIDERS.map((p) => (
+            <MenuItem
+              key={p.id}
+              role="menuitemradio"
+              checked={p.id === provider}
+              label={p.label}
+              aside={facts(p.id)}
+              onSelect={() => {
+                setAnchor(null)
+                if (p.id !== provider) onSwitch?.(p.id)
+              }}
+            />
+          ))}
+          <MenuSep />
+          <MenuItem
+            icon={Settings2}
+            label={t('trading.seat.provider.settings')}
+            onSelect={() => {
+              setAnchor(null)
+              onOpenSettings()
+            }}
+          />
+        </PopMenu>
+      ) : null}
     </div>
   )
 }

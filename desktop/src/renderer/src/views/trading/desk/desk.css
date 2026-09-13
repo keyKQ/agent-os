@@ -106,9 +106,10 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  height: 28px;
+  height: 40px;
   padding: 0 12px 0 16px;
-  border-bottom: 1px solid var(--hairline);
+  /* No rule under the strip: the app's toolbar rows never draw one, and a
+     full-width line here would cut across the BOOK's own header. */
   font-size: 11px;
   color: var(--muted-foreground);
 }
@@ -338,6 +339,13 @@
 .trd-seat:hover {
   color: var(--foreground);
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
+}
+.trd-seat__anchor {
+  position: relative;
+  display: inline-flex;
+}
+.trd-seat:disabled {
+  opacity: 0.6;
 }
 .trd-seat__text {
   overflow: hidden;
@@ -1142,9 +1150,6 @@ body[data-dragging] .trd-book__handle {
 
 /* ── Mode pill (Chat | Trading) ──────────────────────────────────────────── */
 
-.trd-strip[data-mode='chat'] {
-  border-bottom-color: transparent;
-}
 .trd-strip__centre {
   display: flex;
   align-items: center;
@@ -1156,18 +1161,18 @@ body[data-dragging] .trd-book__handle {
   display: inline-grid;
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
-  height: 22px;
-  padding: 2px;
+  height: 30px;
+  padding: 3px;
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
   box-shadow: inset 0 0 0 0.5px var(--hairline);
 }
 .trd-pill__thumb {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc(50% - 2px);
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
   border-radius: var(--radius-pill);
   background: var(--elevated);
   box-shadow: 0 0 0 0.5px var(--border);
@@ -1182,11 +1187,11 @@ body[data-dragging] .trd-book__handle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 68px;
-  padding: 0 12px;
+  gap: 7px;
+  min-width: 104px;
+  padding: 0 16px;
   border-radius: var(--radius-pill);
-  font-size: 11.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.005em;
   color: var(--muted-foreground);

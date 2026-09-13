@@ -8,12 +8,13 @@ import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
-import { useOrderDecision, useOrders } from '~/stores/trading'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { invalidateTrading, useOrderDecision, useOrders, useTradingStatus } from '~/stores/trading'
 import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { Notice } from '~/views/settings/parts'
 import { errorText, isAwaitingApproval, sameAddress } from '../logic'
-import type { Limits, Order, ProviderId, Wallet } from '../types'
+import { providerLabel, type Limits, type Order, type ProviderId, type Wallet } from '../types'
 import { ApprovalsRegion } from './ApprovalsRegion'
 import { ComposerSeats } from './ComposerSeats'
 import {
@@ -92,6 +93,19 @@ export function useDeskInstruments(
   },
 ): DeskInstruments {
   const rpc = useRpc()
+  const queryClient = useQueryClient()
+  const tradingStatus = useTradingStatus()
+  const switchProvider = useMutation({
+    mutationFn: (provider: ProviderId) =>
+      rpc.call<{ provider: ProviderId }>('trading.setProvider', { provider }),
+    onSuccess: (res) => {
+      toast.success(`${t('trading.seat.provider.saved')}: ${providerLabel(res?.provider)}`, {
+        id: 'trd-provider',
+      })
+      invalidateTrading(queryClient)
+    },
+    onError: (err) => toast.error(errorText(err), { id: 'trd-provider-err' }),
+  })
   const navigate = useNavigate()
   const location = useLocation()
   const openSettings = useUi((s) => s.openSettings)
@@ -282,9 +296,12 @@ export function useDeskInstruments(
       <ComposerSeats
         limits={desk.limits}
         provider={desk.gate.provider}
+        providers={tradingStatus.data?.providers ?? []}
+        switching={switchProvider.isPending}
         wallet={primaryWallet}
         typing={composerValue.length > 0}
         onOpenSettings={() => openSettings('trading')}
+        onSwitchProvider={(id) => switchProvider.mutate(id)}
         onOpenWallets={() => {
           setBookTab('portfolio')
           desk.onOpenBookTab('portfolio')

@@ -109,8 +109,9 @@ describe('ComposerSeats', () => {
       />,
     )
     expect(screen.getByTestId('permission-seat')).toHaveTextContent(
-      'Asks above $100.00 · $1,000.00/day · Uniswap',
+      'Asks above $100.00 · $1,000.00/day',
     )
+    expect(screen.getByTestId('provider-seat')).toHaveTextContent('Uniswap')
     expect(screen.getByTestId('wallet-seat')).toHaveTextContent('Main')
     fireEvent.click(screen.getByTestId('permission-seat'))
     expect(onOpenSettings).toHaveBeenCalled()
@@ -132,6 +133,54 @@ describe('ComposerSeats', () => {
     )
     expect(screen.getByTestId('composer-seats')).toHaveAttribute('data-typing')
     expect(screen.getByTestId('quick-swap')).toHaveAttribute('tabindex', '-1')
-    expect(screen.getByTestId('permission-seat')).toHaveTextContent('KyberSwap')
+    expect(screen.getByTestId('provider-seat')).toHaveTextContent('KyberSwap')
+  })
+})
+
+describe('ProviderSeat', () => {
+  it('switches the swap provider from the desk and explains each choice', () => {
+    const onSwitchProvider = vi.fn()
+    renderDesk(
+      <ComposerSeats
+        limits={null}
+        provider="uniswap"
+        providers={[
+          {
+            id: 'uniswap',
+            label: 'Uniswap',
+            needsKey: true,
+            keyConfigured: false,
+            blocked: null,
+            healthy: null,
+          },
+          {
+            id: 'kyber',
+            label: 'KyberSwap',
+            needsKey: false,
+            keyConfigured: true,
+            blocked: true,
+            healthy: null,
+          },
+        ]}
+        wallet={WALLET}
+        typing={false}
+        onOpenSettings={vi.fn()}
+        onOpenWallets={vi.fn()}
+        onSwitchProvider={onSwitchProvider}
+        onQuick={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('provider-seat'))
+    const kyber = screen.getByRole('menuitemradio', { name: /KyberSwap/ })
+    expect(kyber).toHaveTextContent('blocked in your region')
+    expect(screen.getByRole('menuitemradio', { name: /Uniswap/ })).toHaveTextContent(
+      'needs an API key',
+    )
+    fireEvent.click(kyber)
+    expect(onSwitchProvider).toHaveBeenCalledWith('kyber')
+    // Picking the active one is a no-op.
+    fireEvent.click(screen.getByTestId('provider-seat'))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Uniswap/ }))
+    expect(onSwitchProvider).toHaveBeenCalledTimes(1)
   })
 })
