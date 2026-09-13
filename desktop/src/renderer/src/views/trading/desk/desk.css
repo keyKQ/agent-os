@@ -209,9 +209,42 @@
 /* ── Frame: chat | BOOK ───────────────────────────────────────────────────── */
 
 .trd-frame {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
+  /* One canvas under both columns: the chat's own backdrop is switched off
+     at the desk (below) so the wash and the drafting grid run continuously
+     under the transcript, the composer and the BOOK instead of stopping at
+     the column seam. */
+  --desk-grid: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+  background:
+    radial-gradient(
+      55% 60% at 28% 12%,
+      color-mix(in srgb, var(--primary) 4%, transparent) 0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      40% 55% at 96% 92%,
+      color-mix(in srgb, var(--primary) 7%, transparent) 0%,
+      color-mix(in srgb, var(--primary) 2%, transparent) 55%,
+      transparent 78%
+    ),
+    linear-gradient(to right, var(--desk-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--desk-grid) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    100% 100%,
+    88px 88px,
+    88px 88px;
+  background-position:
+    0 0,
+    0 0,
+    -1px -1px,
+    -1px -1px;
+}
+.chat-desktop[data-desk]::before {
+  display: none;
 }
 .trd-chat {
   position: relative;
@@ -831,7 +864,8 @@
   min-height: 0;
   flex-direction: column;
   border-left: 1px solid var(--hairline);
-  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  /* Transparent on purpose: the frame's canvas continues under the BOOK. */
+  background: transparent;
   transition: width 240ms var(--desk-ease-inout);
 }
 body[data-dragging] .trd-book {
