@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from agentos import __version__
+from agentos.trading.chains import redact_rpc_url
 
 USER_AGENT = f"agentos-trading/{__version__}"
 
@@ -65,6 +66,29 @@ def pad_uint(value: int) -> str:
 
 def encode_call(selector: str, *words: str) -> str:
     return selector + "".join(words)
+
+
+_TX_QUANTITY_KEYS = frozenset(
+    {"value", "gas", "gasLimit", "gasPrice", "maxFeePerGas", "maxPriorityFeePerGas", "nonce"}
+)
+
+
+def rpc_tx(tx: dict[str, Any]) -> dict[str, Any]:
+    """A transaction object as JSON-RPC wants it: every QUANTITY as a hex string.
+
+    Lenient public nodes accept JSON numbers; strict gateways (dRPC, Alchemy)
+    reject them with HTTP 400 "mismatched type", which is how a swap that
+    quoted fine can still fail at the simulation step.
+    """
+    out: dict[str, Any] = {}
+    for key, val in tx.items():
+        if key in _TX_QUANTITY_KEYS and isinstance(val, int) and not isinstance(val, bool):
+            out[key] = hex(val)
+        elif key in _TX_QUANTITY_KEYS and isinstance(val, str) and val.isdigit():
+            out[key] = hex(int(val))
+        else:
+            out[key] = val
+    return out
 
 
 def decode_uint(hex_data: str | None) -> int:
@@ -144,6 +168,8 @@ class EvmClient:
         max_log_span: int = 2000,
     ) -> None:
         self.url = url
+        # Provider keys live in the path (dRPC, Alchemy): errors show only the host.
+        self.display_url = redact_rpc_url(url)
         self._own_http = http is None
         self._http = http or httpx.AsyncClient(timeout=timeout)
         self._timeout = timeout
@@ -167,13 +193,21 @@ class EvmClient:
                 self.url, json=payload, headers=self._headers(), timeout=self._timeout
             )
         except httpx.HTTPError as exc:
-            raise EvmTransportError(f"{self.url}: {exc}") from exc
+            raise EvmTransportError(f"{self.display_url}: {exc}") from exc
         if response.status_code >= 400:
-            raise EvmTransportError(f"{self.url}: HTTP {response.status_code}")
+            detail = ""
+            try:
+                body = response.json()
+                err = body.get("error") if isinstance(body, dict) else None
+                if isinstance(err, dict) and err.get("message"):
+                    detail = f" ({str(err['message'])[:160]})"
+            except ValueError:
+                pass
+            raise EvmTransportError(f"{self.display_url}: HTTP {response.status_code}{detail}")
         try:
             return response.json()
         except ValueError as exc:
-            raise EvmTransportError(f"{self.url}: invalid JSON response") from exc
+            raise EvmTransportError(f"{self.display_url}: invalid JSON response") from exc
 
     @staticmethod
     def _unwrap(item: Any) -> Any:
@@ -418,12 +452,12 @@ class EvmClient:
         return decode_uint(await self.call("eth_getTransactionCount", [address, block]))
 
     async def estimate_gas(self, tx: dict[str, Any]) -> int:
-        return decode_uint(await self.call("eth_estimateGas", [tx]))
+        return decode_uint(await self.call("eth_estimateGas", [rpc_tx(tx)]))
 
     async def simulate(self, tx: dict[str, Any]) -> str:
         """``eth_call`` the transaction as the sender; raises on revert."""
         call_tx = {k: v for k, v in tx.items() if k in {"from", "to", "data", "value", "gas"}}
-        return str(await self.call("eth_call", [call_tx, "latest"]) or "0x")
+        return str(await self.call("eth_call", [rpc_tx(call_tx), "latest"]) or "0x")
 
     async def fee_data(self) -> tuple[int, int]:
         """``(maxFeePerGas, maxPriorityFeePerGas)`` from ``eth_feeHistory``.

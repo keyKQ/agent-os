@@ -1653,9 +1653,29 @@ class TradingService:
         post_in = await self._balance_raw(chain, record, meta_in)
         post_out = await self._balance_raw(chain, record, meta_out)
         post_native = await evm.get_balance(record.address)
+        transfers = receipt_transfers(receipt)
+        # ERC-20 legs come from the receipt's Transfer logs: a load-balanced
+        # RPC can still answer "latest" balances from a node that has not
+        # seen the block yet, which would book the swap as received 0.
         spent = pre["in"] - post_in
         received = post_out - pre["out"]
         delivered = meta_out.address
+        if not meta_in.native:
+            left = sum(
+                t.amount for t in transfers if t.token == meta_in.address and t.sender == record.key
+            )
+            if left > 0:
+                spent = left
+                post_in = pre["in"] - left
+        if not meta_out.native:
+            arrived = sum(
+                t.amount
+                for t in transfers
+                if t.token == meta_out.address and t.recipient == record.key
+            )
+            if arrived > 0:
+                received = arrived
+                post_out = pre["out"] + arrived
         if meta_in.native:
             spent = (pre["native"] - post_native) - gas_wei
         if meta_out.native:
@@ -1664,9 +1684,7 @@ class TradingService:
             weth = await self.weth_for(chain)
             if weth and received <= 0:
                 arrived = sum(
-                    t.amount
-                    for t in receipt_transfers(receipt)
-                    if t.token == weth and t.recipient == record.key
+                    t.amount for t in transfers if t.token == weth and t.recipient == record.key
                 )
                 if arrived > 0:
                     delivered = weth

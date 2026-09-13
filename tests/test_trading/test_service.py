@@ -273,6 +273,42 @@ class TestSwapFlow:
         finished = _events(service, "trading.order.finished")
         assert finished and finished[-1]["order"]["status"] == "confirmed"
 
+    async def test_confirm_reads_erc20_legs_from_receipt_logs_when_balances_lag(
+        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+    ) -> None:
+        """A load-balanced RPC may answer post-swap balances from a node that has
+        not seen the block yet; the Transfer logs in the receipt are the truth."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        inner = base_chain.on_send
+
+        def lagging_send(raw: str) -> str:
+            before_out = base_chain.get_erc20(WETH, wallet)
+            tx_hash = inner(raw)
+            # The receipt carries the Transfer log, but "latest" balances lag.
+            base_chain.set_erc20(WETH, wallet, before_out)
+            return tx_hash
+
+        base_chain.on_send = lagging_send
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=0.5,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed"
+        assert orders[0]["receivedOut"] == "0.0005"
+        positions = {p.token: p for p in service.ledger.positions(wallet)}
+        assert positions[WETH].amount_raw == 5 * 10**14
+
     async def test_agent_swap_within_limits_counts_toward_cap(
         self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
     ) -> None:
