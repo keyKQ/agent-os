@@ -16,6 +16,8 @@ import {
   isCustomProvider,
   isThinkingLevel,
   modelOptions,
+  orderProviders,
+  RECOMMENDED_PROVIDER,
   providerConfigurePayload,
   providerDirty,
   providerDraft,
@@ -79,17 +81,22 @@ function ProvidersBody({
   const rpc = useRpc()
   const config: SetupConfig = snapshot.config ?? {}
   const catalogProviders = (snapshot.catalog?.providers ?? []).filter((p) => p.runtimeSupported)
-  const providers = catalogProviders.some((p) => isCustomProvider(p.providerId))
-    ? catalogProviders
-    : [
-        ...catalogProviders,
-        customProviderSpec(
-          t('settings.providers.custom.label'),
-          t('settings.providers.custom.need'),
-        ),
-      ]
+  const providers = orderProviders(
+    catalogProviders.some((p) => isCustomProvider(p.providerId))
+      ? catalogProviders
+      : [
+          ...catalogProviders,
+          customProviderSpec(
+            t('settings.providers.custom.label'),
+            t('settings.providers.custom.need'),
+          ),
+        ],
+  )
   const configured = configuredProvider(snapshot.status ?? {}, config)
   const restartGateway = useGateway((s) => s.restart)
+  // A gateway this app spawned is ours to restart: do it, rather than
+  // handing the person a "restart to apply" chore.
+  const managedGateway = useGateway((s) => s.status.pid !== null)
   const [selected, setSelected] = useState(configured)
   const selectedSpec = providers.find((p) => p.providerId === selected)
 
@@ -106,11 +113,16 @@ function ProvidersBody({
           ),
     onSuccess: async (res, draft) => {
       for (const w of res?.warnings ?? []) toast.warning(w)
-      toast.success(
-        res?.restartRequired ? t('settings.restartRequired') : t('settings.providers.saved'),
-        { id: 'stg-provider' },
-      )
       setSelected(draft.providerId)
+      if (res?.restartRequired && managedGateway) {
+        toast.success(t('settings.providers.savedRestarting'), { id: 'stg-provider' })
+        await restartGateway()
+      } else {
+        toast.success(
+          res?.restartRequired ? t('settings.restartRequired') : t('settings.providers.saved'),
+          { id: 'stg-provider' },
+        )
+      }
       await reload()
     },
     onError: (err) =>
@@ -180,6 +192,11 @@ function ProvidersBody({
                     {t('settings.providers.state.needsKey')}
                   </span>
                 )}
+                {p.providerId === RECOMMENDED_PROVIDER ? (
+                  <span className="prov-tile__tag" data-tone="recommended">
+                    {t('settings.providers.state.recommended')}
+                  </span>
+                ) : null}
                 {p.routerSupported ? (
                   <span className="prov-tile__tag">{t('settings.providers.state.router')}</span>
                 ) : null}
@@ -226,7 +243,7 @@ function ProvidersBody({
   )
 }
 
-function ProviderForm({
+export function ProviderForm({
   config,
   spec,
   configured,

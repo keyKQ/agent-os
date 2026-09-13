@@ -3,6 +3,8 @@ import { useEffect, useMemo } from 'react'
 import { useRpc } from '@/app/providers'
 import { sessionName, sessionRunStatus, type RawSession } from '@/views/sessions/logic'
 import { useConnection } from '@/stores/connection'
+import { t } from '~/i18n'
+import { shownSessionName } from '~/lib/session-name'
 
 interface SessionsList {
   sessions?: RawSession[]
@@ -52,10 +54,9 @@ export function toSessionRow(raw: RawSession): SessionRow {
   return {
     key,
     title:
-      sessionName(raw) ||
+      shownSessionName(sessionName(raw)) ||
       String(raw.derived_title || raw.derivedTitle || raw.subject || '') ||
-      key.split(':').slice(-1)[0] ||
-      key,
+      t('chat.untitled'),
     updatedAt: toEpochMs(raw.updated_at ?? raw.updatedAt),
     live: status === 'running' || status === 'queued',
     raw,

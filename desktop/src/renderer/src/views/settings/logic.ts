@@ -255,6 +255,20 @@ export function customEndpointPatch(
   return { patch: { llm, agentos_router: { tier_profile: null } } }
 }
 
+/** Shown first with a "Recommended" tag: one key, many models, router profile. */
+export const RECOMMENDED_PROVIDER = 'opencap'
+
+/**
+ * Grid order for the provider tiles: the recommended provider first, then the
+ * catalog's own order. Stable otherwise, so a user's mental map does not
+ * shuffle when a key is added.
+ */
+export function orderProviders<T extends { providerId: string }>(providers: readonly T[]): T[] {
+  const first = providers.filter((p) => p.providerId === RECOMMENDED_PROVIDER)
+  const rest = providers.filter((p) => p.providerId !== RECOMMENDED_PROVIDER)
+  return [...first, ...rest]
+}
+
 export interface ProviderState {
   /** The provider every turn goes through right now. */
   active: boolean

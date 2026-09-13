@@ -3,6 +3,7 @@ import { notifications } from './en/notifications'
 import { projects } from './en/projects'
 import { sessions } from './en/sessions'
 import { settings } from './en/settings'
+import { setup } from './en/setup'
 import { shell } from './en/shell'
 import { skills } from './en/skills'
 import { theme } from './en/theme'
@@ -15,6 +16,7 @@ const en = {
   ...projects,
   ...sessions,
   ...settings,
+  ...setup,
   ...notifications,
 } as const
 

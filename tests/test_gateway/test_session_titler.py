@@ -99,8 +99,12 @@ def test_placeholder_detection():
 def test_clean_title_strips_model_noise():
     assert clean_title('Title: "Fix the CI flake."') == "Fix the CI flake"
     assert clean_title("Tiêu đề: Kiểm tra lỗi x-research\nmore") == "Kiểm tra lỗi x-research"
-    assert clean_title("one two three four five six seven eight nine") == (
-        "one two three four five six seven"
+    assert clean_title("one two three four five six seven eight nine ten eleven twelve") == (
+        "one two three four five six seven eight nine ten"
+    )
+    # Vietnamese syllables are whitespace-separated: a 6-word title is ~10 here.
+    assert clean_title("Kế hoạch du lịch Đà Nẵng 3 ngày ngân sách") == (
+        "Kế hoạch du lịch Đà Nẵng 3 ngày ngân sách"
     )
     assert clean_title("   ") is None
 
@@ -131,9 +135,11 @@ async def test_titles_a_webchat_session_from_the_first_message(manager, monkeypa
     node = await manager.get_session(KEY)
     assert node is not None and node.display_name == "Kiểm tra lỗi x-research"
     assert seen == [(KEY, {"display_name": node.display_name, "displayName": node.display_name})]
-    # The model saw the message under the titling system prompt, capped small.
+    # The model saw the message under the titling system prompt. The cap
+    # leaves room for a reasoning model to think before the (short) answer.
     config = calls[0]["config"]
-    assert config.max_tokens == 32
+    assert config.max_tokens == titler_mod.TITLE_MAX_TOKENS
+    assert config.max_tokens >= 256
     assert "title" in (config.system or "").lower()
 
 
@@ -186,7 +192,9 @@ async def test_falls_back_to_a_heuristic_when_the_model_is_unavailable(manager, 
     await titler.drain()
 
     node = await manager.get_session(KEY)
-    assert node is not None and node.display_name == "Viết lại email xin nghỉ phép cho"
+    # The heuristic keeps the whole first clause now that the word limit fits
+    # Vietnamese syllables (the old cut left "…phép cho").
+    assert node is not None and node.display_name == "Viết lại email xin nghỉ phép cho sếp"
 
 
 @pytest.mark.asyncio

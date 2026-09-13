@@ -668,8 +668,9 @@
 }
 .prov-tile__meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   min-width: 0;
   font-size: 11px;
   color: var(--muted-foreground);
@@ -698,6 +699,10 @@
   line-height: 16px;
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.prov-tile__tag[data-tone='recommended'] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
 /* Brand mark: a rounded plate so colour and mono logos sit at one weight. */
@@ -925,6 +930,84 @@
   margin-top: 2px;
   font-size: 12.5px;
   color: var(--muted-foreground);
+}
+.stg-hero__text {
+  min-width: 0;
+  flex: 1;
+}
+.stg-hero__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Installer output: a quiet terminal strip inside the Engine card. */
+.stg-log {
+  margin-top: 4px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.stg-log > summary {
+  padding: 7px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+  cursor: default;
+  user-select: none;
+}
+.stg-log > pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 0 12px 10px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted-foreground);
+}
+
+/* A command the user has to run themselves (exit 3: pip / editable). */
+.stg-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.stg-cmd__label {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.stg-cmd code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  user-select: all;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* App download progress. */
+.stg-progress {
+  height: 6px;
+  margin: 2px 0 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+.stg-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--primary);
+  transition: width 240ms ease-out;
 }
 
 /* ── Confirm dialog (reset) ──────────────────────────────────────────────── */

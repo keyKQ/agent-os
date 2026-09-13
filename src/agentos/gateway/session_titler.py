@@ -36,7 +36,9 @@ log = structlog.get_logger()
 
 TASK = "session_title"
 PLACEHOLDER_NAMES = frozenset({"webchat", "chat", "new chat", "new session", "untitled"})
-MAX_TITLE_WORDS = 7
+# Counted on whitespace, so Vietnamese syllables each count as one: a 6-word
+# title in the prompt's sense is often 9 or 10 here.
+MAX_TITLE_WORDS = 10
 MAX_TITLE_CHARS = 60
 MAX_PROMPT_CHARS = 2_000
 
@@ -126,6 +128,15 @@ def fallback_title(message: str) -> str | None:
     return clean_title(first)
 
 
+# A title is a handful of tokens, but a reasoning model spends its output
+# budget thinking before it writes anything visible: capped at 32 tokens the
+# visible answer never arrived and the text came back empty, and a retry on
+# top of a slow first call blew the timeout. The cap is only a ceiling — the
+# prompt keeps plain models at 3 to 6 words — so one call with room to think
+# beats two.
+TITLE_MAX_TOKENS = 512
+
+
 async def generate_title(
     message: str,
     *,
@@ -143,14 +154,21 @@ async def generate_title(
             messages=[Message(role="user", content=prompt)],
             preferred_provider=hint[0],
             preferred_model=hint[1],
-            chat_config=ChatConfig(max_tokens=32, temperature=0.2, system=SYSTEM_PROMPT),
+            chat_config=ChatConfig(
+                max_tokens=TITLE_MAX_TOKENS, temperature=0.2, system=SYSTEM_PROMPT
+            ),
             timeout=timeout,
             session_key=session_key,
         )
         title = clean_title(result.text)
         if title:
             return title
-        log.info("session_title.empty", session_key=session_key, raw=result.text[:80])
+        log.info(
+            "session_title.empty",
+            session_key=session_key,
+            raw=result.text[:80],
+            output_tokens=getattr(result, "output_tokens", None),
+        )
     except AuxiliaryError as exc:
         log.info("session_title.unavailable", session_key=session_key, error=str(exc))
     except Exception:  # pragma: no cover - defensive: never break a send

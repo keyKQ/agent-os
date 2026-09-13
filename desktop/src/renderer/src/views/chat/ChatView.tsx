@@ -38,7 +38,13 @@ import { useGateway } from '~/stores/gateway'
 import { useLive } from '~/stores/live'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
+import { isPlaceholderSessionName, shownSessionName } from '~/lib/session-name'
+import { configuredProvider } from '@/views/setup/logic'
+import { useConfigSnapshot } from '~/views/settings/use-snapshot'
 import { ProjectChip } from './ProjectChip'
+
+/** After a run settles, when the name is still a placeholder: re-read at these offsets. */
+const PLACEHOLDER_RECHECK_MS = [4_000, 12_000, 40_000]
 
 const NEW_CHAT_COMBO = 'mod+shift+o'
 const DEFAULT_AGENT_KEY = webchatSessionKey('main')
@@ -257,19 +263,38 @@ function ConnectedChat() {
   const enterToSend = useSettings((s) => s.settings.general.enterToSend)
 
   // Session display name (sessions.resolve), re-read when the run settles.
+  // The titler names a fresh session a few seconds after the first turn and
+  // broadcasts the rename; while the name is still a placeholder we also
+  // re-read it on a short schedule, so a missed event cannot leave "New
+  // session" on screen for a chat that has a name.
   const [sessionName, setSessionName] = useState('')
   const runStatus = runState.status
   useEffect(() => {
     let cancelled = false
-    void (async () => {
+    const timers: number[] = []
+    const resolve = async (): Promise<string> => {
       try {
         await rpc.waitForConnection()
         const resolved = await rpc.call<{ display_name?: string | null }>('sessions.resolve', {
           key: sessionKey,
         })
-        if (!cancelled) setSessionName(String(resolved?.display_name || ''))
+        const name = String(resolved?.display_name || '')
+        if (!cancelled) setSessionName(name)
+        return name
       } catch {
         if (!cancelled) setSessionName('')
+        return ''
+      }
+    }
+    void (async () => {
+      const name = await resolve()
+      if (cancelled || !isPlaceholderSessionName(name)) return
+      for (const delay of PLACEHOLDER_RECHECK_MS) {
+        timers.push(
+          window.setTimeout(() => {
+            void resolve()
+          }, delay),
+        )
       }
     })()
     // A rename from the sidebar (or another window) lands as an event.
@@ -279,6 +304,7 @@ function ConnectedChat() {
     })
     return () => {
       cancelled = true
+      for (const t of timers) window.clearTimeout(t)
       off()
     }
   }, [rpc, sessionKey, runStatus])
@@ -541,7 +567,7 @@ function ConnectedChat() {
 
   // Reply notifications for this and every other session come from the
   // shell's session-run watcher (lib/use-notifications), not from here.
-  const title = sessionName || (docked ? sessionKey.split(':').slice(-1)[0] : t('chat.untitled'))
+  const title = shownSessionName(sessionName) || t('chat.untitled')
 
   return (
     <div className="chat-desktop" data-docked={docked}>
@@ -604,6 +630,7 @@ function ConnectedChat() {
             >
               <span className="wordmark">{t('shell.brand')}</span>
               <p className="max-w-md text-[13px] leading-relaxed text-dim">{t('shell.tagline')}</p>
+              <NoProviderNotice />
             </motion.div>
           ) : null}
         </AnimatePresence>
@@ -702,6 +729,26 @@ function ConnectedChat() {
           </ModalShell>
         ) : null}
       </AnimatePresence>
+    </div>
+  )
+}
+
+/**
+ * Home with a gateway but no provider: the app was just installed (or the
+ * provider step was skipped). One line and one button, straight to the
+ * Providers section; nothing else to do first.
+ */
+function NoProviderNotice() {
+  const { snapshot } = useConfigSnapshot()
+  const openSettings = useUi((s) => s.openSettings)
+  if (!snapshot) return null
+  if (configuredProvider(snapshot.status ?? {}, snapshot.config ?? {})) return null
+  return (
+    <div className="chat-noprovider" role="status" data-testid="chat-no-provider">
+      <span>{t('chat.noProvider')}</span>
+      <Button variant="primary" onClick={() => openSettings('providers')}>
+        {t('chat.chooseProvider')}
+      </Button>
     </div>
   )
 }

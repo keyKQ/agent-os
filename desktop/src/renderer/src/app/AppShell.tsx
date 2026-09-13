@@ -12,6 +12,9 @@ import { useNotificationSignals } from '~/lib/use-notifications'
 import { bindGatewayEvents } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
+import { bindUpdateEvents } from '~/stores/updates'
+import { bindBootstrapEvents } from '~/stores/bootstrap'
+import { SetupOverlay } from '~/views/setup/SetupOverlay'
 import { JobsPanel } from '~/views/jobs/JobsPanel'
 import { SettingsPanel } from '~/views/settings/SettingsPanel'
 import { SkillsPanel } from '~/views/skills/SkillsPanel'
@@ -19,6 +22,8 @@ import { SkillsPanel } from '~/views/skills/SkillsPanel'
 /** Window chrome: translucent full-height sidebar, then toolbar + routed content. */
 export function AppShell() {
   useEffect(() => bindGatewayEvents(), [])
+  useEffect(() => bindUpdateEvents(), [])
+  useEffect(() => bindBootstrapEvents(), [])
   useOpenSettingsFromMenu()
   useShellShortcuts()
   useLaunchView()
@@ -38,6 +43,8 @@ export function AppShell() {
       <SkillsPanel />
       <SettingsPanel />
       <PetOverlay />
+      {/* First run: installs the engine before anything else is usable. */}
+      <SetupOverlay />
     </div>
   )
 }

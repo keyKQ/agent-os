@@ -1,4 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
+import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
+import path from 'node:path'
 import type { GatewaySettings } from '@shared/settings'
 import { STOPPED_GATEWAY, type GatewayStatus } from '@shared/gateway'
 import { locateCli } from './cli-locator'
@@ -34,10 +36,43 @@ export class GatewaySupervisor {
     deps: {
       probe?: (url: string) => Promise<boolean>
       locate?: (override: string | null) => string | null
+      /** Where the spawned gateway's stdout/stderr are appended (~/Library/Logs/AgentOS). */
+      logPath?: string
+      spawn?: typeof nodeSpawn
     } = {},
   ) {
     this.probe = deps.probe ?? defaultProbe
     this.locate = deps.locate ?? ((override) => locateCli({ override }))
+    this.logPath = deps.logPath ?? null
+    this.spawn = deps.spawn ?? nodeSpawn
+  }
+
+  private readonly spawn: typeof nodeSpawn
+
+  private readonly logPath: string | null
+  private logFile: WriteStream | null = null
+
+  /**
+   * Every line the gateway prints goes to disk, or nobody can answer "why
+   * did the titler not rename that session" on a Mac that only ever ran the
+   * app. Appended, with a header per spawn; the supervisor keeps no more
+   * than a stderr tail in memory.
+   */
+  private openLog(cli: string): void {
+    this.closeLog()
+    if (!this.logPath) return
+    try {
+      mkdirSync(path.dirname(this.logPath), { recursive: true })
+      this.logFile = createWriteStream(this.logPath, { flags: 'a' })
+      this.logFile.write(`\n===== ${new Date().toISOString()} gateway run (${cli}) =====\n`)
+    } catch {
+      this.logFile = null
+    }
+  }
+
+  private closeLog(): void {
+    this.logFile?.end()
+    this.logFile = null
   }
 
   current(): GatewayStatus {
@@ -85,18 +120,29 @@ export class GatewaySupervisor {
     }
 
     this.set({ state: 'starting', pid: null, url, error: null })
-    const child = spawn(cli, ['gateway', 'run'], {
-      env: {
-        ...process.env,
-        AGENTOS_GATEWAY__HOST: cfg.host,
-        AGENTOS_GATEWAY__PORT: String(cfg.port),
-        ...(cfg.token ? { AGENTOS_AUTH__TOKEN: cfg.token, AGENTOS_AUTH__MODE: 'token' } : {}),
+    // Host and port go on the command line: `gateway run --bind/--port` beat
+    // config.toml, whereas an environment variable loses to a `port =` line
+    // the onboarding wrote (verified against GatewayConfig.load). The auth
+    // env names follow AuthConfig's prefix, `AGENTOS_AUTH_<FIELD>`.
+    const child = this.spawn(
+      cli,
+      ['gateway', 'run', '--bind', cfg.host, '--port', String(cfg.port)],
+      {
+        env: {
+          ...process.env,
+          ...(cfg.token ? { AGENTOS_AUTH_TOKEN: cfg.token, AGENTOS_AUTH_MODE: 'token' } : {}),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    )
     this.child = child
+    this.openLog(cli)
     let stderrTail = ''
+    child.stdout?.on('data', (chunk: Buffer) => {
+      this.logFile?.write(chunk)
+    })
     child.stderr?.on('data', (chunk: Buffer) => {
+      this.logFile?.write(chunk)
       stderrTail = (stderrTail + chunk.toString()).slice(-2000)
     })
 
@@ -105,6 +151,8 @@ export class GatewaySupervisor {
     )
     child.once('exit', (code, signal) => {
       if (this.child === child) this.child = null
+      this.logFile?.write(`===== exit code=${code ?? 'null'} signal=${signal ?? 'null'} =====\n`)
+      this.closeLog()
       const clean = this.status.state === 'stopping' || code === 0
       this.set(
         clean
@@ -138,6 +186,23 @@ export class GatewaySupervisor {
       })
     }
     return this.set({ state: 'running', pid: child.pid ?? null, url, error: null })
+  }
+
+  /**
+   * Adopt a gateway that already answers on the configured endpoint, without
+   * ever spawning one. Returns null when nothing is listening. Used at launch
+   * before the engine install is offered: a running gateway (a terminal, a
+   * previous app) is usable as-is, and installing over it would be wrong.
+   */
+  async adopt(): Promise<GatewayStatus | null> {
+    const cfg = this.getSettings()
+    const url = `http://${cfg.host}:${cfg.port}`
+    if (this.child && (this.status.state === 'running' || this.status.state === 'starting')) {
+      return this.current()
+    }
+    if (!(await this.probe(url))) return null
+    this.startGeneration++
+    return this.set({ state: 'running', pid: null, url, error: null })
   }
 
   /**

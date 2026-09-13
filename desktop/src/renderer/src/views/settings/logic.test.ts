@@ -13,7 +13,9 @@ import {
   providerDirty,
   providerDraft,
   providerNeedsKey,
+  orderProviders,
   providerState,
+  RECOMMENDED_PROVIDER,
   customEndpointErrors,
   customEndpointPatch,
   customProviderSpec,
@@ -342,5 +344,28 @@ describe('about + advanced', () => {
     expect(report).not.toContain('sekrit-token')
     expect(report).toContain('<redacted>')
     expect(report).toContain('pid 42')
+  })
+})
+
+describe('orderProviders', () => {
+  it('puts the recommended provider first and keeps the rest in catalog order', () => {
+    const ordered = orderProviders([
+      { providerId: 'openai' },
+      { providerId: 'anthropic' },
+      { providerId: RECOMMENDED_PROVIDER },
+      { providerId: 'ollama' },
+    ])
+    expect(ordered.map((p) => p.providerId)).toEqual([
+      RECOMMENDED_PROVIDER,
+      'openai',
+      'anthropic',
+      'ollama',
+    ])
+  })
+
+  it('is a no-op when the recommended provider is absent', () => {
+    expect(
+      orderProviders([{ providerId: 'a' }, { providerId: 'b' }]).map((p) => p.providerId),
+    ).toEqual(['a', 'b'])
   })
 })

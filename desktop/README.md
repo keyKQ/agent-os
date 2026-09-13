@@ -47,7 +47,9 @@ desktop/
     │   ├── menu.ts           #   macOS menu bar
     │   ├── ipc/              #   one file per IPC domain, registered in index.ts
     │   ├── settings/store.ts #   atomic JSON settings in userData/
-    │   └── gateway/          #   cli-locator + process supervisor (spawn, adopt, health)
+    │   ├── gateway/          #   cli-locator + process supervisor (spawn, adopt, health)
+    │   ├── bootstrap/        #   first-run engine install: discovery, install.sh runner, controller
+    │   └── updates/          #   engine updater (agentos upgrade) + electron-updater controller
     ├── preload/index.ts      # contextBridge -> window.agentos (typed DesktopApi)
     └── renderer/             # React app (browser, no Node access)
         ├── index.html        #   CSP locked to self + loopback
@@ -183,9 +185,10 @@ scripts keep that from happening:
   `node_modules/electron/dist/Electron.app` when its signature does not
   verify and registers it with LaunchServices. In `npm run dev` the
   notifications appear as "Electron", and macOS asks for permission once.
-- `scripts/adhoc-sign.mjs` (electron-builder `afterPack`) ad-hoc signs the
-  packaged `AgentOS.app`; with `identity: null` electron-builder would
-  otherwise skip signing altogether and ship the same unsealed bundle.
+- `scripts/adhoc-sign.mjs` (electron-builder `afterSign`) ad-hoc signs the
+  packaged `AgentOS.app` when no Developer ID identity signed it; a release
+  build already carries a Developer ID signature, which the hook only
+  verifies and leaves alone (see [Updates](#updates)).
 
 If a notification still does not show, check `/usr/bin/log stream
 --predicate 'process == "usernotificationsd"'` for the refusal, then System
@@ -231,6 +234,95 @@ wave → waiting → run → review → idle).
   then the manifest a page at a time, thumbnails fetched on sight), size
   slider 10–300%, remove.
 
+## First run: the app installs the engine
+
+The DMG is the whole install. On launch, main runs *discovery*
+(`main/bootstrap/discovery.ts`): `gateway.cliPath` from settings wins as-is;
+otherwise the CLI found on PATH or in the usual dirs is smoke-tested with
+`agentos --version` and compared with the app's version. Same or newer → the
+gateway starts. Missing, older, or not starting → if a gateway already
+answers on the configured endpoint it is adopted (updating stays a
+Settings › About action); otherwise the setup overlay
+(`views/setup/SetupOverlay.tsx`) offers **Install** (or **Update**), or
+"Connect to an existing gateway instead" (external mode).
+
+Installing means driving the repo's `install.sh`, bundled at
+`Contents/Resources/install.sh` (`extraResources`), over its stage protocol
+(`main/bootstrap/runner.ts`, a port of the Hermes Agent bootstrap runner):
+`--manifest` for the stage list, then one process per
+`--stage NAME --json --non-interactive`, the last JSON line of stdout being
+the result frame. Stages: prerequisites, uv, python, package (the
+version-pinned wheel, `--force`), path, complete. Output streams to the
+overlay (stderr muted, not red: uv writes progress there) and to
+`~/.agentos/logs/bootstrap-<timestamp>.log`; Cancel kills the running
+stage's process group. The failure screen opens the output, and offers
+Retry, Copy output, Show log in Finder and the terminal one-liner. After
+success the gateway starts and step 2 (`views/setup/ProviderStep.tsx`)
+takes over: a grid of the full catalog, OpenCAP first with a **Recommended**
+tag (`RECOMMENDED_PROVIDER` in `views/settings/logic.ts`); picking one opens
+its own screen with the Settings pane's `ProviderForm`; saving restarts the
+managed gateway itself (the step's state lives in `stores/bootstrap.ts` so the
+reconnect cannot bounce it back to the grid) and ends on "You're all set",
+where `providers.status { probeModels: true }` tries the saved key against the
+provider for real: a rejected key shows the error with **Edit key** /
+**Continue anyway**. The stage carries a
+three-step rail (Install → Provider → Ready) across the top. `Skip for now`
+hands over to Home, which shows a "Choose a provider" card until one is
+configured. Settings › Advanced has **Reinstall engine** and
+**Remove engine** (`uv tool uninstall use-agent-os`; `~/.agentos` stays).
+
+Design in a browser tab with nothing installed: `npm run dev`, then open the
+renderer URL with `?fake=install`, `?fake=update` or `?fake=failure`
+(`stores/bootstrap.ts`, development builds only).
+
+The managed gateway's stdout/stderr are appended to
+`~/Library/Logs/AgentOS/gateway.log` (a header per spawn), the file Settings ›
+Advanced › App logs opens. Session names the gateway seeds before the titler
+runs (`WebChat`, `Chat`, …; `lib/session-name.ts` mirrors the gateway's
+placeholder list) render as "New session".
+
+## Updates
+
+Two things go out of date, and Settings › About updates both:
+
+- **Engine** — the `use-agent-os` package the app runs as `agentos gateway
+  run`. `main/updates/engine-updater.ts` runs the installed CLI's own
+  `agentos upgrade --check --json` and `agentos upgrade --json --no-restart`
+  (streaming its output into the pane), then restarts the gateway *it*
+  spawned through the supervisor; `--no-restart` keeps the CLI's restart out
+  of the supervisor's way. The CLI snapshots config and the state databases
+  first. The renderer then confirms the gateway reports the new version
+  (`status` RPC) and runs `updates.verifyData`. A gateway the app merely
+  adopted is left running with a note; external mode refuses. While the
+  installer runs a marker (`~/.agentos/state/desktop/engine-update.json`,
+  pid + start time) exists so a relaunch after a crash reports the
+  interrupted update instead of trusting the last "done". Exit 3 from the CLI
+  (pip / editable install) surfaces the manual command verbatim.
+- **App** — this shell, through `electron-updater`
+  (`main/updates/app-updater.ts`). Downloads are explicit; the swap happens
+  on relaunch (`quitAndInstall`), after the managed gateway is stopped.
+  `electron-builder.yml` publishes to the GitHub release of the same
+  `v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
+  `pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
+  `pump-version` skill bumps both. A dev build or an unpublished local
+  package reports `unsupported`.
+
+`shared/updates.ts` also carries `MIN_GATEWAY_VERSION`: the oldest engine
+this renderer speaks to. Bump it whenever the desktop starts depending on a
+gateway RPC or field the previous release lacks; About warns when the
+connected gateway is older.
+
+Release builds are signed and notarized by
+`.github/workflows/desktop-release.yml` on every `v*` tag. It needs these
+repository secrets: `MAC_CSC_LINK` (base64 `.p12` of the "Developer ID
+Application" certificate), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
+`APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`. Locally, `npm run
+package:mac` signs with the Developer ID identity in the keychain when there
+is one (set the same `APPLE_*` variables to notarize) and falls back to an
+ad-hoc signature otherwise. Hardened Runtime is on with
+`resources/entitlements.mac.plist` (V8 JIT + unsigned executable memory,
+which Electron needs; nothing wider).
+
 ## Commands
 
 The console's dependencies are separate; `frontend/` has its own
@@ -241,8 +333,8 @@ npm ci                      # Node >= 22
 npm run dev                 # electron-vite dev with HMR
 npm run check               # tsc (node + web), eslint, prettier, vitest
 npm run build               # out/{main,preload,renderer}
-npm run package:dir         # unpacked .app in release/ (ad-hoc signed by afterPack)
-npm run package:mac         # dmg + zip (ad-hoc signed)
+npm run package:dir         # unpacked .app in release/ (Developer ID if present, else ad-hoc)
+npm run package:mac         # dmg + zip + latest-mac.yml (signed + notarized when credentials are set)
 ```
 
 If `npm ci` did not download the Electron binary (sandboxed installs skip

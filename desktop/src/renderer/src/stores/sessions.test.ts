@@ -2,12 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { toSessionRow } from './sessions'
 
 describe('toSessionRow', () => {
-  it('prefers the display name, then derived title, then the key tail', () => {
+  it('prefers the display name, then derived title, then "New session"', () => {
     expect(toSessionRow({ key: 'agent:main:webchat:abc', display_name: 'Ops' }).title).toBe('Ops')
     expect(toSessionRow({ key: 'agent:main:webchat:abc', derived_title: 'Fix CI' }).title).toBe(
       'Fix CI',
     )
-    expect(toSessionRow({ key: 'agent:main:webchat:abc' }).title).toBe('abc')
+    // A bare session id is not a name anyone chose.
+    expect(toSessionRow({ key: 'agent:main:webchat:abc' }).title).toBe('New session')
+  })
+
+  it('treats the gateway placeholder names as unnamed', () => {
+    // The gateway seeds web sessions as "WebChat" until the titler renames
+    // them; showing that would make every fresh chat look renamed.
+    expect(toSessionRow({ key: 'agent:main:webchat:abc', display_name: 'WebChat' }).title).toBe(
+      'New session',
+    )
+    expect(toSessionRow({ key: 'k', display_name: 'WebChat', derived_title: 'Fix CI' }).title).toBe(
+      'Fix CI',
+    )
   })
 
   it('normalizes updated_at from seconds, milliseconds and ISO strings', () => {

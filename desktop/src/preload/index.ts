@@ -4,6 +4,8 @@ import { IPC, type DesktopApi, type SettingsPatch } from '@shared/ipc'
 import type { GatewayStatus } from '@shared/gateway'
 import type { NotifyRequest, NotifyTarget, SystemSound } from '@shared/notify'
 import type { ResolvedTheme, ThemeSettings } from '@shared/theme'
+import type { AppUpdateState, EngineUpdateState } from '@shared/updates'
+import type { BootstrapState } from '@shared/bootstrap'
 
 /** Subscribe to a main -> renderer push channel and return an unsubscribe. */
 function listen<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -55,6 +57,31 @@ const api: DesktopApi = {
     bounce: () => ipcRenderer.invoke(IPC.notify.bounce),
     openSystemSettings: () => ipcRenderer.invoke(IPC.notify.openSystemSettings),
     onActivated: (listener) => listen<NotifyTarget>(IPC.notify.activated, listener),
+  },
+  updates: {
+    engine: {
+      state: () => ipcRenderer.invoke(IPC.updates.engineState),
+      check: () => ipcRenderer.invoke(IPC.updates.engineCheck),
+      apply: () => ipcRenderer.invoke(IPC.updates.engineApply),
+      onChanged: (listener) => listen<EngineUpdateState>(IPC.updates.engineChanged, listener),
+    },
+    app: {
+      state: () => ipcRenderer.invoke(IPC.updates.appState),
+      check: () => ipcRenderer.invoke(IPC.updates.appCheck),
+      download: () => ipcRenderer.invoke(IPC.updates.appDownload),
+      install: () => ipcRenderer.invoke(IPC.updates.appInstall),
+      onChanged: (listener) => listen<AppUpdateState>(IPC.updates.appChanged, listener),
+    },
+  },
+  bootstrap: {
+    state: () => ipcRenderer.invoke(IPC.bootstrap.state),
+    install: () => ipcRenderer.invoke(IPC.bootstrap.install),
+    cancel: () => ipcRenderer.invoke(IPC.bootstrap.cancel),
+    connectExisting: () => ipcRenderer.invoke(IPC.bootstrap.connectExisting),
+    reinstall: () => ipcRenderer.invoke(IPC.bootstrap.reinstall),
+    uninstallEngine: () => ipcRenderer.invoke(IPC.bootstrap.uninstallEngine),
+    openLog: () => ipcRenderer.invoke(IPC.bootstrap.openLog),
+    onChanged: (listener) => listen<BootstrapState>(IPC.bootstrap.changed, listener),
   },
 }
 

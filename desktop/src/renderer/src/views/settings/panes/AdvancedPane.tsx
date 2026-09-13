@@ -7,6 +7,7 @@ import type { AppInfo } from '@shared/app'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi, isDesktop } from '~/lib/desktop-api'
+import { useBootstrap } from '~/stores/bootstrap'
 import { useGateway } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { syncThemeFromSettings } from '~/theme/theme-store'
@@ -26,6 +27,10 @@ export function AdvancedPane() {
   const gateway = useGateway((s) => s.status)
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [confirming, setConfirming] = useState(false)
+  const [confirmingUninstall, setConfirmingUninstall] = useState(false)
+  const reinstallEngine = useBootstrap((s) => s.reinstall)
+  const uninstallEngine = useBootstrap((s) => s.uninstallEngine)
+  const bootstrapPhase = useBootstrap((s) => s.state.phase)
 
   useEffect(() => {
     let cancelled = false
@@ -57,6 +62,16 @@ export function AdvancedPane() {
     })
     await navigator.clipboard?.writeText(text)
     toast.success(t('settings.copied'), { id: 'stg-copy' })
+  }
+
+  async function doUninstall() {
+    setConfirmingUninstall(false)
+    const result = await uninstallEngine()
+    if (result.ok) toast.success(t('settings.advanced.uninstallDone'), { id: 'stg-engine' })
+    else
+      toast.error(`${t('settings.advanced.uninstallFailed')}: ${result.detail}`, {
+        id: 'stg-engine',
+      })
   }
 
   async function doReset() {
@@ -128,6 +143,26 @@ export function AdvancedPane() {
         </Row>
       </Card>
 
+      <Card title={t('settings.advanced.engine')} blurb={t('settings.advanced.engine.help')}>
+        <Row label={t('settings.advanced.reinstall')} help={t('settings.advanced.reinstall.help')}>
+          <Button
+            disabled={!desktop || bootstrapPhase === 'running'}
+            onClick={() => void reinstallEngine()}
+          >
+            {t('settings.advanced.reinstall')}
+          </Button>
+        </Row>
+        <Row label={t('settings.advanced.uninstall')} help={t('settings.advanced.uninstall.help')}>
+          <Button
+            variant="danger"
+            disabled={!desktop || bootstrapPhase === 'running'}
+            onClick={() => setConfirmingUninstall(true)}
+          >
+            {t('settings.advanced.uninstallConfirm.confirm')}
+          </Button>
+        </Row>
+      </Card>
+
       <Card title={t('settings.advanced.reset')}>
         <Row label={t('settings.advanced.resetAll')} help={t('settings.advanced.resetAll.help')}>
           <Button variant="danger" onClick={() => setConfirming(true)}>
@@ -138,6 +173,12 @@ export function AdvancedPane() {
 
       {confirming ? (
         <ResetConfirm onCancel={() => setConfirming(false)} onConfirm={() => void doReset()} />
+      ) : null}
+      {confirmingUninstall ? (
+        <UninstallConfirm
+          onCancel={() => setConfirmingUninstall(false)}
+          onConfirm={() => void doUninstall()}
+        />
       ) : null}
     </>
   )
@@ -161,6 +202,36 @@ function ResetConfirm({ onCancel, onConfirm }: { onCancel: () => void; onConfirm
         <Button onClick={onCancel}>{t('settings.advanced.resetConfirm.cancel')}</Button>
         <Button variant="danger" onClick={onConfirm}>
           {t('settings.advanced.resetConfirm.confirm')}
+        </Button>
+      </div>
+    </ModalShell>
+  )
+}
+
+function UninstallConfirm({
+  onCancel,
+  onConfirm,
+}: {
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const titleId = useId()
+  const bodyId = useId()
+  return (
+    <ModalShell
+      role="alertdialog"
+      labelledBy={titleId}
+      describedBy={bodyId}
+      onClose={onCancel}
+      overlayClassName="stg-confirm__overlay"
+      className="stg-confirm"
+    >
+      <h2 id={titleId}>{t('settings.advanced.uninstallConfirm.title')}</h2>
+      <p id={bodyId}>{t('settings.advanced.uninstallConfirm.body')}</p>
+      <div className="stg-confirm__actions">
+        <Button onClick={onCancel}>{t('settings.advanced.resetConfirm.cancel')}</Button>
+        <Button variant="danger" onClick={onConfirm}>
+          {t('settings.advanced.uninstallConfirm.confirm')}
         </Button>
       </div>
     </ModalShell>

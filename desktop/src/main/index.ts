@@ -1,5 +1,7 @@
 import { app, BrowserWindow, session } from 'electron'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
+import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import type { DesktopSettings } from '@shared/settings'
 import { GatewaySupervisor } from './gateway/supervisor'
@@ -7,7 +9,11 @@ import { registerIpc } from './ipc'
 import { installAppMenu } from './menu'
 import { registerPetScheme, servePets } from './pets/protocol'
 import { PetStore } from './pets/store'
+import { BootstrapController } from './bootstrap/controller'
+import { BootstrapRunner, bundledInstallScript } from './bootstrap/runner'
 import { SettingsStore } from './settings/store'
+import { AppUpdateController, type UpdaterLike } from './updates/app-updater'
+import { defaultMarkerPath, EngineUpdater } from './updates/engine-updater'
 import { applyUiScale, applyVibrancy, createMainWindow } from './window'
 
 // Single instance: a second launch focuses the existing window.
@@ -15,8 +21,49 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   const settings = new SettingsStore(path.join(app.getPath('userData'), 'settings.json'))
-  const gateway = new GatewaySupervisor(() => settings.get().gateway)
+  const gateway = new GatewaySupervisor(() => settings.get().gateway, {
+    logPath: path.join(app.getPath('logs'), 'gateway.log'),
+  })
   const pets = new PetStore(path.join(app.getPath('userData'), 'pets'))
+  const engineUpdater = new EngineUpdater({
+    getSettings: () => settings.get().gateway,
+    gateway,
+    markerPath: defaultMarkerPath(),
+  })
+  // Never leave an orphaned gateway behind when the app quits, unless the
+  // user asked to keep it running (Settings > General). `stopping` also
+  // covers the relaunch an app update performs: the gateway is stopped
+  // before quitAndInstall, and the quit hook must not intercept that quit.
+  let stopping = false
+  const stopGatewayForQuit = async () => {
+    stopping = true
+    if (gateway.current().pid !== null && settings.get().general.stopGatewayOnQuit) {
+      await gateway.stop()
+    }
+  }
+  const appUpdater = new AppUpdateController({
+    updater: loadAutoUpdater(),
+    version: app.getVersion(),
+    beforeInstall: stopGatewayForQuit,
+  })
+  // First-run engine install: install.sh is bundled next to the asar; in
+  // development the repo's copy two levels up is used.
+  const agentosHome = path.dirname(defaultMarkerPath()).replace(/\/state\/desktop$/, '')
+  const bootstrapRunner = new BootstrapRunner({
+    scriptPath:
+      bundledInstallScript(process.resourcesPath, path.resolve(__dirname, '../../..')) ??
+      path.join(process.resourcesPath, 'install.sh'),
+    version: app.getVersion(),
+    logDir: path.join(agentosHome, 'logs'),
+    cwd: app.getPath('home'),
+  })
+  const bootstrap = new BootstrapController({
+    runner: bootstrapRunner,
+    gateway,
+    getSettings: () => settings.get().gateway,
+    updateSettings: (patch) => settings.update(patch),
+    appVersion: app.getVersion(),
+  })
   // Custom schemes must be declared before the app is ready.
   registerPetScheme()
 
@@ -39,13 +86,24 @@ if (!app.requestSingleInstanceLock()) {
 
     installLoopbackOriginRewrite()
     servePets(pets)
-    registerIpc({ settings, gateway, pets })
+    registerIpc({
+      settings,
+      gateway,
+      pets,
+      engineUpdater,
+      appUpdater,
+      bootstrapRunner,
+      bootstrap,
+    })
     installAppMenu(settings)
     createMainWindow(windowOptions(settings.get()))
     mirrorSettingsToOs(settings)
-    // The shell is only useful with a gateway behind it: bring it up (or
-    // adopt a running one) without waiting for a click.
-    void gateway.start()
+    // The shell is only useful with a gateway behind it. The controller
+    // finds the engine and starts the gateway, or offers to install the
+    // engine first when this Mac has none (or an older one).
+    void bootstrap.launch()
+    // A marker from a previous launch means an engine update never finished.
+    engineUpdater.recover()
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0)
@@ -57,16 +115,33 @@ if (!app.requestSingleInstanceLock()) {
   // gateway) alive in the Dock; Cmd+Q is the way out.
   app.on('window-all-closed', () => {})
 
-  // Never leave an orphaned gateway behind when the app quits, unless the
-  // user asked to keep it running (Settings > General).
-  let stopping = false
   app.on('before-quit', (event) => {
     if (stopping || gateway.current().pid === null) return
     if (!settings.get().general.stopGatewayOnQuit) return
     event.preventDefault()
-    stopping = true
-    void gateway.stop().finally(() => app.quit())
+    void stopGatewayForQuit().finally(() => app.quit())
   })
+}
+
+/**
+ * electron-updater only has something to update from in a packaged build
+ * that electron-builder published (it writes `app-update.yml` next to the
+ * asar). Anything else — `electron-vite dev`, a local `package:dir` — is
+ * reported as unsupported instead of erroring on every check.
+ */
+function loadAutoUpdater(): UpdaterLike | null {
+  if (!app.isPackaged) return null
+  if (!existsSync(path.join(process.resourcesPath, 'app-update.yml'))) return null
+  try {
+    // Loaded lazily, and through require: the package is CommonJS and reads
+    // `app` at import time, so it stays out of the ESM main bundle's imports.
+    const { autoUpdater } = createRequire(import.meta.url)('electron-updater') as {
+      autoUpdater: UpdaterLike
+    }
+    return autoUpdater
+  } catch {
+    return null
+  }
 }
 
 function windowOptions(s: DesktopSettings): { reduceTransparency: boolean; uiScale: number } {

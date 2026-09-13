@@ -4,6 +4,8 @@ import type { NotifyRequest, NotifyResult, NotifyTarget, SystemSound } from './n
 import type { InstalledPet, PetManifestEntry } from './pet'
 import type { DesktopSettings, SettingsPatch } from './settings'
 import type { ResolvedTheme, ThemeSettings } from './theme'
+import type { AppUpdateState, EngineUpdateState } from './updates'
+import type { BootstrapState } from './bootstrap'
 
 export type { SettingsPatch } from './settings'
 
@@ -60,6 +62,30 @@ export const IPC = {
     openSystemSettings: 'notify:openSystemSettings',
     /** Main -> renderer: a notification was clicked; carries its target. */
     activated: 'notify:activated',
+  },
+  updates: {
+    engineState: 'updates:engineState',
+    engineCheck: 'updates:engineCheck',
+    engineApply: 'updates:engineApply',
+    /** Main -> renderer: engine update progress. */
+    engineChanged: 'updates:engineChanged',
+    appState: 'updates:appState',
+    appCheck: 'updates:appCheck',
+    appDownload: 'updates:appDownload',
+    appInstall: 'updates:appInstall',
+    /** Main -> renderer: app update progress. */
+    appChanged: 'updates:appChanged',
+  },
+  bootstrap: {
+    state: 'bootstrap:state',
+    install: 'bootstrap:install',
+    cancel: 'bootstrap:cancel',
+    connectExisting: 'bootstrap:connectExisting',
+    reinstall: 'bootstrap:reinstall',
+    uninstallEngine: 'bootstrap:uninstallEngine',
+    openLog: 'bootstrap:openLog',
+    /** Main -> renderer: install progress. */
+    changed: 'bootstrap:changed',
   },
 } as const
 
@@ -124,5 +150,41 @@ export interface DesktopApi {
     /** System Settings › Notifications, where the user allows the app. */
     openSystemSettings(): Promise<void>
     onActivated(listener: (target: NotifyTarget) => void): () => void
+  }
+  updates: {
+    /** The engine: the `use-agent-os` package behind `agentos gateway run`. */
+    engine: {
+      state(): Promise<EngineUpdateState>
+      /** `agentos upgrade --check`: what is installed, what is published. */
+      check(): Promise<EngineUpdateState>
+      /** `agentos upgrade`, then restart the managed gateway. Resolves when done. */
+      apply(): Promise<EngineUpdateState>
+      onChanged(listener: (state: EngineUpdateState) => void): () => void
+    }
+    /** This app, via electron-updater and GitHub Releases. */
+    app: {
+      state(): Promise<AppUpdateState>
+      check(): Promise<AppUpdateState>
+      download(): Promise<AppUpdateState>
+      /** Stops the gateway, quits, installs, relaunches. */
+      install(): Promise<AppUpdateState>
+      onChanged(listener: (state: AppUpdateState) => void): () => void
+    }
+  }
+  /** First-run engine install: main drives install.sh stage by stage. */
+  bootstrap: {
+    state(): Promise<BootstrapState>
+    /** Run every stage, then start the gateway. Resolves when the run ends. */
+    install(): Promise<BootstrapState>
+    cancel(): Promise<BootstrapState>
+    /** Skip installing: switch to external mode and connect. */
+    connectExisting(): Promise<BootstrapState>
+    /** Install this app's engine again over whatever is there. */
+    reinstall(): Promise<BootstrapState>
+    /** Stop the gateway and `uv tool uninstall use-agent-os`. */
+    uninstallEngine(): Promise<{ ok: boolean; detail: string }>
+    /** Reveal the per-run log in Finder. */
+    openLog(): Promise<void>
+    onChanged(listener: (state: BootstrapState) => void): () => void
   }
 }

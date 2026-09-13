@@ -91,6 +91,35 @@ app = typer.Typer(
     pretty_exceptions_enable=False,
 )
 
+
+def _print_version(value: bool) -> None:
+    """``agentos --version``: the installed dist version, nothing else.
+
+    Cheap on purpose (no config load, no gateway probe): the desktop app runs
+    it at every launch to decide whether the engine needs installing.
+    """
+
+    if value:
+        from agentos import __version__
+
+        typer.echo(__version__)
+        raise typer.Exit(0)
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Print the installed AgentOS version and exit.",
+        callback=_print_version,
+        is_eager=True,
+    ),
+) -> None:
+    """AgentOS - Python agent runtime with multi-channel support."""
+
+
 # ── Sub-apps ─────────────────────────────────────────────────────────────────
 
 app.add_typer(auth_app, name="auth")

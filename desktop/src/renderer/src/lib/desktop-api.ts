@@ -9,6 +9,8 @@ import {
   type DesktopSettings,
 } from '@shared/settings'
 import { resolveTheme, type ResolvedTheme, type ThemeSettings } from '@shared/theme'
+import { IDLE_ENGINE, idleAppState, type AppUpdateState } from '@shared/updates'
+import { INITIAL_BOOTSTRAP, type BootstrapState } from '@shared/bootstrap'
 
 const FALLBACK_KEY = 'agentos-desktop.settings'
 
@@ -141,6 +143,48 @@ function createFallbackApi(): DesktopApi {
         activationListeners.add(listener)
         return () => activationListeners.delete(listener)
       },
+    },
+    // Nothing can run an installer or swap an app bundle from a browser tab.
+    updates: {
+      engine: {
+        state: async () => ({ ...IDLE_ENGINE }),
+        check: async () => ({
+          ...IDLE_ENGINE,
+          phase: 'error',
+          error: 'Engine updates are only available inside the desktop app.',
+        }),
+        apply: async () => ({
+          ...IDLE_ENGINE,
+          phase: 'error',
+          error: 'Engine updates are only available inside the desktop app.',
+        }),
+        onChanged: () => () => {},
+      },
+      app: {
+        state: async (): Promise<AppUpdateState> => ({
+          ...idleAppState(BROWSER_INFO.version),
+          phase: 'unsupported',
+        }),
+        check: async () => ({ ...idleAppState(BROWSER_INFO.version), phase: 'unsupported' }),
+        download: async () => ({ ...idleAppState(BROWSER_INFO.version), phase: 'unsupported' }),
+        install: async () => ({ ...idleAppState(BROWSER_INFO.version), phase: 'unsupported' }),
+        onChanged: () => () => {},
+      },
+    },
+    // A browser tab has no engine to install; report "ready" so the shell
+    // renders and the setup overlay stays out of the way.
+    bootstrap: {
+      state: async (): Promise<BootstrapState> => ({ ...INITIAL_BOOTSTRAP, phase: 'ready' }),
+      install: async () => ({ ...INITIAL_BOOTSTRAP, phase: 'ready' }),
+      cancel: async () => ({ ...INITIAL_BOOTSTRAP, phase: 'ready' }),
+      connectExisting: async () => ({ ...INITIAL_BOOTSTRAP, phase: 'ready' }),
+      reinstall: async () => ({ ...INITIAL_BOOTSTRAP, phase: 'ready' }),
+      uninstallEngine: async () => ({
+        ok: false,
+        detail: 'Only available inside the desktop app.',
+      }),
+      openLog: async () => {},
+      onChanged: () => () => {},
     },
   }
 }

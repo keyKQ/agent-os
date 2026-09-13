@@ -37,6 +37,8 @@ export const shell = {
   'chat.export': 'Export as Markdown',
   'chat.waitingGateway': 'Waiting for the gateway',
   'chat.gatewayDown': 'The gateway is not running. Start it from the sidebar.',
+  'chat.noProvider': 'No provider yet. Pick who answers your messages to start chatting.',
+  'chat.chooseProvider': 'Choose a provider',
 
   'gateway.state.stopped': 'Gateway off',
   'gateway.state.starting': 'Starting gateway',
