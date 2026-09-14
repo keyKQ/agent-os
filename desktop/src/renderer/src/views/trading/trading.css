@@ -760,11 +760,24 @@
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.trd-asset__chain {
+/* Chain identity: the network's own mark, then its name. Inline SVG, so a
+   badge costs no request and stays crisp at this size. */
+.trd-chainmark {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border-radius: 2px;
+}
+.trd-chainbadge {
   display: inline-flex;
+  min-width: 0;
   align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.trd-asset__chain {
   height: 14px;
-  padding: 0 4px;
+  padding: 0 5px 0 3px;
   border-radius: 3px;
   font-family: var(--font-mono);
   font-size: 9px;
@@ -772,6 +785,12 @@
   letter-spacing: 0.04em;
   color: var(--dim);
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+/* In the chain filter the mark stands alone next to the segment's own label. */
+.trd-chainpick .trd-chainmark {
+  margin-right: 5px;
+  width: 12px;
+  height: 12px;
 }
 .trd-asset__warn {
   color: var(--warn);

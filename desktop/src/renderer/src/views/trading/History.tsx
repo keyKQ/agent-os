@@ -1,3 +1,4 @@
+import { ChainBadge } from './ChainMark'
 import {
   ArrowDownLeft,
   ArrowLeftRight,
@@ -13,7 +14,6 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import {
-  chainShort,
   formatAmount,
   formatAmountCompact,
   formatUsd,
@@ -119,11 +119,8 @@ export function History({
 function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) {
   const Glyph = GLYPH[entry.kind]
   const by = initiatorKey(entry.initiator)
-  const sub = [
-    chainShort(entry.chainId),
-    showWallet ? shortAddress(entry.wallet) : null,
-    entry.note,
-  ]
+  // The chain leads the sub-line as a mark, so the rest stays plain text.
+  const sub = [showWallet ? shortAddress(entry.wallet) : null, entry.note]
     .filter(Boolean)
     .join(' · ')
   return (
@@ -133,7 +130,10 @@ function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) 
       </span>
       <span className="trd-entry__what">
         <span className="trd-entry__kind">{t(`trading.history.kind.${entry.kind}`)}</span>
-        <span className="trd-entry__sub">{sub}</span>
+        <span className="trd-entry__sub">
+          <ChainBadge chainId={entry.chainId} />
+          {sub ? ` · ${sub}` : ''}
+        </span>
       </span>
       <span className="trd-entry__legs">
         {entry.tokenIn && entry.amountIn ? (

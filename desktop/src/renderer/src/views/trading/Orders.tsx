@@ -1,3 +1,4 @@
+import { ChainBadge } from './ChainMark'
 import {
   ArrowRight,
   ExternalLink,
@@ -15,7 +16,6 @@ import { useNow } from '~/lib/use-now'
 import { useUnwrap } from '~/stores/trading'
 import {
   approvalSecondsLeft,
-  chainShort,
   errorText,
   formatAmount,
   formatClock,
@@ -173,7 +173,7 @@ function OrderRow({
       </div>
       <div className="trd-order__meta">
         <span>
-          {chainShort(order.chainId)}
+          <ChainBadge chainId={order.chainId} />
           {order.provider ? ` · ${t('trading.provider.via')} ${providerLabel(order.provider)}` : ''}
         </span>
         {showWallet ? <span className="trd-mono">{shortAddress(order.wallet)}</span> : null}

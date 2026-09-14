@@ -4,7 +4,8 @@ import { ModalShell } from '@/components/ModalShell'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
-import { chainShort, formatUsd, orderTone, pnlTone, type PnlTone } from './logic'
+import { ChainBadge } from './ChainMark'
+import { formatUsd, orderTone, pnlTone, type PnlTone } from './logic'
 import type { OrderStatus, Token } from './types'
 
 /** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
@@ -102,7 +103,7 @@ export function AssetCell({
           <span className="trd-asset__ticker" title={token.symbol}>
             {token.symbol}
           </span>
-          {showChain ? <span className="trd-asset__chain">{chainShort(token.chainId)}</span> : null}
+          {showChain ? <ChainBadge chainId={token.chainId} className="trd-asset__chain" /> : null}
           {!token.verified && !token.native ? (
             <TriangleAlert
               className="trd-asset__warn size-3"

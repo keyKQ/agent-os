@@ -27,6 +27,7 @@ import { Holdings } from './Holdings'
 import { EMPTY_TOTALS, errorText, filterHoldings, isAwaitingApproval, sameAddress } from './logic'
 import { Orders } from './Orders'
 import { Overview } from './Overview'
+import { ChainMark } from './ChainMark'
 import { PriceChart } from './PriceChart'
 import { SwapPanel, type SwapPrefill } from './SwapPanel'
 import {
@@ -415,10 +416,8 @@ function Desk({
                     className="mac-segment app-no-drag"
                     onClick={() => setChain(c.id)}
                   >
+                    <ChainMark chainId={c.id} />
                     <span data-long>{c.short}</span>
-                    <span data-short aria-hidden>
-                      {c.abbr}
-                    </span>
                   </button>
                 ))}
               </div>
