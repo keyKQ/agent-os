@@ -174,7 +174,11 @@ class FakeChain:
         if method == "eth_getTransactionReceipt":
             return self.receipts.get(str(params[0]).lower())
         if method == "eth_getCode":
-            return "0x6000"
+            # A node reports bytecode only where a contract actually is. The
+            # fake has to as well, or nothing can test "not on this chain".
+            address = str(params[0]).lower()
+            known = address in self.tokens or address in self.erc20 or address in self.native
+            return "0x6000" if known else "0x"
         raise _RpcFailError(f"unknown method {method}", -32601)
 
     def _eth_call(self, tx: dict[str, Any]) -> str:

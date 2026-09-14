@@ -491,6 +491,23 @@ class TradingService:
             symbol, name, decimals = await self.evm(chain).erc20_metadata(key)
         except (EvmRpcError, EvmTransportError):
             pass
+        if not symbol:
+            # Nobody names it. Either it is a contract that does not implement
+            # symbol(), or there is nothing here — most often an address pasted
+            # from another chain. Only the second is an error, and it has to be
+            # one: returning a token with a *guessed* 18 decimals would let a
+            # swap be built against something that does not exist.
+            try:
+                code = await self.evm(chain).get_code(key)
+            except (EvmRpcError, EvmTransportError):
+                # A node we cannot reach is not evidence of absence.
+                code = ""
+            if code in ("0x", "0x0"):
+                raise TradingError(
+                    "trading.unknown_token",
+                    f"No contract at {key} on {chain.name}",
+                    details={"address": key, "chainId": chain.chain_id},
+                )
         meta = TokenMeta(chain.chain_id, key, symbol, name, decimals)
         self._remember_token(meta)
         return meta
@@ -530,7 +547,7 @@ class TradingService:
         return await self.token_meta(chain, chosen.address)
 
     async def search_tokens(self, chain: ChainSpec, query: str) -> list[dict[str, Any]]:
-        rows = await self.prices.search(chain, query)
+        rows = await self._fill_from_chain(chain, await self.prices.search(chain, query))
         for row in rows:
             self.ledger.upsert_token(
                 chain.chain_id,
@@ -543,6 +560,57 @@ class TradingService:
                 verified=bool(row.get("verified")),
             )
         return rows
+
+    async def _fill_from_chain(
+        self, chain: ChainSpec, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Ask the chain about what the indexes did not know, and drop what is
+        not there.
+
+        A bare address that no list carries and no pool quotes used to come back
+        as a row with an empty symbol, an empty name and a *guessed* 18 decimals.
+        Two different things hid behind that blank row, and they deserve
+        opposite answers:
+
+        * A real token nobody has indexed yet. The contract knows its symbol,
+          name and decimals, so read them — a guessed 18 would have made any
+          trade in it wrong by orders of magnitude.
+        * Nothing at all: an address from another chain, or a typo. There is no
+          code at it here, so it is not offered. An empty result is the honest
+          answer; a row you cannot trade is not.
+
+        Only rows the indexes left blank pay for the calls, and a node that will
+        not answer leaves the row exactly as it was rather than discarding it.
+        """
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if row.get("native") or str(row.get("symbol") or "").strip():
+                out.append(row)
+                continue
+            evm = self.evm(chain)
+            address = str(row["address"])
+            try:
+                symbol, name, decimals = await evm.erc20_metadata(address)
+            except Exception:  # a search must not fail because a node did
+                out.append(row)
+                continue
+            if symbol:
+                row["symbol"] = symbol
+            if name:
+                row["name"] = name
+            row["decimals"] = decimals
+            if symbol:
+                out.append(row)
+                continue
+            try:
+                code = await evm.get_code(address)
+            except Exception:
+                out.append(row)
+                continue
+            # A contract that simply does not implement symbol() is still real.
+            if code and code not in ("0x", "0x0"):
+                out.append(row)
+        return out
 
     def _token_dict(self, chain_id: int, address: str | None) -> dict[str, Any] | None:
         if address is None:

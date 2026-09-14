@@ -5,7 +5,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import { ChainBadge } from './ChainMark'
-import { formatUsd, orderTone, pnlTone, type PnlTone } from './logic'
+import { formatUsd, orderTone, pnlTone, shortAddress, type PnlTone } from './logic'
 import type { OrderStatus, Token } from './types'
 
 /** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
@@ -68,7 +68,9 @@ export function StatusPill({ status }: { status: OrderStatus }) {
 
 export function TokenLogo({ token, size = 22 }: { token: Token; size?: number }) {
   const [broken, setBroken] = useState(false)
-  const initials = token.symbol.slice(0, 3).toUpperCase()
+  // Nothing indexes every token: with no art and no ticker, the address's own
+  // first characters are still a stable, distinguishable mark.
+  const initials = (token.symbol || token.address.slice(2, 5)).slice(0, 3).toUpperCase()
   return (
     <span className="trd-asset__logo" style={{ width: size, height: size }} aria-hidden>
       {token.logoUrl && !broken ? (
@@ -95,13 +97,17 @@ export function AssetCell({
   showChain?: boolean
   sub?: string
 }) {
+  // Not everything is indexed, and a row with two blanks in it reads as a bug.
+  // Fall back to what is always true: the address, and that it has no name.
+  const ticker = token.symbol || shortAddress(token.address)
+  const name = sub ?? token.name ?? ''
   return (
     <span className="trd-asset">
       <TokenLogo token={token} />
       <span className="trd-asset__text">
         <span className="trd-asset__symbol">
-          <span className="trd-asset__ticker" title={token.symbol}>
-            {token.symbol}
+          <span className="trd-asset__ticker" title={token.symbol || token.address}>
+            {ticker}
           </span>
           {showChain ? <ChainBadge chainId={token.chainId} className="trd-asset__chain" /> : null}
           {!token.verified && !token.native ? (
@@ -112,7 +118,7 @@ export function AssetCell({
             />
           ) : null}
         </span>
-        <span className="trd-asset__name">{sub ?? token.name}</span>
+        <span className="trd-asset__name">{name || t('trading.token.unknown')}</span>
       </span>
     </span>
   )

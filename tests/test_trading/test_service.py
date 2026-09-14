@@ -149,6 +149,38 @@ class TestTokensAndBalances:
         assert (meta.symbol, meta.decimals, meta.verified) == ("XYZ", 9, False)
         assert service.ledger.get_token(8453, unknown)["symbol"] == "XYZ"
 
+    async def test_search_by_address_reads_an_unindexed_token_off_chain(
+        self, service: TradingService, base_chain: FakeChain
+    ) -> None:
+        """No token list, no pool: the contract is the only one who knows."""
+        unknown = "0x6eda83fc299c10d474068a7e69771c809bcbbba3"
+        base_chain.tokens[unknown] = ("MOG", "Mog Coin", 6)
+
+        rows = await service.search_tokens(BASE, unknown)
+
+        assert len(rows) == 1
+        # Not the blank row with a guessed 18 decimals it used to be.
+        assert rows[0]["symbol"] == "MOG"
+        assert rows[0]["name"] == "Mog Coin"
+        assert rows[0]["decimals"] == 6
+        assert rows[0]["verified"] is False
+        # And it is remembered, so the next read does not pay for the calls.
+        stored = service.ledger.get_token(8453, unknown)
+        assert (stored["symbol"], stored["decimals"]) == ("MOG", 6)
+
+    async def test_an_address_from_another_chain_is_not_a_token_here(
+        self, service: TradingService, base_chain: FakeChain
+    ) -> None:
+        """No code at it here, so neither path may invent one."""
+        elsewhere = "0x6eda83fc299c10d474068a7e69771c809bcbbba3"
+        assert elsewhere not in base_chain.tokens
+
+        assert await service.search_tokens(BASE, elsewhere) == []
+        with pytest.raises(TradingError, match="No contract at"):
+            await service.resolve_token(BASE, elsewhere)
+        # Nothing phantom was written to the ledger on the way out.
+        assert service.ledger.get_token(8453, elsewhere) is None
+
     async def test_balances_and_portfolio(
         self, funded_service: TradingService, base_chain: FakeChain
     ) -> None:

@@ -162,7 +162,15 @@ export function TokenPicker({
             </span>
           </button>
         ))}
-        {nothing ? <div className="trd-note">{t('trading.picker.none')}</div> : null}
+        {nothing ? (
+          <div className="trd-note">
+            {/* A pasted address that matched nothing has one overwhelmingly
+                likely cause: it belongs to another chain. Say so. */}
+            {isAddress
+              ? `${t('trading.picker.noneAt')} ${chainName(chainId)}`
+              : t('trading.picker.none')}
+          </div>
+        ) : null}
       </div>
     </Sheet>
   )
