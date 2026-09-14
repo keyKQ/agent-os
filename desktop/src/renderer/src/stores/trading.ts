@@ -1,8 +1,15 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
 import { QUOTE_REFRESH_MS } from '~/views/trading/logic'
+import { CHAINS } from '~/views/trading/types'
 import type {
   Balance,
   Chart,
@@ -398,7 +405,17 @@ interface SearchResult {
 }
 
 /** Debounced token search for the picker. */
-export function useTokenSearch(chainId: number, query: string) {
+/**
+ * Token search across every chain the desk trades, not just the ticket's.
+ *
+ * A symbol or an address is a poor place to make someone guess which network
+ * they are on — a Robinhood Chain address pasted while the ticket sits on Base
+ * used to find nothing. One query per chain, run together and merged; each
+ * result carries its own chainId, so the picker can show where it lives and
+ * move the ticket if you take it. `first` is only an ordering preference: the
+ * chain already on screen leads.
+ */
+export function useTokenSearch(first: number, query: string) {
   const rpc = useRpc()
   const connected = useConnected()
   const [debounced, setDebounced] = useState(query)
@@ -406,18 +423,34 @@ export function useTokenSearch(chainId: number, query: string) {
     const id = setTimeout(() => setDebounced(query.trim()), 220)
     return () => clearTimeout(id)
   }, [query])
-  const q = useQuery<SearchResult>({
-    queryKey: ['trading', 'tokens', chainId, debounced.toLowerCase()],
-    enabled: connected && debounced.length >= 2,
-    queryFn: async () => {
-      await rpc.waitForConnection()
-      return rpc.call<SearchResult>('trading.tokens.search', { chainId, query: debounced })
-    },
-    staleTime: 30_000,
-    retry: false,
+  const results = useQueries({
+    queries: CHAINS.map((c) => ({
+      queryKey: ['trading', 'tokens', c.id, debounced.toLowerCase()],
+      enabled: connected && debounced.length >= 2,
+      queryFn: async () => {
+        await rpc.waitForConnection()
+        return rpc.call<SearchResult>('trading.tokens.search', {
+          chainId: c.id,
+          query: debounced,
+        })
+      },
+      staleTime: 30_000,
+      retry: false,
+    })),
   })
-  const tokens = useMemo(() => q.data?.tokens ?? [], [q.data])
-  return { ...q, tokens, debounced }
+  const isFetching = results.some((r) => r.isFetching)
+  // `results` is a new array on every render, so memoising on it would never
+  // hit. The stamps are what actually change when a chain answers.
+  const stamps = results.map((r) => r.dataUpdatedAt).join(',')
+  const rows = results.flatMap((r) => r.data?.tokens ?? [])
+  const tokens = useMemo(
+    // The ticket's own chain leads; within a chain the engine's own ranking
+    // survives, so an exact symbol match still comes first.
+    () => [...rows].sort((a, b) => Number(b.chainId === first) - Number(a.chainId === first)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stamps, first],
+  )
+  return { isFetching, tokens, debounced }
 }
 
 export function useResolveToken() {

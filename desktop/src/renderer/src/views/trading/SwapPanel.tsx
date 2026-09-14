@@ -457,8 +457,25 @@ export function SwapPanel({
           balances={balances}
           exclude={picker === 'in' ? tokenOut : tokenIn}
           onPick={(tk) => {
-            if (picker === 'in') setTokenIn(tk)
-            else setTokenOut(tk)
+            // The picker searches every chain, so a choice can move the
+            // ticket. The other leg belonged to the chain we just left, so it
+            // cannot come along: the pay side falls back to that chain's gas
+            // coin, the receive side clears.
+            if (tk.chainId !== chainId && (tk.chainId === 8453 || tk.chainId === 4663)) {
+              setChainId(tk.chainId)
+              setAmount('')
+              if (picker === 'in') {
+                setTokenIn(tk)
+                setTokenOut(null)
+              } else {
+                setTokenIn(nativeToken(tk.chainId))
+                setTokenOut(tk)
+              }
+            } else if (picker === 'in') {
+              setTokenIn(tk)
+            } else {
+              setTokenOut(tk)
+            }
             setPicker(null)
           }}
           onClose={() => setPicker(null)}

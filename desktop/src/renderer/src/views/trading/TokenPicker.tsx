@@ -1,7 +1,7 @@
 import { Search, TriangleAlert } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { t } from '~/i18n'
-import { useResolveToken, useTokenSearch } from '~/stores/trading'
+import { useTokenSearch } from '~/stores/trading'
 import { chainName, formatAmount, formatUsd, sameToken } from './logic'
 import { AssetCell, Sheet, Spinner } from './parts'
 import { NATIVE_ADDRESS, type Balance, type SearchToken, type Token } from './types'
@@ -40,13 +40,10 @@ export function TokenPicker({
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
+  // Searches every chain, not just this ticket's — including for a pasted
+  // address, which the engine resolves against each chain's own contracts.
   const search = useTokenSearch(chainId, query)
-  const resolve = useResolveToken()
   const isAddress = ADDRESS_RE.test(query.trim())
-  const resolveMutate = resolve.mutate
-  useEffect(() => {
-    if (isAddress) resolveMutate({ chainId, address: query.trim() })
-  }, [isAddress, query, chainId, resolveMutate])
 
   const held = useMemo(() => {
     const native = nativeToken(chainId)
@@ -75,8 +72,6 @@ export function TokenPicker({
 
   const results: SearchToken[] = useMemo(() => {
     const out: SearchToken[] = []
-    const resolved = resolve.data?.token
-    if (isAddress && resolved) out.push({ ...resolved, priceUsd: null, liquidityUsd: null })
     for (const tk of search.tokens) {
       if (sameToken(tk, exclude)) continue
       if (held.some((h) => sameToken(h.token, tk))) continue
@@ -84,9 +79,9 @@ export function TokenPicker({
       out.push(tk)
     }
     return out
-  }, [search.tokens, resolve.data, isAddress, exclude, held])
+  }, [search.tokens, exclude, held])
 
-  const searching = search.isFetching || (isAddress && resolve.isPending)
+  const searching = search.isFetching
   const nothing =
     !searching && query.trim().length >= 2 && held.length === 0 && results.length === 0
 
@@ -141,8 +136,9 @@ export function TokenPicker({
           >
             <AssetCell
               token={tk}
+              showChain={tk.chainId !== chainId}
               sub={
-                chainId === 4663 && !tk.verified && !tk.native
+                tk.chainId === 4663 && !tk.verified && !tk.native
                   ? t('trading.picker.lookalike')
                   : tk.name
               }
@@ -166,9 +162,7 @@ export function TokenPicker({
           <div className="trd-note">
             {/* A pasted address that matched nothing has one overwhelmingly
                 likely cause: it belongs to another chain. Say so. */}
-            {isAddress
-              ? `${t('trading.picker.noneAt')} ${chainName(chainId)}`
-              : t('trading.picker.none')}
+            {isAddress ? t('trading.picker.noneAnywhere') : t('trading.picker.none')}
           </div>
         ) : null}
       </div>

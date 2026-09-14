@@ -216,7 +216,7 @@ export const trading = {
   'trading.picker.results': 'Results',
   'trading.picker.common': 'Common',
   'trading.picker.none': 'No token matches',
-  'trading.picker.noneAt': 'Nothing lives at this address on',
+  'trading.picker.noneAnywhere': 'No contract at this address on Base or Robinhood Chain',
   'trading.picker.searching': 'Searching',
   'trading.picker.verified': 'Verified',
   'trading.token.unknown': 'Unnamed token',
