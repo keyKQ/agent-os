@@ -20,6 +20,7 @@ import {
   groupEntriesByDay,
   initiatorKey,
   shortAddress,
+  formatUsdCell,
 } from './logic'
 import { Empty, Skeleton } from './parts'
 import type { Entry, EntryKind } from './types'
@@ -74,11 +75,19 @@ export function History({
         {[0, 1, 2].map((i) => (
           <div key={i} className="trd-entry">
             <span className="trd-entry__glyph" />
-            <Skeleton width={110} />
-            <Skeleton width={90} />
-            <Skeleton width={60} />
-            <Skeleton width={40} />
-            <span />
+            <span className="trd-entry__what">
+              <Skeleton width={110} />
+            </span>
+            <span className="trd-entry__legs">
+              <Skeleton width={90} />
+            </span>
+            <span className="trd-entry__value">
+              <Skeleton width={60} />
+            </span>
+            <span className="trd-entry__who">
+              <Skeleton width={40} />
+            </span>
+            <span className="trd-entry__link" />
           </div>
         ))}
       </div>
@@ -138,11 +147,11 @@ function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) 
           </span>
         ) : null}
       </span>
-      <span className="trd-entry__value">
-        {formatUsd(entry.valueUsd)}
+      <span className="trd-entry__value" title={formatUsd(entry.valueUsd)}>
+        {formatUsdCell(entry.valueUsd)}
         {entry.gasUsd !== null && entry.gasUsd > 0 ? (
-          <small>
-            {formatUsd(entry.gasUsd)} {t('trading.history.gas')}
+          <small title={formatUsd(entry.gasUsd)}>
+            {formatUsdCell(entry.gasUsd)} {t('trading.history.gas')}
           </small>
         ) : null}
       </span>
@@ -152,7 +161,7 @@ function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) 
         </span>
         <span className="trd-entry__time block">{timeFmt.format(new Date(entry.ts))}</span>
       </span>
-      <span>
+      <span className="trd-entry__link">
         {entry.explorerUrl ? (
           <Button
             variant="ghost"

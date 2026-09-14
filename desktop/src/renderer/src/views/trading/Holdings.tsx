@@ -194,7 +194,7 @@ export function Holdings({
                         </span>
                       ) : null}
                     </td>
-                    <td>
+                    <td className="trd-col--actions">
                       <span className="trd-row__actions">
                         {isWrappedEth(h.token) && h.wallet ? (
                           <UnwrapNote chainId={h.chainId} wallet={h.wallet} compact />

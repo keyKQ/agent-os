@@ -842,6 +842,7 @@ tr:focus-within .trd-row__actions {
 }
 .trd-skel {
   display: inline-block;
+  max-width: 100%;
   height: 10px;
   border-radius: 3px;
   background: color-mix(in srgb, var(--foreground) 9%, transparent);

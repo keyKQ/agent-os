@@ -863,6 +863,7 @@
   flex-shrink: 0;
   min-height: 0;
   flex-direction: column;
+  container: book / inline-size;
   border-left: 1px solid var(--hairline);
   /* Transparent on purpose: the frame's canvas continues under the BOOK. */
   background: transparent;
@@ -1093,7 +1094,15 @@ body[data-dragging] .trd-book__handle {
 .trd-book .trd-table .trd-col--amount,
 .trd-book .trd-table .trd-col--value {
   min-width: 0;
-  width: 96px;
+  width: 84px;
+}
+.trd-book .trd-table th,
+.trd-book .trd-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.trd-book .trd-table td.trd-col--asset {
+  padding-left: 12px;
 }
 /* The shared renderer's own "No messages yet." would sit under the desk's hint. */
 .trd-chat .chat-empty {
@@ -1640,4 +1649,98 @@ body[data-dragging] .trd-book__handle {
 .trd-book .trd-order__reason,
 .trd-book .trd-order__note {
   overflow-wrap: anywhere;
+}
+
+/* ── History inside the BOOK ────────────────────────────────────────────────
+   Six columns need ~520 px; the rail stacks them into two lines:
+   glyph · kind/sub · value · link, then legs · who/time under it. */
+.trd-book__body[data-tab='history'] > *,
+.trd-book__body[data-tab='orders'] > * {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.trd-book .trd-day {
+  top: 0;
+  padding: 8px 12px 4px;
+}
+.trd-book .trd-entry {
+  grid-template-columns: 24px minmax(0, 1fr) auto 28px;
+  grid-template-areas:
+    'glyph what value link'
+    'glyph legs who link';
+  align-items: start;
+  gap: 2px 8px;
+  padding: 8px 8px 8px 12px;
+}
+.trd-book .trd-entry__glyph {
+  grid-area: glyph;
+  align-self: center;
+}
+.trd-book .trd-entry__what {
+  grid-area: what;
+}
+.trd-book .trd-entry__legs {
+  grid-area: legs;
+}
+.trd-book .trd-entry__value {
+  grid-area: value;
+  white-space: nowrap;
+}
+.trd-book .trd-entry__who {
+  grid-area: who;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  white-space: nowrap;
+}
+.trd-book .trd-entry__link {
+  grid-area: link;
+  align-self: center;
+}
+.trd-book .trd-entry__link:empty {
+  display: none;
+}
+@container book (max-width: 339px) {
+  .trd-entry {
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-areas:
+      'glyph what value'
+      'glyph legs who';
+  }
+  .trd-entry__link {
+    display: none;
+  }
+}
+
+/* Holdings inside a narrow rail: the asset cell must never widen the table. */
+.trd-book .trd-asset__symbol,
+.trd-book .trd-asset__text {
+  min-width: 0;
+}
+/* A long ticker keeps its letters; the chain chip drops to the next line. */
+.trd-book .trd-asset__symbol {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+.trd-book .trd-asset__ticker {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-book .trd-asset__chain,
+.trd-book .trd-asset__warn {
+  flex-shrink: 0;
+}
+@container book (max-width: 339px) {
+  .trd-table .trd-col--amount,
+  .trd-table .trd-col--value {
+    width: 72px;
+  }
+  .trd-asset__chain {
+    display: none;
+  }
 }

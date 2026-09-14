@@ -99,7 +99,9 @@ export function AssetCell({
       <TokenLogo token={token} />
       <span className="trd-asset__text">
         <span className="trd-asset__symbol">
-          {token.symbol}
+          <span className="trd-asset__ticker" title={token.symbol}>
+            {token.symbol}
+          </span>
           {showChain ? <span className="trd-asset__chain">{chainShort(token.chainId)}</span> : null}
           {!token.verified && !token.native ? (
             <TriangleAlert
