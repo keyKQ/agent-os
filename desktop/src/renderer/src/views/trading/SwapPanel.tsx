@@ -6,7 +6,7 @@ import {
   TriangleAlert,
   Zap,
 } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
@@ -418,17 +418,23 @@ export function SwapPanel({
           </div>
         ) : null}
 
+        {/* The quote's remaining life is the button's own bottom edge, not a
+            ring beside the label: it keeps the label centred, and it is the
+            one thing on this panel that is about *this* action. The line
+            below still says it in words. */}
         <button
           type="button"
           className="trd-cta app-no-drag"
           disabled={!canReview}
           data-testid="swap-review"
+          data-fresh={ready && quote.data && !countdown.expired ? 'true' : undefined}
+          style={
+            {
+              '--fresh': ready && quote.data && !countdown.expired ? countdown.fraction : 0,
+            } as CSSProperties
+          }
           onClick={() => setConfirm(true)}
         >
-          <Ring
-            fraction={ready && quote.data ? countdown.fraction : 0}
-            expired={countdown.expired}
-          />
           {ctaKey ? t(ctaKey as 'trading.swap.pick') : t('trading.swap.cta')}
         </button>
         {ready ? (
@@ -582,23 +588,3 @@ function Leg({
 }
 
 /** The countdown ring on the primary button: full when the price is fresh. */
-export function Ring({ fraction, expired }: { fraction: number; expired: boolean }) {
-  const r = 9
-  const c = 2 * Math.PI * r
-  return (
-    <span className="trd-ring" data-expired={expired ? 'true' : undefined} aria-hidden>
-      <svg viewBox="0 0 22 22" width="22" height="22">
-        <circle className="trd-ring__track" cx="11" cy="11" r={r} />
-        <circle
-          className="trd-ring__arc"
-          cx="11"
-          cy="11"
-          r={r}
-          strokeDasharray={c}
-          strokeDashoffset={c * (1 - Math.max(0, Math.min(1, fraction)))}
-        />
-      </svg>
-      <Zap className="trd-ring__glyph size-3" strokeWidth={2.5} />
-    </span>
-  )
-}

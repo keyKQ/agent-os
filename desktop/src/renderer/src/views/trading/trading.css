@@ -17,14 +17,16 @@
    the ledger (overview, holdings, history, approvals), the ticket (swap).
 
    Signature: the ticket's primary button wears the quote's countdown as a
-   ring around its glyph, so the button itself says how fresh the price is;
-   and allocation is drawn as a thin lime rule under each holding's value,
-   a ledger line rather than a pie.
+   line draining along its own bottom edge, so the button itself says how
+   fresh the price is without pushing its label off centre; and allocation is
+   drawn as a thin lime rule under each holding's value, a ledger line rather
+   than a pie.
 
    Colour: palette tokens only. Up is --ok, down is --danger, live is
    --primary. The one gradient is the hero's wash, tinted by today's move.
    Motion: a value that changed flashes a wash and fades; a new row lifts in
-   4 px; the ring is continuous. Reduced motion turns all of it off. */
+   4 px; the countdown drains continuously. Reduced motion turns all of it
+   off. */
 
 /* ── Frame ─────────────────────────────────────────────────────────────────── */
 
@@ -1490,16 +1492,18 @@ tr:focus-within .trd-row__actions {
 }
 
 /* Guard line: what the engine will say to this size of swap. */
+/* A note about the quote, not a slab. It used to be a filled bar directly
+   above the filled CTA — two full-width blocks, eight pixels apart, reading as
+   one crowded mass. Unfilled, it sits with the facts it belongs to and leaves
+   the button alone at the bottom of the ticket. */
 .trd-guard {
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  padding: 7px 9px;
-  border-radius: var(--radius-control);
+  padding: 2px 2px 0;
   font-size: 11px;
   line-height: 1.35;
   color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
 }
 .trd-guard svg {
   flex-shrink: 0;
@@ -1522,71 +1526,65 @@ tr:focus-within .trd-row__actions {
 }
 
 /* The signature: the primary button wears the countdown ring around its glyph. */
+/* The one action on the ticket. A single centred label — the countdown that
+   used to sit beside it as a ring pushed the text off centre and read as a
+   spinner stuck mid-load. */
 .trd-cta {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
   width: 100%;
-  height: 40px;
+  height: 44px;
+  margin-top: 6px;
+  overflow: hidden;
   border-radius: var(--radius);
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--primary-foreground);
   background: var(--primary);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
   transition:
     background-color 80ms ease-out,
-    opacity 80ms ease-out;
+    transform 80ms ease-out;
 }
 .trd-cta:hover {
   background: color-mix(in srgb, var(--primary) 88%, var(--foreground));
 }
+.trd-cta:active {
+  transform: scale(0.994);
+}
 .trd-cta:disabled {
   color: var(--muted-foreground);
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
-  box-shadow: none;
   pointer-events: none;
 }
 .trd-cta:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-.trd-ring {
-  position: relative;
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-}
-.trd-ring svg {
+/* How much of the quote's life is left, as the button's own bottom edge.
+   --fresh is 1 at a fresh quote and drains to 0; the line is the ink of the
+   label at low opacity, so it belongs to the button in every palette. */
+.trd-cta[data-fresh]::after {
+  content: '';
   position: absolute;
-  inset: 0;
-  transform: rotate(-90deg);
-}
-.trd-ring circle {
-  fill: none;
-  stroke-width: 2;
-}
-.trd-ring__track {
-  stroke: currentColor;
-  opacity: 0.25;
-}
-.trd-ring__arc {
-  stroke: currentColor;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 900ms linear;
-}
-.trd-ring[data-expired='true'] .trd-ring__arc {
-  opacity: 0;
-}
-.trd-ring__glyph {
-  position: relative;
+  /* Inset from the corners: running the line into the radius made it read as
+     a misaligned shadow under the button rather than a rule inside it. */
+  bottom: 6px;
+  left: 14px;
+  right: 14px;
+  height: 2px;
+  border-radius: 1px;
+  transform: scaleX(var(--fresh, 0));
+  transform-origin: left center;
+  background: currentColor;
+  opacity: 0.24;
+  transition: transform 900ms linear;
 }
 .trd-ticket__fresh {
   display: flex;
+  margin-top: -2px;
   align-items: center;
   justify-content: center;
   gap: 6px;

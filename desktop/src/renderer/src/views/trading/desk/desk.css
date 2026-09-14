@@ -18,7 +18,8 @@
    Motion: 0/100/150/240 ms, ease-out for arrivals, in-out for moves. Motion
    has three jobs — a state change, spatial continuity, one nudge when an
    ask or a failure arrives. Nothing ambient, no idle loops. While an ask is
-   pending the desk goes still: data-still pauses rings, ticks and pulses.
+   pending the desk goes still: data-still holds ticks, pulses and the
+   quote countdown.
    Reduced motion takes the instant path.
 
    Honesty: status is a word, not a spinner. No countdown the engine does not
@@ -684,12 +685,16 @@
 }
 
 /* Trust = stillness: while an ask is pending nothing on the desk moves. */
-.trd-chat[data-still] ~ .trd-book .trd-ring circle,
 .trd-chat[data-still] ~ .trd-book .trd-tick,
 .trd-chat[data-still] ~ .trd-book .trd-status[data-tone='live']::before,
 .trd-chat[data-still] .chat-history-loading__dot,
 .trd-chat[data-still] .composer[data-busy='true']::after {
   animation-play-state: paused !important;
+}
+/* The quote's countdown edge is a transition, not a loop, so stillness means
+   it stops gliding rather than pauses a keyframe. */
+.trd-chat[data-still] .trd-cta::after {
+  transition: none;
 }
 .trd-chat[data-still] .trd-card {
   animation-duration: 150ms;
@@ -1316,12 +1321,12 @@ body[data-dragging] .trd-book__handle {
 }
 .chat-desktop[data-desk][data-still] .chat-history-loading__dot,
 .chat-desktop[data-desk][data-still] .composer[data-busy='true']::after,
-.chat-desktop[data-desk][data-still] ~ .trd-book .trd-ring circle,
 .chat-desktop[data-desk][data-still] ~ .trd-book .trd-tick,
 .chat-desktop[data-desk][data-still] ~ .trd-book .trd-status[data-tone='live']::before {
   animation-play-state: paused;
 }
-.chat-desktop[data-desk][data-still] .trd-card {
+.chat-desktop[data-desk][data-still] .trd-card,
+.chat-desktop[data-desk][data-still] .trd-cta::after {
   transition: none;
 }
 
