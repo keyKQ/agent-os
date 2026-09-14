@@ -492,29 +492,25 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Hover actions: a small floating pill below the row's edge. */
+/* Hover actions. They used to be a raised popover card of their own, parked
+   under the row on top of the meta line — two 26 px glyphs wearing a
+   background, a ring and a drop shadow, and colliding with the figures they
+   sat over. They are the same hover state as the meta line, so they share it:
+   parked at the trailing end of that one 16 px row, bare, no card. Zero
+   layout either way, but now it reads as one quiet footer instead of a chip
+   floating over the transcript. */
 .msg .msg-body > .msg-actions {
   position: absolute;
   top: calc(100% + 4px);
+  right: 0;
   z-index: 2;
   display: inline-flex;
+  height: 16px;
   align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: var(--radius-control);
-  background: var(--popover);
-  box-shadow:
-    0 0 0 1px var(--hairline),
-    0 8px 20px -8px rgba(0, 0, 0, 0.5);
+  gap: 1px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
-}
-.msg:not(.user) .msg-body > .msg-actions {
-  left: 0;
-}
-.msg.user .msg-body > .msg-actions {
-  right: 0;
 }
 .msg:hover .msg-actions,
 .msg:focus-within .msg-actions {
@@ -524,21 +520,34 @@
 .msg.streaming .msg-actions {
   display: none;
 }
+/* Room at the end of the line so a long figure never runs under the glyphs.
+   Only while hovered: the two appear together, so nothing shifts. */
+.msg:hover .msg-meta,
+.msg:focus-within .msg-meta {
+  padding-right: 48px;
+}
 .msg-action {
   display: inline-grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   border-radius: var(--radius-compact);
-  color: var(--muted-foreground);
+  color: var(--dim);
+  transition:
+    color 100ms ease,
+    background-color 100ms ease;
 }
 .msg-action:hover {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
   color: var(--foreground);
 }
+.msg-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
 .msg-action svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
 }
 
 /* ── Motion ──────────────────────────────────────────────────────────────
