@@ -12,6 +12,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import {
+  DUST_USD,
   formatAmount,
   formatAmountCompact,
   formatPct,
@@ -252,7 +253,8 @@ export function Holdings({
             <Eye className="size-3" strokeWidth={2} aria-hidden />
           )}
           {dust.length}{' '}
-          {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}
+          {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}{' '}
+          {formatUsd(DUST_USD)} {t('trading.holdings.dust.hidden')}
           {' · '}
           {showDust ? t('trading.holdings.dust.hide') : t('trading.holdings.dust.show')}
         </button>
