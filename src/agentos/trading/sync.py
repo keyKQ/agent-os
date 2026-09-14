@@ -7,8 +7,19 @@ it at its block time, and keep the FIFO lots current. Native ETH has no
 logs, so a change in the native balance that the ledger cannot explain is
 booked as a deposit or withdrawal.
 
-Everything here is idempotent: the entries table has a uniqueness key per
-(wallet, kind, tx, log) and a full resync simply drops and rebuilds.
+Three rules keep the ledger honest:
+
+* **Entries are the truth; lots are derived.** A position's lots and realized
+  rows can be replayed from its entries at any time (:meth:`_replay_lots`).
+* **One opening balance per position**, and it covers only what the chain
+  sweep cannot explain: ``balance − (scanned in − scanned out)``. It is
+  recomputed after every sweep, so a transfer scanned later shrinks or
+  removes it instead of being counted twice. Openings are never booked
+  before the first sweep of a wallet/chain has run.
+* **A full rebuild is atomic and resumable.** The sweep lands in shadow
+  tables (``rebuild_logs``/``rebuild_state``) while the live ledger keeps
+  serving; the swap-in happens in one transaction; an interrupted sweep
+  resumes from where it stopped.
 """
 
 from __future__ import annotations
@@ -16,12 +27,14 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 
 from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec
 from agentos.trading.evm import EvmClient, TransferLog
-from agentos.trading.ledger import Ledger
+from agentos.trading.ledger import OPENING_NOTE, Ledger
 from agentos.trading.pnl import per_raw, sell_fifo, to_human
 from agentos.trading.prices import PriceService, TokenMeta
 from agentos.trading.vault import WalletRecord
@@ -35,8 +48,25 @@ WatchFn = Callable[[ChainSpec], Awaitable[list[str]]]
 # An imported wallet's first sweep: about a day on Base, an hour on Robinhood.
 DEFAULT_INITIAL_LOOKBACK = 50_000
 DEFAULT_FULL_LOOKBACK = 2_000_000
+# A rebuild sweeps backwards in windows this many node-spans wide, so
+# progress is persisted often enough that an interruption costs little.
+REBUILD_WINDOW_SPANS = 10
 # Ignore native dust drift below this (gas of a tx we did not see).
 NATIVE_DUST_WEI = 10**13
+
+Priced = tuple[float | None, str]
+
+
+@dataclass
+class TxGroup:
+    """One transaction's net effect on a wallet, as seen through Transfer logs."""
+
+    tx_hash: str
+    block: int
+    log_index: int
+    ts: float
+    ins: dict[str, int] = field(default_factory=dict)
+    outs: dict[str, int] = field(default_factory=dict)
 
 
 class WalletSyncer:
@@ -61,24 +91,27 @@ class WalletSyncer:
         self.initial_lookback = initial_lookback
         self.full_lookback = full_lookback
         self._block_ts: dict[tuple[int, int], int] = {}
+        # Progress of the rebuild in flight (for trading.status), else None.
+        self.rebuild_progress: dict[str, Any] | None = None
 
     # ── public ─────────────────────────────────────────────────────────
 
     async def sync(self, wallet: WalletRecord, chain: ChainSpec, *, full: bool = False) -> bool:
-        evm = self._evm_for(chain)
         address = wallet.key
+        # A rebuild that was interrupted (gateway restart) finishes first: its
+        # shadow sweep is already partly done, and the live ledger it will
+        # replace may be missing what the interruption cost.
+        if full or self.ledger.rebuild_state(chain.chain_id, address) is not None:
+            return await self.rebuild(wallet, chain)
+        evm = self._evm_for(chain)
         latest = await evm.block_number()
         state = self.ledger.sync_state(chain.chain_id, address)
-        if full:
-            self.ledger.delete_chain_history(address, chain.chain_id)
-            state = None
         if state is None:
             created = wallet.created_block.get(str(chain.chain_id))
-            if created is not None and not full:
+            if created is not None:
                 start = int(created)
             else:
-                lookback = self.full_lookback if full else self.initial_lookback
-                start = max(0, latest - lookback)
+                start = max(0, latest - self.initial_lookback)
             oldest: int | None = start
         else:
             start = int(state["last_block"]) + 1
@@ -88,35 +121,238 @@ class WalletSyncer:
             logs = await evm.transfer_logs(address, from_block=start, to_block=latest)
             changed = await self._record_transfers(wallet, chain, logs) or changed
         changed = await self._reconcile_native(wallet, chain, evm) or changed
-        changed = await self._refresh_balances(wallet, chain, evm) or changed
+        await self._refresh_balances(wallet, chain, evm)
+        changed = await self._reconcile_openings(wallet, chain) or changed
         await self._snapshot_prices(wallet, chain)
         self.ledger.set_sync_state(chain.chain_id, address, last_block=latest, oldest_block=oldest)
         return changed
 
+    async def rebuild(self, wallet: WalletRecord, chain: ChainSpec) -> bool:
+        """Rebuild one wallet/chain from the chain: sweep into the shadow, then swap in."""
+        evm = self._evm_for(chain)
+        address = wallet.key
+        state = self.ledger.rebuild_state(chain.chain_id, address)
+        if state is None:
+            latest = await evm.block_number()
+            created = wallet.created_block.get(str(chain.chain_id))
+            if created is not None:
+                target_from = int(created)
+            else:
+                target_from = max(0, latest - self.full_lookback)
+            scanned_down_to = latest + 1
+            self.ledger.clear_rebuild(chain.chain_id, address)
+            self.ledger.set_rebuild_state(
+                chain.chain_id,
+                address,
+                latest=latest,
+                target_from=target_from,
+                scanned_down_to=scanned_down_to,
+            )
+        else:
+            latest = int(state["latest"])
+            target_from = int(state["target_from"])
+            scanned_down_to = int(state["scanned_down_to"])
+
+        window = max(1, evm.max_log_span) * REBUILD_WINDOW_SPANS
+        total = max(1, latest + 1 - target_from)
+        try:
+            while scanned_down_to > target_from:
+                lo = max(target_from, scanned_down_to - window)
+                self._progress(chain, address, latest, target_from, scanned_down_to, "sweep")
+                logs = await evm.transfer_logs(address, from_block=lo, to_block=scanned_down_to - 1)
+                self.ledger.add_rebuild_logs(
+                    chain.chain_id,
+                    address,
+                    [
+                        {
+                            "tx_hash": t.tx_hash,
+                            "log_index": t.log_index,
+                            "block_number": t.block_number,
+                            "token": t.token,
+                            "sender": t.sender,
+                            "recipient": t.recipient,
+                            "amount": t.amount,
+                        }
+                        for t in logs
+                    ],
+                )
+                scanned_down_to = lo
+                self.ledger.set_rebuild_state(
+                    chain.chain_id,
+                    address,
+                    latest=latest,
+                    target_from=target_from,
+                    scanned_down_to=scanned_down_to,
+                )
+            self._progress(chain, address, latest, target_from, target_from, "book")
+            await self._swap_in(wallet, chain, evm, latest=latest, oldest=target_from)
+        finally:
+            self.rebuild_progress = None
+        log.info("trading.rebuilt", chain=chain.key, wallet=address, blocks=total)
+        return True
+
+    def _progress(
+        self, chain: ChainSpec, wallet: str, latest: int, target: int, down_to: int, phase: str
+    ) -> None:
+        span = max(1, latest + 1 - target)
+        done = max(0, latest + 1 - down_to)
+        self.rebuild_progress = {
+            "chainId": chain.chain_id,
+            "wallet": wallet,
+            "latest": latest,
+            "from": target,
+            "scannedDownTo": down_to,
+            "pct": round(min(100.0, 100.0 * done / span), 1),
+            "phase": phase,
+        }
+
+    # ── rebuild: swap-in ───────────────────────────────────────────────
+
+    async def _swap_in(
+        self, wallet: WalletRecord, chain: ChainSpec, evm: EvmClient, *, latest: int, oldest: int
+    ) -> None:
+        address = wallet.key
+        logs = [
+            TransferLog(
+                tx_hash=str(r["tx_hash"]),
+                log_index=int(r["log_index"]),
+                block_number=int(r["block_number"]),
+                token=str(r["token"]),
+                sender=str(r["sender"]),
+                recipient=str(r["recipient"]),
+                amount=int(r["amount"]),
+            )
+            for r in self.ledger.rebuild_logs(chain.chain_id, address)
+        ]
+        orders = self.ledger.confirmed_orders(address, chain.chain_id)
+        own_tx = {str(o["tx_hash"]).lower() for o in orders}
+        foreign = [t for t in logs if t.tx_hash not in own_tx]
+        groups = await self._group_transfers(chain, address, foreign)
+
+        # Every event in time order: scanned transactions and our own swaps.
+        events: list[tuple[float, int, str, Any]] = [(g.ts, g.block, "tx", g) for g in groups]
+        for o in orders:
+            events.append((float(o["updated_at"]), 0, "order", o))
+        events.sort(key=lambda e: (e[0], e[1]))
+
+        # What the chain holds now, and how much of it the events explain.
+        native_now = await evm.get_balance(wallet.address)
+        tokens: set[str] = {t.token for t in logs}
+        for o in orders:
+            for key in ("token_in", "token_out", "delivered_token"):
+                token = str(o.get(key) or "").lower()
+                if token and token != NATIVE_ADDRESS:
+                    tokens.add(token)
+        if self._watch_tokens is not None:
+            tokens.update(t.lower() for t in await self._watch_tokens(chain) if t)
+        erc20_now = await evm.erc20_balances(wallet.address, sorted(tokens)) if tokens else {}
+        net: dict[str, int] = defaultdict(int)
+        for g in groups:
+            for token, amount in g.ins.items():
+                net[token] += amount
+            for token, amount in g.outs.items():
+                net[token] -= amount
+        for o in orders:
+            spent, received, token_in, token_out, _gas = _order_legs(o)
+            net[token_in] -= spent
+            net[token_out] += received
+        openings: dict[str, int] = {}
+        for token, balance in {**erc20_now, NATIVE_ADDRESS: native_now}.items():
+            unexplained = int(balance) - net.get(token, 0)
+            if unexplained > 0:
+                openings[token] = unexplained
+        first_ts = events[0][0] if events else self._now()
+        opening_ts = min(first_ts - 1, self._now())
+
+        # Resolve every price and token before touching the ledger, so the
+        # transaction below never waits on the network.
+        metas: dict[str, TokenMeta] = {}
+        priced: dict[tuple[str, int], Priced] = {}
+
+        async def prepare(token: str, ts: float) -> None:
+            if token not in metas:
+                metas[token] = await self._token_meta(chain, token)
+            key = (token, int(ts))
+            if key not in priced:
+                priced[key] = await self._price_for(chain, token, ts)
+
+        for token in openings:
+            await prepare(token, opening_ts)
+        for _ts, _block, kind, payload in events:
+            if kind == "tx":
+                for token in [*payload.ins, *payload.outs]:
+                    await prepare(token, payload.ts)
+            else:
+                _spent, _received, token_in, token_out, _gas = _order_legs(payload)
+                await prepare(token_in, _ts)
+                await prepare(token_out, _ts)
+                await prepare(NATIVE_ADDRESS, _ts)
+
+        with self.ledger.transaction():
+            self.ledger.delete_chain_history(address, chain.chain_id)
+            for token, amount in openings.items():
+                await self._book_deposit(
+                    wallet,
+                    chain,
+                    token,
+                    amount,
+                    opening_ts,
+                    tx_hash=None,
+                    log_index=0,
+                    note=OPENING_NOTE,
+                    meta=metas[token],
+                    priced=priced[(token, int(opening_ts))],
+                )
+            for ts, _block, kind, payload in events:
+                if kind == "tx":
+                    await self._book_group(wallet, chain, payload, metas=metas, priced=priced)
+                else:
+                    spent, received, token_in, token_out, gas_wei = _order_legs(payload)
+                    eth_price = priced[(NATIVE_ADDRESS, int(ts))][0]
+                    gas_usd = (
+                        float(to_human(gas_wei, 18)) * eth_price
+                        if eth_price is not None and gas_wei
+                        else None
+                    )
+                    await self._book_swap(
+                        wallet,
+                        chain,
+                        token_in=token_in,
+                        amount_in=spent,
+                        token_out=token_out,
+                        amount_out=received,
+                        ts=ts,
+                        tx_hash=str(payload["tx_hash"]),
+                        log_index=0,
+                        initiator=str(payload.get("initiator") or "agent"),
+                        gas_usd=gas_usd,
+                        order_id=str(payload["order_id"]),
+                        session_key=payload.get("session_key"),
+                        note=payload.get("note"),
+                        metas=metas,
+                        priced=priced,
+                    )
+            for token, raw in erc20_now.items():
+                self.ledger.set_balance(chain.chain_id, address, token, raw)
+            self.ledger.set_balance(chain.chain_id, address, NATIVE_ADDRESS, native_now)
+            self.ledger.set_sync_state(
+                chain.chain_id, address, last_block=latest, oldest_block=oldest
+            )
+            self.ledger.clear_rebuild(chain.chain_id, address)
+        await self._snapshot_prices(wallet, chain)
+
     # ── transfers ──────────────────────────────────────────────────────
 
-    async def _record_transfers(
-        self, wallet: WalletRecord, chain: ChainSpec, logs: list[TransferLog]
-    ) -> bool:
-        address = wallet.key
+    async def _group_transfers(
+        self, chain: ChainSpec, address: str, logs: list[TransferLog]
+    ) -> list[TxGroup]:
         by_tx: dict[str, list[TransferLog]] = defaultdict(list)
         for entry in logs:
             by_tx[entry.tx_hash].append(entry)
-        changed = False
-        in_flight = {
-            str(o.get("tx_hash") or "").lower()
-            for o in self.ledger.list_orders(status="submitted,approved", wallet=address)
-            if o.get("tx_hash")
-        }
+        groups: list[TxGroup] = []
         for tx_hash, group in by_tx.items():
-            if self.ledger.entries_for_tx(address, tx_hash):
-                continue  # our own confirmed order, or already synced
-            if tx_hash in in_flight:
-                continue  # the confirmation path records it
             ins: dict[str, int] = defaultdict(int)
             outs: dict[str, int] = defaultdict(int)
-            first_log_index = min(t.log_index for t in group)
-            block = group[0].block_number
             for transfer in group:
                 if transfer.recipient == address and transfer.sender != address:
                     ins[transfer.token] += transfer.amount
@@ -126,35 +362,95 @@ class WalletSyncer:
             outs = {k: v for k, v in outs.items() if v > 0}
             if not ins and not outs:
                 continue
-            ts = await self._timestamp(chain, block)
-            if ins and not outs:
-                for token, amount in ins.items():
-                    if await self._book_deposit(
-                        wallet, chain, token, amount, ts, tx_hash=tx_hash, log_index=first_log_index
-                    ):
-                        changed = True
-            elif outs and not ins:
-                for token, amount in outs.items():
-                    if await self._book_withdraw(
-                        wallet, chain, token, amount, ts, tx_hash=tx_hash, log_index=first_log_index
-                    ):
-                        changed = True
-            else:
-                token_in, amount_in = max(outs.items(), key=lambda kv: kv[1])
-                token_out, amount_out = max(ins.items(), key=lambda kv: kv[1])
-                if await self._book_swap(
+            block = group[0].block_number
+            groups.append(
+                TxGroup(
+                    tx_hash=tx_hash,
+                    block=block,
+                    log_index=min(t.log_index for t in group),
+                    ts=await self._timestamp(chain, block),
+                    ins=dict(ins),
+                    outs=dict(outs),
+                )
+            )
+        groups.sort(key=lambda g: (g.block, g.log_index))
+        return groups
+
+    async def _record_transfers(
+        self, wallet: WalletRecord, chain: ChainSpec, logs: list[TransferLog]
+    ) -> bool:
+        address = wallet.key
+        in_flight = {
+            str(o.get("tx_hash") or "").lower()
+            for o in self.ledger.list_orders(status="submitted,approved", wallet=address)
+            if o.get("tx_hash")
+        }
+        changed = False
+        for group in await self._group_transfers(chain, address, logs):
+            if self.ledger.entries_for_tx(address, group.tx_hash):
+                continue  # our own confirmed order, or already synced
+            if group.tx_hash in in_flight:
+                continue  # the confirmation path records it
+            changed = await self._book_group(wallet, chain, group) or changed
+        return changed
+
+    async def _book_group(
+        self,
+        wallet: WalletRecord,
+        chain: ChainSpec,
+        group: TxGroup,
+        *,
+        metas: dict[str, TokenMeta] | None = None,
+        priced: dict[tuple[str, int], Priced] | None = None,
+    ) -> bool:
+        changed = False
+        ins, outs = group.ins, group.outs
+        if ins and not outs:
+            for token, amount in ins.items():
+                if await self._book_deposit(
                     wallet,
                     chain,
-                    token_in=token_in,
-                    amount_in=amount_in,
-                    token_out=token_out,
-                    amount_out=amount_out,
-                    ts=ts,
-                    tx_hash=tx_hash,
-                    log_index=first_log_index,
-                    initiator="external",
+                    token,
+                    amount,
+                    group.ts,
+                    tx_hash=group.tx_hash,
+                    log_index=group.log_index,
+                    meta=_pick(metas, token),
+                    priced=_pick(priced, (token, int(group.ts))),
                 ):
                     changed = True
+        elif outs and not ins:
+            for token, amount in outs.items():
+                if await self._book_withdraw(
+                    wallet,
+                    chain,
+                    token,
+                    amount,
+                    group.ts,
+                    tx_hash=group.tx_hash,
+                    log_index=group.log_index,
+                    meta=_pick(metas, token),
+                    priced=_pick(priced, (token, int(group.ts))),
+                ):
+                    changed = True
+        else:
+            token_in, amount_in = max(outs.items(), key=lambda kv: kv[1])
+            token_out, amount_out = max(ins.items(), key=lambda kv: kv[1])
+            if await self._book_swap(
+                wallet,
+                chain,
+                token_in=token_in,
+                amount_in=amount_in,
+                token_out=token_out,
+                amount_out=amount_out,
+                ts=group.ts,
+                tx_hash=group.tx_hash,
+                log_index=group.log_index,
+                initiator="external",
+                metas=metas,
+                priced=priced,
+            ):
+                changed = True
         return changed
 
     async def _timestamp(self, chain: ChainSpec, block: int) -> float:
@@ -173,7 +469,7 @@ class WalletSyncer:
 
     # ── booking helpers (shared with the service) ──────────────────────
 
-    async def _price_for(self, chain: ChainSpec, token: str, ts: float) -> tuple[float | None, str]:
+    async def _price_for(self, chain: ChainSpec, token: str, ts: float) -> Priced:
         """USD price of one whole token at ``ts`` and where it came from."""
         recent = abs(self._now() - ts) < 3600
         if not recent:
@@ -196,9 +492,11 @@ class WalletSyncer:
         tx_hash: str | None,
         log_index: int,
         note: str | None = None,
+        meta: TokenMeta | None = None,
+        priced: Priced | None = None,
     ) -> bool:
-        meta = await self._token_meta(chain, token)
-        price, source = await self._price_for(chain, token, ts)
+        meta = meta or await self._token_meta(chain, token)
+        price, source = priced if priced is not None else await self._price_for(chain, token, ts)
         value = float(to_human(amount, meta.decimals)) * price if price is not None else None
         entry_id = self.ledger.insert_entry(
             ts=ts,
@@ -239,9 +537,11 @@ class WalletSyncer:
         tx_hash: str | None,
         log_index: int,
         note: str | None = None,
+        meta: TokenMeta | None = None,
+        priced: Priced | None = None,
     ) -> bool:
-        meta = await self._token_meta(chain, token)
-        price, source = await self._price_for(chain, token, ts)
+        meta = meta or await self._token_meta(chain, token)
+        price, source = priced if priced is not None else await self._price_for(chain, token, ts)
         value = float(to_human(amount, meta.decimals)) * price if price is not None else None
         entry_id = self.ledger.insert_entry(
             ts=ts,
@@ -280,11 +580,17 @@ class WalletSyncer:
         order_id: str | None = None,
         session_key: str | None = None,
         note: str | None = None,
+        metas: dict[str, TokenMeta] | None = None,
+        priced: dict[tuple[str, int], Priced] | None = None,
     ) -> bool:
-        meta_in = await self._token_meta(chain, token_in)
-        meta_out = await self._token_meta(chain, token_out)
-        price_in, source_in = await self._price_for(chain, token_in, ts)
-        price_out, source_out = await self._price_for(chain, token_out, ts)
+        meta_in = _pick(metas, token_in) or await self._token_meta(chain, token_in)
+        meta_out = _pick(metas, token_out) or await self._token_meta(chain, token_out)
+        pin = _pick(priced, (token_in, int(ts)))
+        pout = _pick(priced, (token_out, int(ts)))
+        price_in, source_in = pin if pin is not None else await self._price_for(chain, token_in, ts)
+        price_out, source_out = (
+            pout if pout is not None else await self._price_for(chain, token_out, ts)
+        )
         human_in = float(to_human(amount_in, meta_in.decimals))
         human_out = float(to_human(amount_out, meta_out.decimals))
         value: float | None
@@ -358,6 +664,92 @@ class WalletSyncer:
                 ts=ts,
             )
 
+    # ── openings ───────────────────────────────────────────────────────
+
+    async def _reconcile_openings(
+        self, wallet: WalletRecord, chain: ChainSpec, tokens: list[str] | None = None
+    ) -> bool:
+        """Make each ERC-20 position's opening entry equal what the sweep cannot explain.
+
+        ``balance − (scanned in − scanned out)``: zero or less means the sweep
+        explains everything and any opening goes; a change replays the
+        position's lots so FIFO cost basis follows the entries.
+        """
+        address = wallet.key
+        wanted = tokens if tokens is not None else await self.tokens_of_interest(address, chain)
+        changed = False
+        for token in wanted:
+            token = token.lower()
+            if token == NATIVE_ADDRESS:
+                continue
+            balance = self.ledger.get_balance(chain.chain_id, address, token)
+            if balance is None:
+                continue
+            net = self.ledger.scanned_net_raw(chain.chain_id, address, token)
+            target = max(0, int(balance) - net)
+            existing = self.ledger.opening_entry(chain.chain_id, address, token)
+            current = int(existing["amount_out_raw"]) if existing else 0
+            if target == current:
+                continue
+            others = [
+                e
+                for e in self.ledger.token_entries(chain.chain_id, address, token)
+                if not (e["tx_hash"] is None and e.get("note") == OPENING_NOTE)
+            ]
+            first_ts = min((float(e["ts"]) for e in others), default=None)
+            ts = min(first_ts - 1, self._now()) if first_ts is not None else self._now()
+            meta = await self._token_meta(chain, token)
+            price = await self._price_for(chain, token, ts) if target > 0 else (None, "unknown")
+            with self.ledger.transaction():
+                if existing:
+                    self.ledger.delete_entry(int(existing["id"]))
+                if target > 0:
+                    await self._book_deposit(
+                        wallet,
+                        chain,
+                        token,
+                        target,
+                        ts,
+                        tx_hash=None,
+                        log_index=0,
+                        note=OPENING_NOTE,
+                        meta=meta,
+                        priced=price,
+                    )
+                self._replay_lots(chain, address, token)
+            changed = True
+        return changed
+
+    def _replay_lots(self, chain: ChainSpec, wallet: str, token: str) -> None:
+        """Rebuild one position's lots and realized rows from its entries, oldest first."""
+        self.ledger.reset_token_lots(chain.chain_id, wallet, token)
+        for e in self.ledger.token_entries(chain.chain_id, wallet, token):
+            ts = float(e["ts"])
+            entry_id = int(e["id"])
+            value = e.get("value_usd")
+            if e.get("token_in") == token and e.get("amount_in_raw"):
+                self._consume(
+                    chain,
+                    wallet,
+                    token,
+                    int(e["amount_in_raw"]),
+                    float(value) if value is not None else None,
+                    ts,
+                    entry_id,
+                )
+            if e.get("token_out") == token and e.get("amount_out_raw"):
+                amount = int(e["amount_out_raw"])
+                cost_per_raw = (float(value) / amount) if value is not None and amount else 0.0
+                self.ledger.add_lot(
+                    chain.chain_id,
+                    wallet,
+                    token,
+                    amount_raw=amount,
+                    cost_usd_per_raw=cost_per_raw,
+                    acquired_at=ts,
+                    entry_id=entry_id,
+                )
+
     # ── native / balances / snapshots ──────────────────────────────────
 
     async def _reconcile_native(
@@ -368,7 +760,8 @@ class WalletSyncer:
         changed = False
         ts = self._now()
         if cached is None:
-            if balance > 0:
+            opened = self.ledger.opening_entry(chain.chain_id, wallet.key, NATIVE_ADDRESS)
+            if balance > 0 and opened is None:
                 changed = await self._book_deposit(
                     wallet,
                     chain,
@@ -376,8 +769,8 @@ class WalletSyncer:
                     balance,
                     ts,
                     tx_hash=None,
-                    log_index=int(ts),
-                    note="opening balance",
+                    log_index=0,
+                    note=OPENING_NOTE,
                 )
         else:
             diff = balance - cached
@@ -410,52 +803,29 @@ class WalletSyncer:
     async def ensure_opening(
         self, wallet: WalletRecord, chain: ChainSpec, token: str, evm: EvmClient
     ) -> bool:
-        """First sight of a token in a wallet: book what is there as an opening lot."""
-        if self.ledger.get_balance(chain.chain_id, wallet.key, token) is not None:
-            return False
+        """First sight of a token in a wallet: read it, and book the unexplained part.
+
+        Before the first sweep of this wallet/chain nothing is booked — the
+        sweep owns openings, otherwise the same tokens would be counted once
+        here and again when their transfers are scanned.
+        """
         if token == NATIVE_ADDRESS:
             return await self._reconcile_native(wallet, chain, evm)
         raw = await evm.erc20_balance_of(token, wallet.address)
-        # Only the part the lots cannot explain is an opening balance; the
-        # rest arrived through Transfer logs the sweep already booked.
-        held = sum(
-            lot.amount_raw for lot in self.ledger.open_lots(chain.chain_id, wallet.key, token)
-        )
-        unexplained = raw - held
-        changed = False
-        if unexplained > 0:
-            ts = self._now()
-            changed = await self._book_deposit(
-                wallet,
-                chain,
-                token,
-                unexplained,
-                ts,
-                tx_hash=None,
-                log_index=int(ts),
-                note="opening balance",
-            )
         self.ledger.set_balance(chain.chain_id, wallet.key, token, raw)
-        return changed
+        if self.ledger.sync_state(chain.chain_id, wallet.key) is None:
+            return False
+        return await self._reconcile_openings(wallet, chain, tokens=[token])
 
     async def _refresh_balances(
         self, wallet: WalletRecord, chain: ChainSpec, evm: EvmClient
-    ) -> bool:
+    ) -> None:
         tokens = await self.tokens_of_interest(wallet.key, chain)
         if not tokens:
-            return False
-        changed = False
-        fresh = [
-            t for t in tokens if self.ledger.get_balance(chain.chain_id, wallet.key, t) is None
-        ]
-        for token in fresh:
-            changed = await self.ensure_opening(wallet, chain, token, evm) or changed
-        known = [t for t in tokens if t not in fresh]
-        if known:
-            balances = await evm.erc20_balances(wallet.address, known)
-            for token, raw in balances.items():
-                self.ledger.set_balance(chain.chain_id, wallet.key, token, raw)
-        return changed
+            return
+        balances = await evm.erc20_balances(wallet.address, tokens)
+        for token, raw in balances.items():
+            self.ledger.set_balance(chain.chain_id, wallet.key, token, raw)
 
     async def _snapshot_prices(self, wallet: WalletRecord, chain: ChainSpec) -> None:
         tokens = [
@@ -469,6 +839,20 @@ class WalletSyncer:
         for token, info in prices.items():
             if info.price_usd is not None:
                 self.ledger.add_snapshot(chain.chain_id, token, ts, info.price_usd)
+
+
+def _order_legs(order: dict[str, Any]) -> tuple[int, int, str, str, int]:
+    """(spent_raw, received_raw, token_in, token_out, gas_wei) of a confirmed order."""
+    spent = int(order.get("spent_in_raw") or order.get("amount_raw") or 0)
+    received = int(order.get("received_out_raw") or order.get("expected_out_raw") or 0)
+    token_in = str(order["token_in"]).lower()
+    token_out = str(order.get("delivered_token") or order["token_out"]).lower()
+    gas_wei = int(order.get("gas_wei") or 0)
+    return spent, received, token_in, token_out, gas_wei
+
+
+def _pick(table: dict[Any, Any] | None, key: Any) -> Any:
+    return table.get(key) if table else None
 
 
 def summarize_transfers(logs: list[TransferLog], wallet: str) -> dict[str, dict[str, int]]:

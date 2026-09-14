@@ -15,6 +15,8 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +24,9 @@ from typing import Any
 from agentos.paths import state_dir
 from agentos.trading.pnl import Lot
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+OPENING_NOTE = "opening balance"
 
 ENTRY_KINDS = ("swap", "deposit", "withdraw", "approval", "gas", "unwrap")
 ORDER_STATUSES = (
@@ -181,7 +185,38 @@ CREATE TABLE IF NOT EXISTS balances (
     updated_at REAL NOT NULL,
     PRIMARY KEY (chain_id, wallet, token)
 );
+
+-- A full rebuild sweeps into these shadow tables and swaps in only when the
+-- sweep is complete, so the live ledger keeps serving meanwhile and an
+-- interrupted rebuild resumes from scanned_down_to instead of starting over.
+CREATE TABLE IF NOT EXISTS rebuild_state (
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    latest INTEGER NOT NULL,
+    target_from INTEGER NOT NULL,
+    scanned_down_to INTEGER NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (chain_id, wallet)
+);
+CREATE TABLE IF NOT EXISTS rebuild_logs (
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    tx_hash TEXT NOT NULL,
+    log_index INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    token TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    amount TEXT NOT NULL,
+    PRIMARY KEY (chain_id, wallet, tx_hash, log_index)
+);
 """
+
+# One opening balance per position: the amount the chain sweep cannot explain.
+_OPENING_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_opening ON entries "
+    "(chain_id, wallet, token_out) WHERE tx_hash IS NULL AND note = 'opening balance'"
+)
 
 
 def default_ledger_path() -> Path:
@@ -220,12 +255,15 @@ class Ledger:
         self._lock = threading.RLock()
         if str(target) != ":memory:":
             target.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(os.fspath(target), timeout=30.0, check_same_thread=False)
+        self._conn = sqlite3.connect(
+            os.fspath(target), timeout=30.0, check_same_thread=False, isolation_level=None
+        )
         self._conn.row_factory = sqlite3.Row
         if str(target) != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
+        self._txn_depth = 0
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -236,7 +274,56 @@ class Ledger:
                 self._conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
                 )
+            elif int(row["version"]) < 2:
+                self._dedupe_openings()
+                self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+            self._conn.execute(_OPENING_INDEX)
+            self._commit()
+
+    def _dedupe_openings(self) -> None:
+        """Version 1 could book the same opening twice; keep the newest per position."""
+        rows = _rows(
+            self._conn.execute(
+                "SELECT id, chain_id, wallet, token_out FROM entries WHERE tx_hash IS NULL "
+                "AND note = ? ORDER BY ts DESC, id DESC",
+                (OPENING_NOTE,),
+            )
+        )
+        seen: set[tuple[int, str, str]] = set()
+        for r in rows:
+            key = (int(r["chain_id"]), str(r["wallet"]), str(r["token_out"]))
+            if key in seen:
+                self._delete_entry_rows(int(r["id"]))
+            seen.add(key)
+
+    def _commit(self) -> None:
+        """Commit unless a :meth:`transaction` is open, which commits at its end."""
+        if self._txn_depth == 0 and self._conn.in_transaction:
             self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Group writes so they land together or not at all.
+
+        Nested use joins the outer transaction. Any exception rolls the whole
+        group back, and so does the process dying: SQLite never exposes a
+        half-written group.
+        """
+        with self._lock:
+            if self._txn_depth == 0:
+                self._conn.execute("BEGIN IMMEDIATE")
+            self._txn_depth += 1
+            try:
+                yield
+            except BaseException:
+                self._txn_depth -= 1
+                if self._txn_depth == 0:
+                    self._conn.rollback()
+                raise
+            else:
+                self._txn_depth -= 1
+                if self._txn_depth == 0:
+                    self._commit()
 
     def close(self) -> None:
         with self._lock:
@@ -266,7 +353,7 @@ class Ledger:
                     json.dumps(created_block or {}),
                 ),
             )
-            self._conn.commit()
+            self._commit()
 
     def remove_wallet(self, address: str) -> None:
         key = address.lower()
@@ -274,7 +361,7 @@ class Ledger:
             for table in ("wallets", "entries", "lots", "realized", "sync_state", "balances"):
                 column = "address" if table == "wallets" else "wallet"
                 self._conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (key,))  # noqa: S608
-            self._conn.commit()
+            self._commit()
 
     # ── tokens ─────────────────────────────────────────────────────────
 
@@ -314,7 +401,7 @@ class Ledger:
                     time.time(),
                 ),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_token(self, chain_id: int, address: str) -> dict[str, Any] | None:
         with self._lock:
@@ -370,16 +457,14 @@ class Ledger:
                 value = 0
             values.append(value)
         with self._lock:
-            try:
-                cursor = self._conn.execute(
-                    f"INSERT INTO entries ({', '.join(columns)}) "  # noqa: S608
-                    f"VALUES ({', '.join('?' for _ in columns)})",
-                    values,
-                )
-            except sqlite3.IntegrityError:
-                self._conn.rollback()
+            cursor = self._conn.execute(
+                f"INSERT OR IGNORE INTO entries ({', '.join(columns)}) "  # noqa: S608
+                f"VALUES ({', '.join('?' for _ in columns)})",
+                values,
+            )
+            if cursor.rowcount == 0:
                 return None
-            self._conn.commit()
+            self._commit()
             return int(cursor.lastrowid or 0)
 
     def entry_exists(self, wallet: str, kind: str, tx_hash: str | None, log_index: int) -> bool:
@@ -415,7 +500,7 @@ class Ledger:
                 f"UPDATE entries SET {sets} WHERE id = ?",  # noqa: S608
                 [*fields.values(), entry_id],
             )
-            self._conn.commit()
+            self._commit()
 
     def list_entries(
         self,
@@ -450,6 +535,152 @@ class Ledger:
                 )
             )
 
+    def opening_entry(self, chain_id: int, wallet: str, token: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM entries WHERE chain_id = ? AND wallet = ? AND token_out = ? "
+                    "AND tx_hash IS NULL AND note = ?",
+                    (chain_id, wallet.lower(), token.lower(), OPENING_NOTE),
+                ).fetchone()
+            )
+
+    def _delete_entry_rows(self, entry_id: int) -> None:
+        self._conn.execute("DELETE FROM lots WHERE entry_id = ?", (entry_id,))
+        self._conn.execute("DELETE FROM realized WHERE entry_id = ?", (entry_id,))
+        self._conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+
+    def delete_entry(self, entry_id: int) -> None:
+        """Remove one entry with the lot and realized rows it produced."""
+        with self._lock:
+            self._delete_entry_rows(entry_id)
+            self._commit()
+
+    def token_entries(self, chain_id: int, wallet: str, token: str) -> list[dict[str, Any]]:
+        """Every entry that moved ``token`` in this position, oldest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM entries WHERE chain_id = ? AND wallet = ? "
+                    "AND (token_in = ? OR token_out = ?) ORDER BY ts, id",
+                    (chain_id, wallet.lower(), token.lower(), token.lower()),
+                )
+            )
+
+    def scanned_net_raw(self, chain_id: int, wallet: str, token: str) -> int:
+        """Inbound minus outbound raw for ``token`` from every entry except the opening."""
+        net = 0
+        for e in self.token_entries(chain_id, wallet, token):
+            if e["tx_hash"] is None and e.get("note") == OPENING_NOTE:
+                continue
+            if e.get("token_out") == token.lower() and e.get("amount_out_raw"):
+                net += int(e["amount_out_raw"])
+            if e.get("token_in") == token.lower() and e.get("amount_in_raw"):
+                net -= int(e["amount_in_raw"])
+        return net
+
+    def reset_token_lots(self, chain_id: int, wallet: str, token: str) -> None:
+        """Drop the derived lot/realized rows of one position ahead of a replay."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM lots WHERE chain_id = ? AND wallet = ? AND token = ?",
+                (chain_id, wallet.lower(), token.lower()),
+            )
+            self._conn.execute(
+                "DELETE FROM realized WHERE chain_id = ? AND wallet = ? AND token = ?",
+                (chain_id, wallet.lower(), token.lower()),
+            )
+            self._commit()
+
+    def confirmed_orders(self, wallet: str, chain_id: int) -> list[dict[str, Any]]:
+        """Our own settled swaps, oldest first: the part of history the chain cannot tell us."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE wallet = ? AND chain_id = ? "
+                    "AND status = 'confirmed' AND tx_hash IS NOT NULL "
+                    "ORDER BY updated_at, order_id",
+                    (wallet.lower(), chain_id),
+                )
+            )
+
+    # ── rebuild shadow ─────────────────────────────────────────────────
+
+    def rebuild_state(self, chain_id: int, wallet: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM rebuild_state WHERE chain_id = ? AND wallet = ?",
+                    (chain_id, wallet.lower()),
+                ).fetchone()
+            )
+
+    def set_rebuild_state(
+        self, chain_id: int, wallet: str, *, latest: int, target_from: int, scanned_down_to: int
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO rebuild_state (chain_id, wallet, latest, target_from, "
+                "scanned_down_to, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(chain_id, wallet) DO UPDATE SET latest = excluded.latest, "
+                "target_from = excluded.target_from, scanned_down_to = excluded.scanned_down_to, "
+                "updated_at = excluded.updated_at",
+                (
+                    chain_id,
+                    wallet.lower(),
+                    int(latest),
+                    int(target_from),
+                    int(scanned_down_to),
+                    time.time(),
+                ),
+            )
+            self._commit()
+
+    def add_rebuild_logs(self, chain_id: int, wallet: str, logs: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR IGNORE INTO rebuild_logs (chain_id, wallet, tx_hash, log_index, "
+                "block_number, token, sender, recipient, amount) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        chain_id,
+                        wallet.lower(),
+                        str(item["tx_hash"]).lower(),
+                        int(item["log_index"]),
+                        int(item["block_number"]),
+                        str(item["token"]).lower(),
+                        str(item["sender"]).lower(),
+                        str(item["recipient"]).lower(),
+                        str(int(item["amount"])),
+                    )
+                    for item in logs
+                ],
+            )
+            self._commit()
+
+    def rebuild_logs(self, chain_id: int, wallet: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM rebuild_logs WHERE chain_id = ? AND wallet = ? "
+                    "ORDER BY block_number, log_index",
+                    (chain_id, wallet.lower()),
+                )
+            )
+
+    def clear_rebuild(self, chain_id: int, wallet: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM rebuild_logs WHERE chain_id = ? AND wallet = ?",
+                (chain_id, wallet.lower()),
+            )
+            self._conn.execute(
+                "DELETE FROM rebuild_state WHERE chain_id = ? AND wallet = ?",
+                (chain_id, wallet.lower()),
+            )
+            self._commit()
+
     def delete_chain_history(self, wallet: str, chain_id: int) -> None:
         """Drop chain-derived rows for one wallet/chain so a full resync can rebuild them."""
         key = wallet.lower()
@@ -469,7 +700,7 @@ class Ledger:
             self._conn.execute(
                 "DELETE FROM balances WHERE wallet = ? AND chain_id = ?", (key, chain_id)
             )
-            self._conn.commit()
+            self._commit()
 
     # ── lots / realized ────────────────────────────────────────────────
 
@@ -498,7 +729,7 @@ class Ledger:
                     entry_id,
                 ),
             )
-            self._conn.commit()
+            self._commit()
             return int(cursor.lastrowid or 0)
 
     def open_lots(self, chain_id: int, wallet: str, token: str) -> list[Lot]:
@@ -530,7 +761,7 @@ class Ledger:
                     "UPDATE lots SET amount_raw_remaining = ? WHERE id = ?",
                     (str(max(0, int(lot.amount_raw))), lot.lot_id),
                 )
-            self._conn.commit()
+            self._commit()
 
     def lots_for_entry(self, entry_id: int) -> list[dict[str, Any]]:
         with self._lock:
@@ -542,7 +773,7 @@ class Ledger:
                 "UPDATE lots SET cost_usd_per_raw = ? WHERE id = ?",
                 (float(cost_usd_per_raw), lot_id),
             )
-            self._conn.commit()
+            self._commit()
 
     def positions(self, wallet: str | None = None) -> list[Position]:
         clause = "WHERE wallet = ?" if wallet else ""
@@ -597,7 +828,7 @@ class Ledger:
                     ts,
                 ),
             )
-            self._conn.commit()
+            self._commit()
 
     def realized_by_position(self, wallet: str | None = None) -> dict[tuple[int, str, str], float]:
         clause = "WHERE wallet = ?" if wallet else ""
@@ -635,7 +866,7 @@ class Ledger:
                 f"VALUES ({', '.join('?' for _ in columns)})",
                 [order[c] for c in columns],
             )
-            self._conn.commit()
+            self._commit()
 
     def update_order(self, order_id: str, **fields: Any) -> dict[str, Any] | None:
         fields["updated_at"] = time.time()
@@ -645,7 +876,7 @@ class Ledger:
                 f"UPDATE orders SET {sets} WHERE order_id = ?",  # noqa: S608
                 [*fields.values(), order_id],
             )
-            self._conn.commit()
+            self._commit()
         return self.get_order(order_id)
 
     def get_order(self, order_id: str) -> dict[str, Any] | None:
@@ -700,7 +931,7 @@ class Ledger:
                     "WHERE order_id = ?",
                     (now, row["order_id"]),
                 )
-            self._conn.commit()
+            self._commit()
         return [{**r, "status": "expired", "reason": "expired"} for r in rows]
 
     # ── daily spend ────────────────────────────────────────────────────
@@ -713,7 +944,7 @@ class Ledger:
                 "ON CONFLICT(wallet, day) DO UPDATE SET spent_usd = spent_usd + excluded.spent_usd",
                 (wallet.lower(), day, float(usd)),
             )
-            self._conn.commit()
+            self._commit()
 
     def spent_today(self, wallet: str, day: str | None = None) -> float:
         day = day or local_day()
@@ -746,7 +977,7 @@ class Ledger:
                 "updated_at = excluded.updated_at",
                 (chain_id, wallet.lower(), int(last_block), oldest_block, time.time()),
             )
-            self._conn.commit()
+            self._commit()
 
     def set_balance(self, chain_id: int, wallet: str, token: str, raw: int) -> None:
         with self._lock:
@@ -757,7 +988,7 @@ class Ledger:
                 "updated_at = excluded.updated_at",
                 (chain_id, wallet.lower(), token.lower(), str(int(raw)), time.time()),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_balance(self, chain_id: int, wallet: str, token: str) -> int | None:
         with self._lock:
@@ -793,7 +1024,7 @@ class Ledger:
                 "VALUES (?, ?, ?, ?)",
                 (chain_id, token.lower(), float(ts), float(price_usd)),
             )
-            self._conn.commit()
+            self._commit()
 
     def snapshots(self, chain_id: int, token: str, since: float) -> list[dict[str, Any]]:
         with self._lock:
@@ -808,4 +1039,4 @@ class Ledger:
     def prune_snapshots(self, older_than: float) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM price_snapshots WHERE ts < ?", (older_than,))
-            self._conn.commit()
+            self._commit()

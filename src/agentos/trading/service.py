@@ -393,6 +393,7 @@ class TradingService:
             "initialized": vault["initialized"],
             "walletCount": vault["walletCount"],
             "syncing": self.syncing,
+            "rebuild": self.syncer.rebuild_progress,
             "lastSyncAt": int(self.last_sync_at * 1000) if self.last_sync_at else None,
         }
 
@@ -907,6 +908,7 @@ class TradingService:
             "wallets": wallets_out,
             "updatedAt": int(self._now() * 1000),
             "syncing": self.syncing,
+            "rebuild": self.syncer.rebuild_progress,
         }
 
     @staticmethod

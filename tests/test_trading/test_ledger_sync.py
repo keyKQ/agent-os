@@ -424,3 +424,215 @@ class TestWalletSyncer:
 
     def test_robinhood_chain_spec_has_no_hardcoded_weth(self) -> None:
         assert ROBINHOOD.weth is None and BASE.weth is not None
+
+
+class TestLedgerRules:
+    """The rules that keep the ledger honest across sweeps and rebuilds."""
+
+    async def test_opening_is_never_double_counted(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        evm = syncer._evm_for(BASE)
+        wallet = _wallet(created_block=None)
+        chain.set_erc20(USDC, WALLET, 3)
+        # Before the first sweep nothing is booked: the sweep owns openings.
+        assert await syncer.ensure_opening(wallet, BASE, USDC, evm) is False
+        assert ledger.list_entries(wallet=WALLET) == []
+        assert ledger.get_balance(8453, WALLET, USDC) == 3
+
+        # The sweep sees 2 of the 3 arrive; the other 1 becomes the opening.
+        syncer.initial_lookback = 500
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=2, block=9_900)
+        await syncer.sync(wallet, BASE)
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert sorted((e["amount_out_raw"], e["note"]) for e in deposits) == [
+            ("1", "opening balance"),
+            ("2", None),
+        ]
+        # A second opening for the same position is refused by the schema.
+        assert (
+            ledger.insert_entry(
+                ts=1.0,
+                chain_id=8453,
+                wallet=WALLET,
+                kind="deposit",
+                tx_hash=None,
+                log_index=5,
+                token_out=USDC,
+                amount_out_raw=9,
+                note="opening balance",
+            )
+            is None
+        )
+        # Re-reading the balance (the balances RPC path) changes nothing.
+        assert await syncer.ensure_opening(wallet, BASE, USDC, evm) is False
+        assert len(ledger.list_entries(wallet=WALLET, kind="deposit")) == 2
+
+        # A rebuild that reaches the older transfer explains everything: the
+        # opening goes and each transfer appears exactly once.
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=1, block=9_000)
+        syncer.full_lookback = 5_000
+        await syncer.sync(wallet, BASE, full=True)
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert sorted((e["amount_out_raw"], e["note"]) for e in deposits) == [
+            ("1", None),
+            ("2", None),
+        ]
+        positions = {p.token: p for p in ledger.positions(WALLET)}
+        assert positions[USDC].amount_raw == 3
+
+    async def test_opening_shrinks_when_history_grows_and_lots_replay(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        wallet = _wallet(created_block=None)
+        syncer.initial_lookback = 100
+        chain.set_erc20(USDC, WALLET, 10)
+        await syncer.sync(wallet, BASE)  # nothing scanned: opening 10
+        opening = ledger.opening_entry(8453, WALLET, USDC)
+        assert opening and opening["amount_out_raw"] == "10"
+        # 4 of those 10 turn out to have been withdrawn and 14 deposited in a
+        # block the first sweep skipped; a rebuild reconciles: opening 0, and
+        # the withdrawal is consumed FIFO from the deposit's lot on replay.
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=14, block=9_950)
+        chain.add_transfer(token=USDC, sender=WALLET, recipient=OTHER, amount=4, block=9_960)
+        syncer.full_lookback = 200
+        await syncer.sync(wallet, BASE, full=True)
+        assert ledger.opening_entry(8453, WALLET, USDC) is None
+        kinds = sorted(e["kind"] for e in ledger.list_entries(wallet=WALLET))
+        assert kinds == ["deposit", "withdraw"]
+        positions = {p.token: p for p in ledger.positions(WALLET)}
+        assert positions[USDC].amount_raw == 10
+
+    async def test_rebuild_is_atomic_and_resumable(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        evm = syncer._evm_for(BASE)
+        wallet = _wallet(created_block=None)
+        syncer.initial_lookback = 100
+        syncer.full_lookback = 4_000
+        evm.max_log_span = 100  # rebuild windows of 1_000 blocks -> 4 windows
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=7, block=6_500)
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=5, block=9_950)
+        chain.set_erc20(USDC, WALLET, 12)
+        await syncer.sync(wallet, BASE)
+        before = ledger.list_entries(wallet=WALLET)
+        live_ids = {e["id"] for e in before}
+
+        # Interrupt the sweep after two windows: the live ledger is untouched
+        # and the shadow remembers how far it got.
+        original = evm.transfer_logs
+        calls = {"n": 0}
+
+        async def flaky(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise ConnectionError("gateway restarted")
+            return await original(*args, **kwargs)
+
+        evm.transfer_logs = flaky  # type: ignore[method-assign]
+        with pytest.raises(ConnectionError):
+            await syncer.sync(wallet, BASE, full=True)
+        assert {e["id"] for e in ledger.list_entries(wallet=WALLET)} == live_ids
+        state = ledger.rebuild_state(8453, WALLET)
+        assert state is not None and state["scanned_down_to"] == 10_001 - 2_000
+        assert syncer.rebuild_progress is None
+
+        # A plain sync resumes the pending rebuild and finishes it.
+        evm.transfer_logs = original  # type: ignore[method-assign]
+        await syncer.sync(wallet, BASE)
+        assert ledger.rebuild_state(8453, WALLET) is None
+        assert ledger.rebuild_logs(8453, WALLET) == []
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert sorted((e["amount_out_raw"], e["note"]) for e in deposits) == [
+            ("5", None),
+            ("7", None),
+        ]
+        assert ledger.sync_state(8453, WALLET)["oldest_block"] == 6_000
+        # Only the last two windows were re-swept after the resume.
+        assert calls["n"] == 3
+
+    async def test_rebuild_keeps_own_confirmed_swaps(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        wallet = _wallet(created_block=8_000)
+        # Our confirmed order: 0.0001 ETH -> 0.248936 USDC. The chain only shows
+        # the USDC Transfer (native input has no log).
+        tx = chain.add_transfer(
+            token=USDC, sender=OTHER, recipient=WALLET, amount=248_936, block=9_990
+        )
+        ledger.insert_order(
+            {
+                "order_id": "ord_1",
+                "created_at": 1_700_099_900.0,
+                "updated_at": 1_700_099_990.0,
+                "chain_id": 8453,
+                "wallet": WALLET,
+                "token_in": NATIVE_ADDRESS,
+                "token_out": USDC,
+                "amount_raw": str(10**14),
+                "amount_human": "0.0001",
+                "status": "confirmed",
+                "initiator": "agent",
+                "session_key": "agent:main:webchat:desk",
+                "tx_hash": tx,
+                "spent_in_raw": str(10**14),
+                "received_out_raw": "248936",
+                "gas_wei": str(10**12),
+                "delivered_token": USDC,
+            }
+        )
+        chain.set_erc20(USDC, WALLET, 248_936)
+        chain.set_native(WALLET, 10**14)  # what is left after the swap
+
+        await syncer.sync(wallet, BASE, full=True)
+        entries = ledger.list_entries(wallet=WALLET)
+        swaps = [e for e in entries if e["kind"] == "swap"]
+        assert len(swaps) == 1
+        swap = swaps[0]
+        assert swap["tx_hash"] == tx and swap["initiator"] == "agent"
+        assert swap["order_id"] == "ord_1" and swap["session_key"] == "agent:main:webchat:desk"
+        assert swap["amount_in_raw"] == str(10**14) and swap["amount_out_raw"] == "248936"
+        assert swap["gas_usd"] == pytest.approx(0.000001 * 2000.0)
+        # The USDC that arrived through the swap is not also a deposit.
+        assert [e for e in entries if e["kind"] == "deposit" and e["token_out"] == USDC] == []
+        # The native opening covers what the swap spent plus what is left.
+        native_opening = ledger.opening_entry(8453, WALLET, NATIVE_ADDRESS)
+        assert native_opening and native_opening["amount_out_raw"] == str(2 * 10**14)
+        positions = {p.token: p for p in ledger.positions(WALLET)}
+        assert positions[NATIVE_ADDRESS].amount_raw == 10**14
+        assert positions[USDC].amount_raw == 248_936
+        # And the same events stay unique on the next incremental sync.
+        assert await syncer.sync(wallet, BASE) is False
+        assert len(ledger.list_entries(wallet=WALLET)) == len(entries)
+
+
+class TestLedgerMigration:
+    def test_version_one_duplicate_openings_are_collapsed(self, tmp_path) -> None:
+        path = tmp_path / "trading.sqlite"
+        first = Ledger(path)
+        # Downgrade to the old schema shape: drop the index, mark version 1.
+        first._conn.execute("DROP INDEX IF EXISTS idx_entries_opening")
+        first._conn.execute("UPDATE schema_version SET version = 1")
+        for ts in (1.0, 2.0):
+            eid = first.insert_entry(
+                ts=ts,
+                chain_id=8453,
+                wallet=WALLET,
+                kind="deposit",
+                tx_hash=None,
+                log_index=int(ts),
+                token_out=USDC,
+                amount_out_raw=5,
+                note="opening balance",
+            )
+            first.add_lot(
+                8453, WALLET, USDC, amount_raw=5, cost_usd_per_raw=0, acquired_at=ts, entry_id=eid
+            )
+        first.close()
+        reopened = Ledger(path)
+        openings = [
+            e for e in reopened.list_entries(wallet=WALLET) if e["note"] == "opening balance"
+        ]
+        assert len(openings) == 1 and openings[0]["ts"] == 2.0
+        assert sum(p.amount_raw for p in reopened.positions(WALLET)) == 5
+        reopened.close()
