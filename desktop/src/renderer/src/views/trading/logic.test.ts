@@ -367,20 +367,22 @@ describe('splitDust', () => {
   const mk = (symbol: string, valueUsd: number | null) =>
     ({ token: { symbol }, valueUsd }) as unknown as Parameters<typeof splitDust>[0][number]
 
+  // Values are written relative to the threshold so the cases keep their
+  // meaning if DUST_USD moves again.
   it('hides positions worth less than the threshold, keeps unpriced ones', () => {
     const { kept, dust } = splitDust([
-      mk('ETH', 12.4),
-      mk('USDC', 0.26),
-      mk('AGAI', 0.000015),
+      mk('ETH', DUST_USD * 120),
+      mk('USDC', DUST_USD * 2),
+      mk('AGAI', DUST_USD / 100),
       mk('XYZ', null),
     ])
     // An unpriced position is not dust — we simply do not know what it is worth.
-    expect(kept.map((h) => h.token.symbol)).toEqual(['ETH', 'XYZ'])
-    expect(dust.map((h) => h.token.symbol)).toEqual(['USDC', 'AGAI'])
+    expect(kept.map((h) => h.token.symbol)).toEqual(['ETH', 'USDC', 'XYZ'])
+    expect(dust.map((h) => h.token.symbol)).toEqual(['AGAI'])
   })
 
   it('keeps a position sitting exactly on the threshold', () => {
-    const { kept, dust } = splitDust([mk('ON', DUST_USD), mk('UNDER', DUST_USD - 0.001)])
+    const { kept, dust } = splitDust([mk('ON', DUST_USD), mk('UNDER', DUST_USD * 0.99)])
     expect(kept.map((h) => h.token.symbol)).toEqual(['ON'])
     expect(dust.map((h) => h.token.symbol)).toEqual(['UNDER'])
   })
