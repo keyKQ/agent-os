@@ -55,6 +55,7 @@ from agentos.trading.ledger import (
 )
 from agentos.trading.pnl import (
     format_amount,
+    format_ratio,
     holding_from_lots,
     per_raw,
     to_human,
@@ -1283,7 +1284,7 @@ class TradingService:
     ) -> dict[str, Any]:
         human_in = to_human(quote.amount_in_raw, meta_in.decimals)
         human_out = to_human(quote.amount_out_raw, meta_out.decimals)
-        rate = float(human_out / human_in) if human_in > 0 else None
+        rate = format_ratio(human_out, human_in)
         return {
             "quoteId": quote.quote_id,
             "provider": quote.provider,

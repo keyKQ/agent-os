@@ -13,7 +13,17 @@ import { CHAINS } from './types'
 const AMOUNT_RE = /^(\d+)(?:\.(\d*))?$/
 
 /** A typed amount, normalised: "1,5" → "1.5", ".5" → "0.5", "" → null, junk → null. */
-export function parseAmount(input: string): string | null {
+/**
+ * A decimal string in, a normalised decimal string out.
+ *
+ * Takes `unknown` on purpose. Every amount in the trading API is documented as
+ * a decimal string, but this runs on whatever the engine actually sent, and a
+ * single field arriving as a number once white-screened the whole desk mid-
+ * swap. A wrong shape now renders as "—"; it does not take the app with it.
+ */
+export function parseAmount(input: unknown): string | null {
+  if (typeof input === 'number') return Number.isFinite(input) ? parseAmount(String(input)) : null
+  if (typeof input !== 'string') return null
   let s = input.trim().replace(/,/g, '.').replace(/\s+/g, '')
   if (s === '' || s === '.') return null
   if (s.startsWith('.')) s = `0${s}`
@@ -119,7 +129,7 @@ export function formatPct(
  * 0.001), trailing zeros dropped, "0" for nothing. Works on the decimal
  * string directly so 18-decimal balances never pass through a float.
  */
-export function formatAmount(amount: string | null | undefined, maxDecimals = 6): string {
+export function formatAmount(amount: unknown, maxDecimals = 6): string {
   if (amount === null || amount === undefined) return '—'
   const parsed = parseAmount(amount)
   if (parsed === null) return '—'
@@ -191,7 +201,7 @@ export function formatUsdCell(
  * A token amount for a narrow column: four significant digits under 1
  * ("0.0002064"), four decimals above it, dust in scientific notation.
  */
-export function formatAmountCompact(amount: string | null | undefined): string {
+export function formatAmountCompact(amount: unknown): string {
   if (amount === null || amount === undefined) return '—'
   const parsed = parseAmount(amount)
   if (parsed === null) return '—'

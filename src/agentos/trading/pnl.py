@@ -70,6 +70,23 @@ def format_amount(amount_raw: int, decimals: int, *, max_places: int = 8) -> str
     return text or "0"
 
 
+def format_ratio(numerator: Decimal, denominator: Decimal, *, places: int = 12) -> str | None:
+    """One unit of the denominator, priced in the numerator, as a decimal string.
+
+    Every amount this API returns is a decimal string in human units. A rate is
+    an amount like any other, and a float both broke that rule for its
+    consumers and lost digits on tokens whose price sits many places below the
+    decimal point. ``None`` when there is nothing to divide by.
+    """
+    if denominator <= 0:
+        return None
+    value = (numerator / denominator).quantize(Decimal(1).scaleb(-places), rounding=ROUND_DOWN)
+    text = format(value, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def per_raw(cost_usd_per_token: float, decimals: int) -> float:
     """Cost per raw unit from a cost per whole token."""
     return float(cost_usd_per_token) / float(10**decimals)

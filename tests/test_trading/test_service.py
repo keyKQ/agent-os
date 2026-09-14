@@ -218,7 +218,10 @@ class TestQuote:
         )
         assert quote["amountIn"] == "10" and quote["amountInRaw"] == str(10 * 10**6)
         assert quote["amountOut"] == "0.0005" and quote["valueUsd"] == pytest.approx(10.0)
-        assert quote["rate"] == pytest.approx(0.00005)
+        # A rate is an amount, so it is a decimal string like every other one.
+        # It used to be a float, which the desktop fed to a string formatter
+        # and crashed on, and which lost digits on very small prices.
+        assert quote["rate"] == "0.00005"
         assert quote["guard"]["decision"] == "allow"
         agent_quote = await service.quote(
             chain=BASE,

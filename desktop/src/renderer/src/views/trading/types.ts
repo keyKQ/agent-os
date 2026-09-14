@@ -157,7 +157,9 @@ export interface Quote {
   priceImpactPct: number | null
   gasUsd: number | null
   valueUsd: number | null
-  rate: string
+  /** One tokenIn priced in tokenOut, as a decimal string; null when there is
+   *  no input amount to divide by. */
+  rate: string | null
   slippagePct: number
   expiresAt: number
   provider?: ProviderId

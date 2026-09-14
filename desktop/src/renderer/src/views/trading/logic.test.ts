@@ -363,6 +363,21 @@ describe('compact cell formatting', () => {
   })
 })
 
+describe('parseAmount shape tolerance', () => {
+  it('normalises a number the engine should have sent as a string', () => {
+    // A quote's `rate` arrived as a float once and took the whole desk down.
+    expect(parseAmount(0.0004521 as unknown as string)).toBe('0.0004521')
+    expect(formatAmount(1.5 as unknown as string)).toBe('1.5')
+  })
+
+  it('renders an em dash for a shape it cannot read, rather than throwing', () => {
+    for (const bad of [{}, [], true, null, undefined]) {
+      expect(() => formatAmount(bad as unknown as string)).not.toThrow()
+      expect(formatAmount(bad as unknown as string)).toBe('—')
+    }
+  })
+})
+
 describe('splitDust', () => {
   const mk = (symbol: string, valueUsd: number | null) =>
     ({ token: { symbol }, valueUsd }) as unknown as Parameters<typeof splitDust>[0][number]
