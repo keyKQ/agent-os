@@ -18,7 +18,7 @@ export function Toolbar() {
 
   return (
     <header
-      className="app-drag flex shrink-0 items-center justify-between px-3"
+      className="app-drag relative flex shrink-0 items-center justify-between px-3"
       style={{
         height: 'var(--toolbar-height)',
         zIndex: 'var(--z-toolbar)',

@@ -187,6 +187,60 @@
     background: var(--background);
   }
 
+  /* One canvas under the whole content column.
+
+     It is a sibling of the toolbar, not a child of the view, so it starts at
+     the very top of the column and runs to the bottom: the toolbar, the mode
+     strip, the transcript, the composer and the BOOK all sit on the same
+     surface. Painting it inside the view instead left the top 92 px flat
+     while everything below carried the wash — two tones meeting at a seam
+     under the window chrome.
+
+     Two washes of the signal colour (soft upper-left, denser far corner) over
+     a faint drafting grid; everything derives from the palette, so each theme
+     gets its own version. Only conversation routes light it — the rest of the
+     app keeps the plain pane. */
+  .mac-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .mac-content:has(.chat-desktop) .mac-canvas,
+  .mac-content:has(.trd-viewport) .mac-canvas {
+    --canvas-grid: color-mix(in srgb, var(--foreground) 3.5%, transparent);
+    background:
+      radial-gradient(
+        55% 55% at 28% 10%,
+        color-mix(in srgb, var(--primary) 4%, transparent) 0%,
+        transparent 72%
+      ),
+      radial-gradient(
+        40% 55% at 96% 92%,
+        color-mix(in srgb, var(--primary) 7%, transparent) 0%,
+        color-mix(in srgb, var(--primary) 2%, transparent) 55%,
+        transparent 78%
+      );
+  }
+  :root[data-theme='light'] .mac-canvas {
+    --canvas-grid: color-mix(in srgb, var(--foreground) 6%, transparent);
+  }
+  /* The grid rides on its own layer so it can fade out toward the composer
+     without taking the corner wash down with it. */
+  .mac-content:has(.chat-desktop) .mac-canvas::before,
+  .mac-content:has(.trd-viewport) .mac-canvas::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+      linear-gradient(to right, var(--canvas-grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--canvas-grid) 1px, transparent 1px);
+    background-size: 88px 88px;
+    background-position: -1px -1px;
+    -webkit-mask: linear-gradient(to bottom, #000 0%, #000 72%, rgba(0, 0, 0, 0.35) 100%);
+    mask: linear-gradient(to bottom, #000 0%, #000 72%, rgba(0, 0, 0, 0.35) 100%);
+  }
+
   /* Sidebar edge grip: invisible until hovered, then a hairline highlight;
      the hit area is wider than the line so it is easy to catch. */
   .mac-resizer {

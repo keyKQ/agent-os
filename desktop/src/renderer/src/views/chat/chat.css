@@ -20,48 +20,10 @@
   isolation: isolate;
 }
 
-/* Backdrop: a faint drafting grid with two washes of the signal colour, one
-   soft over the upper-left of the column and one denser in the far corner.
-   Everything derives from the palette, so Graphite gets its own blue-grey
-   version. Fixed behind the thread; the composer and rows paint over it. */
-.chat-desktop::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  --grid: color-mix(in srgb, var(--foreground) 3.5%, transparent);
-  background:
-    radial-gradient(
-      40% 50% at 36% 20%,
-      color-mix(in srgb, var(--primary) 4%, transparent) 0%,
-      transparent 70%
-    ),
-    radial-gradient(
-      26% 44% at 104% 70%,
-      color-mix(in srgb, var(--primary) 9%, transparent) 0%,
-      color-mix(in srgb, var(--primary) 3%, transparent) 50%,
-      transparent 75%
-    ),
-    linear-gradient(to right, var(--grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
-  background-size:
-    100% 100%,
-    100% 100%,
-    88px 88px,
-    88px 88px;
-  background-position:
-    0 0,
-    0 0,
-    -1px -1px,
-    -1px -1px;
-  /* Fade the grid out toward the bottom so it never fights the composer. */
-  -webkit-mask: linear-gradient(to bottom, #000 0%, #000 70%, rgba(0, 0, 0, 0.35) 100%);
-  mask: linear-gradient(to bottom, #000 0%, #000 70%, rgba(0, 0, 0, 0.35) 100%);
-}
-:root[data-theme='light'] .chat-desktop::before {
-  --grid: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
+/* The backdrop — the wash and the drafting grid — is painted by .mac-canvas
+   at the top of the content column (theme/tokens.css), not here. Starting it
+   at the chat's own top edge left the toolbar and the mode strip on a flat
+   band, with a visible seam where the two tones met. */
 
 .chat-stage {
   position: relative;

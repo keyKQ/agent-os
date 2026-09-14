@@ -34,6 +34,9 @@ export function AppShell() {
     <div className="flex h-full">
       <Sidebar />
       <div className="mac-content flex min-w-0 flex-1 flex-col">
+        {/* Sibling of the toolbar so the view's backdrop starts at the top of
+            the column rather than under the chrome. See .mac-canvas. */}
+        <div className="mac-canvas" aria-hidden />
         <Toolbar />
         <main className="relative z-[2] min-h-0 flex-1 overflow-auto" data-selectable>
           <Outlet />

@@ -213,38 +213,10 @@
   display: flex;
   min-height: 0;
   flex: 1;
-  /* One canvas under both columns: the chat's own backdrop is switched off
-     at the desk (below) so the wash and the drafting grid run continuously
-     under the transcript, the composer and the BOOK instead of stopping at
-     the column seam. */
-  --desk-grid: color-mix(in srgb, var(--foreground) 3.5%, transparent);
-  background:
-    radial-gradient(
-      55% 60% at 28% 12%,
-      color-mix(in srgb, var(--primary) 4%, transparent) 0%,
-      transparent 72%
-    ),
-    radial-gradient(
-      40% 55% at 96% 92%,
-      color-mix(in srgb, var(--primary) 7%, transparent) 0%,
-      color-mix(in srgb, var(--primary) 2%, transparent) 55%,
-      transparent 78%
-    ),
-    linear-gradient(to right, var(--desk-grid) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--desk-grid) 1px, transparent 1px);
-  background-size:
-    100% 100%,
-    100% 100%,
-    88px 88px,
-    88px 88px;
-  background-position:
-    0 0,
-    0 0,
-    -1px -1px,
-    -1px -1px;
-}
-.chat-desktop[data-desk]::before {
-  display: none;
+  /* Transparent on purpose. The wash and the drafting grid are one canvas for
+     the whole content column (.mac-canvas in theme/tokens.css), so they run
+     continuously under the toolbar, the strip, the transcript, the composer
+     and the BOOK instead of stopping at a seam. */
 }
 .trd-chat {
   position: relative;
@@ -1346,13 +1318,13 @@ body[data-dragging] .trd-book__handle {
 
 /* ── The entrance ────────────────────────────────────────────────────────── */
 
-/* 0–120: the pane dims to the desk canvas and the dot grid fades in. Both
-   are painted by the frame's own backdrop layers so nothing repaints twice. */
-.mode-shell[data-enter='trading'] .trd-frame::before {
+/* 0–120: the pane dims to the desk canvas and the dot grid fades in. It rides
+   on the column's own canvas, so the whole pane dims at once — toolbar and
+   strip included — instead of stopping short of the window chrome. */
+.mac-content:has(.mode-shell[data-enter='trading']) .mac-canvas::after {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: 0;
   pointer-events: none;
   background:
     radial-gradient(
@@ -1368,10 +1340,6 @@ body[data-dragging] .trd-book__handle {
 }
 .mode-shell[data-enter='trading'] .trd-frame {
   position: relative;
-}
-.mode-shell[data-enter='trading'] .trd-frame > * {
-  position: relative;
-  z-index: 1;
 }
 @keyframes desk-dim {
   from {
