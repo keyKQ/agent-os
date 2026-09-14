@@ -240,24 +240,27 @@ export function Holdings({
         </tbody>
       </table>
       {dust.length ? (
-        <button
-          type="button"
-          className="trd-dust app-no-drag"
-          onClick={() => setShowDust((v) => !v)}
-          aria-pressed={showDust}
-          data-testid="dust-toggle"
-        >
-          {showDust ? (
-            <EyeOff className="size-3" strokeWidth={2} aria-hidden />
-          ) : (
-            <Eye className="size-3" strokeWidth={2} aria-hidden />
-          )}
-          {dust.length}{' '}
-          {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}{' '}
-          {formatUsd(DUST_USD)} {t('trading.holdings.dust.hidden')}
-          {' · '}
-          {showDust ? t('trading.holdings.dust.hide') : t('trading.holdings.dust.show')}
-        </button>
+        <div className="trd-dustbar">
+          <span className="trd-dustbar__text">
+            {dust.length}{' '}
+            {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}{' '}
+            {formatUsd(DUST_USD)} {t('trading.holdings.dust.hidden')}
+          </span>
+          <button
+            type="button"
+            className="trd-dust app-no-drag"
+            onClick={() => setShowDust((v) => !v)}
+            aria-pressed={showDust}
+            data-testid="dust-toggle"
+          >
+            {showDust ? (
+              <EyeOff className="size-3" strokeWidth={2} aria-hidden />
+            ) : (
+              <Eye className="size-3" strokeWidth={2} aria-hidden />
+            )}
+            {showDust ? t('trading.holdings.dust.hide') : t('trading.holdings.dust.show')}
+          </button>
+        </div>
       ) : null}
     </div>
   )

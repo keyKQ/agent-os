@@ -48,8 +48,8 @@ export function redirectTarget(tradingKey: string, search: string): string {
 }
 
 /** Timings, mirrored by the custom properties at the top of desk.css. */
-export const ENTRANCE_MS = 900
-export const LEAVE_MS = 300
+export const ENTRANCE_MS = 880
+export const LEAVE_MS = 320
 
 /**
  * The entrance plays once per user-initiated switch into Trading — never on

@@ -7,9 +7,11 @@ import {
   ListChecks,
   Plus,
   Star,
+  TrendingDown,
+  TrendingUp,
   Wallet as WalletIcon,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -36,7 +38,7 @@ import {
   walletLabel,
 } from '../logic'
 import { Orders } from '../Orders'
-import { Money } from '../parts'
+import { Money, useCountUp } from '../parts'
 import { SwapPanel, type SwapPrefill } from '../SwapPanel'
 import type { Holding, Order, ProviderId, Wallet } from '../types'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
@@ -107,6 +109,9 @@ export function Book({
     entering && !portfolio.isPending,
   )
   const pendingCount = orders.orders.filter(isAwaitingApproval).length
+  const tone = pnlTone(totals.change24hUsd)
+  const Arrow = tone === 'down' ? TrendingDown : TrendingUp
+  const segments = allocationSegments(holdings)
   const byWallet = useMemo(() => {
     const m = new Map<string, number>()
     for (const row of portfolio.data?.wallets ?? [])
@@ -247,39 +252,53 @@ export function Book({
       <div className="trd-book__body" data-tab={tab}>
         {tab === 'portfolio' ? (
           <div className="trd-book__portfolio">
-            <section className="trd-book__hero" data-tone={pnlTone(totals.change24hUsd)}>
-              <span className="trd-book__label">{t('trading.overview.value')}</span>
-              <b className="trd-book__value" data-testid="book-value">
-                {portfolio.isPending ? (
-                  <span className="trd-skel" style={{ width: 120, height: 24 }} />
-                ) : counting ? (
-                  <span className="trd-num" data-testid="book-value-counting" ref={attachCount}>
-                    {formatUsd(0)}
+            {/* The same head the full desk wears, compressed by the
+                .trd-book overrides — one vocabulary, one set of rules. */}
+            <section className="trd-hero trd-book__hero" data-tone={tone}>
+              <span className="trd-hero__label">{t('trading.overview.value')}</span>
+              <div className="trd-hero__figure">
+                <b data-testid="book-value">
+                  {portfolio.isPending ? (
+                    <span className="trd-skel" style={{ width: 120, height: 24 }} />
+                  ) : counting ? (
+                    <span className="trd-num" data-testid="book-value-counting" ref={attachCount}>
+                      {formatUsd(0)}
+                    </span>
+                  ) : (
+                    <Money value={totals.valueUsd} />
+                  )}
+                </b>
+                {totals.change24hUsd !== null ? (
+                  <span
+                    className="trd-delta"
+                    data-tone={tone}
+                    title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
+                  >
+                    {tone !== 'flat' ? (
+                      <Arrow className="size-3" strokeWidth={2.25} aria-hidden />
+                    ) : null}
+                    <Money value={totals.change24hUsd} signed cell />
+                    <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
                   </span>
-                ) : (
-                  <Money value={totals.valueUsd} />
-                )}
-              </b>
-              {totals.change24hUsd !== null ? (
-                <span className="trd-num trd-book__delta" data-tone={pnlTone(totals.change24hUsd)}>
-                  {formatUsd(totals.change24hUsd, { signed: true })}{' '}
-                  {formatPct(totals.change24hPct, { signed: true })} {t('trading.overview.today')}
-                </span>
-              ) : null}
-              <div className="trd-book__stats">
+                ) : null}
+              </div>
+              <div className="trd-hero__stats">
                 <Stat label={t('trading.overview.unrealized')} value={totals.unrealizedUsd} toned />
                 <Stat label={t('trading.overview.realized')} value={totals.realizedUsd} toned />
                 <Stat label={t('trading.overview.cost')} value={totals.costUsd} />
                 <Stat label={t('trading.overview.gas')} value={totals.gasUsd} />
               </div>
-              <div className="trd-book__alloc" aria-hidden>
-                {allocationSegments(holdings).map((s) => (
-                  <span
-                    key={s.symbol}
-                    style={{ width: `${s.pct}%` }}
-                    title={`${s.symbol} ${s.pct.toFixed(1)}%`}
-                  />
-                ))}
+              <div className="trd-alloc">
+                <div className="trd-alloc__bar" aria-hidden>
+                  {segments.map((s, i) => (
+                    <span
+                      key={s.symbol}
+                      style={{ ['--i' as string]: i, flexBasis: `${s.pct}%` }}
+                      data-other={s.symbol === 'other' ? 'true' : undefined}
+                      title={`${s.symbol} ${formatPct(s.pct)}`}
+                    />
+                  ))}
+                </div>
               </div>
             </section>
 
@@ -306,7 +325,9 @@ export function Book({
                   onClick={() => setWalletSel(w.address)}
                   title={w.address}
                 >
-                  {w.primary ? <Star className="size-3" strokeWidth={2} aria-hidden /> : null}
+                  {w.primary ? (
+                    <Star className="trd-book__star size-3" strokeWidth={2} aria-hidden />
+                  ) : null}
                   <span>{walletLabel(w)}</span>
                   <span className="trd-num trd-book__walletvalue">
                     {formatUsd(byWallet.get(w.address.toLowerCase()) ?? null, { compact: true })}
@@ -387,57 +408,11 @@ export function Book({
 
 function Stat({ label, value, toned }: { label: string; value: number; toned?: boolean }) {
   return (
-    <div className="trd-book__stat">
-      <span className="trd-book__label">{label}</span>
-      <Money value={value} signed={toned} toned={toned} />
+    <div className="trd-stat" title={formatUsd(value, { signed: toned })}>
+      <span className="trd-stat__label">{label}</span>
+      <span className="trd-stat__value">
+        <Money value={value} signed={toned} toned={toned} cell />
+      </span>
     </div>
   )
-}
-
-/* Entrance: the hero value counts from 0 to its figure over the window the
-   choreography reserves for it (see --enter-count-* in desk.css), then hands
-   back to the live, ticking value.
-   The frames are written straight into the node's text rather than through
-   state: a setState per frame re-rendered the whole BOOK forty times in the
-   busiest 320 ms of the switch, which is main-thread work the sweep and the
-   slide were competing with. React sees two renders now — start and end. */
-const COUNT_DELAY_MS = 380
-const COUNT_MS = 320
-
-function useCountUp(
-  target: number,
-  active: boolean,
-): { counting: boolean; attach: (el: HTMLSpanElement | null) => void } {
-  // The node arrives through state rather than a ref so the frame loop can
-  // start the moment it mounts, and so nothing ref-shaped crosses render.
-  const [node, attach] = useState<HTMLSpanElement | null>(null)
-  const [counting, setCounting] = useState(false)
-  const spent = useRef(false)
-
-  useEffect(() => {
-    if (!active) {
-      spent.current = false
-      setCounting(false)
-      return
-    }
-    if (!spent.current) setCounting(true)
-  }, [active])
-
-  useEffect(() => {
-    if (!counting || !node) return
-    const start = performance.now() + COUNT_DELAY_MS
-    let raf = requestAnimationFrame(function tick(now: number) {
-      const p = Math.min(1, Math.max(0, (now - start) / COUNT_MS))
-      node.textContent = formatUsd(target * (1 - Math.pow(1 - p, 3)))
-      if (p < 1) {
-        raf = requestAnimationFrame(tick)
-      } else {
-        spent.current = true
-        setCounting(false)
-      }
-    })
-    return () => cancelAnimationFrame(raf)
-  }, [counting, node, target])
-
-  return { counting, attach }
 }

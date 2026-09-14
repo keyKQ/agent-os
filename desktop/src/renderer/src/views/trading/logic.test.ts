@@ -143,6 +143,9 @@ describe('formatting', () => {
     expect(formatPct(12.34)).toBe('12.3%')
     expect(formatPct(150)).toBe('150%')
     expect(formatPct(null)).toBe('—')
+    // A rate on a near-zero cost basis stops being a number worth printing.
+    expect(formatPct(1.1902164029823605e22, { signed: true })).toBe('+>9,999%')
+    expect(formatPct(-45_000)).toBe('−>9,999%')
   })
   it('formats token amounts from decimal strings', () => {
     expect(formatAmount('1234.5')).toBe('1,234.5')

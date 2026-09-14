@@ -35,4 +35,10 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Tests run in Node, not in the renderer: a test may read a source file
+    // off disk to assert a contract the two halves of it cannot see.
+    files: ['src/renderer/**/*.test.{ts,tsx}'],
+    rules: { 'no-restricted-imports': 'off' },
+  },
 )

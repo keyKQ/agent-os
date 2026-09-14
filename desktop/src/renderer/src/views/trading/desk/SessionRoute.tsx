@@ -59,7 +59,7 @@ export function SessionRoute() {
       {frame.banner}
       {active && frame.fullDesk ? (
         <div className="trd-page__desk">
-          <TradingView />
+          <TradingView entering={enter === 'trading'} />
         </div>
       ) : (
         <div

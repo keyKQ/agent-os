@@ -1,12 +1,22 @@
 import { ChainBadge } from './ChainMark'
 import {
   ArrowRight,
+  Ban,
+  Check,
+  CircleDashed,
   ExternalLink,
   Hourglass,
   ListChecks,
   PackageOpen,
+  SendHorizontal,
   ShieldAlert,
+  ShieldCheck,
+  TimerOff,
+  TriangleAlert,
+  X,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -21,12 +31,27 @@ import {
   formatClock,
   formatPct,
   formatUsd,
+  formatUsdCell,
+  impactTone,
   initiatorKey,
   isAwaitingApproval,
+  orderTone,
   shortAddress,
 } from './logic'
-import { Empty, StatusPill } from './parts'
-import { isWrappedEth, providerLabel, type Order } from './types'
+import { Empty } from './parts'
+import { isWrappedEth, providerLabel, type Order, type OrderStatus } from './types'
+
+/** One mark per state, so a column of rows is scannable before it is read. */
+const GLYPH: Record<OrderStatus, LucideIcon> = {
+  quoted: CircleDashed,
+  awaiting_approval: ShieldAlert,
+  approved: ShieldCheck,
+  submitted: SendHorizontal,
+  confirmed: Check,
+  failed: X,
+  rejected: Ban,
+  expired: TimerOff,
+}
 
 /** "Received WETH" with the one click that turns it back into ETH. */
 export function UnwrapNote({
@@ -131,6 +156,26 @@ export function Orders({
   )
 }
 
+/** A label and its figure on the quiet caption line: "min 0.000148". */
+function Fact({
+  label,
+  title,
+  tone,
+  children,
+}: {
+  label: string
+  title: string
+  tone?: 'warn' | 'danger'
+  children: ReactNode
+}) {
+  return (
+    <span className="trd-order__fact" title={title}>
+      <span>{label}</span>
+      <b data-tone={tone}>{children}</b>
+    </span>
+  )
+}
+
 function OrderRow({
   order,
   now,
@@ -149,83 +194,49 @@ function OrderRow({
   const waiting = isAwaitingApproval(order)
   const left = waiting ? approvalSecondsLeft(order, now) : null
   const by = initiatorKey(order.initiator)
+  const tone = orderTone(order.status)
+  const Glyph = GLYPH[order.status]
+  const impact = order.priceImpactPct === null ? null : impactTone(order.priceImpactPct)
+  const failed =
+    order.status === 'failed' || order.status === 'rejected' || order.status === 'expired'
   return (
     <div
       className="trd-order"
       data-status={order.status}
+      data-tone={tone}
       data-testid="order-row"
       ref={(el) => {
         if (highlighted && el) el.scrollIntoView({ block: 'center' })
       }}
     >
+      <span className="trd-order__mark" data-tone={tone} aria-hidden>
+        <Glyph className="size-3.5" strokeWidth={2} />
+      </span>
+
       <div className="trd-order__head">
         <span className="trd-order__leg">
-          {formatAmount(order.amountIn)} {order.tokenIn.symbol}
+          {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
         </span>
-        <ArrowRight className="trd-order__arrow size-3.5" strokeWidth={2} aria-hidden />
+        <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
         <span className="trd-order__leg">
           {order.expectedOut ? `${formatAmount(order.expectedOut)} ` : ''}
-          {order.tokenOut.symbol}
+          <i>{order.tokenOut.symbol}</i>
         </span>
+      </div>
+
+      <div className="trd-order__value" title={formatUsd(order.valueUsd)}>
+        {formatUsdCell(order.valueUsd)}
+      </div>
+
+      <div className="trd-order__who">
         <span className="trd-by" data-by={by}>
           {t(`trading.history.by.${by}`)}
         </span>
+        <span className="trd-order__time">{shortAge(order.updatedAt, now)}</span>
       </div>
-      <div className="trd-order__meta">
-        <span>
-          <ChainBadge chainId={order.chainId} />
-          {order.provider ? ` · ${t('trading.provider.via')} ${providerLabel(order.provider)}` : ''}
-        </span>
-        {showWallet ? <span className="trd-mono">{shortAddress(order.wallet)}</span> : null}
-        <span>
-          {t('trading.orders.value')} <b>{formatUsd(order.valueUsd)}</b>
-        </span>
-        {order.minOut ? (
-          <span>
-            {t('trading.orders.minimum')} <b>{formatAmount(order.minOut)}</b>
-          </span>
-        ) : null}
-        {order.priceImpactPct !== null ? (
-          <span>
-            {t('trading.swap.impact')} <b>{formatPct(order.priceImpactPct)}</b>
-          </span>
-        ) : null}
-        {order.gasUsd !== null ? (
-          <span>
-            {t('trading.swap.gas')} <b>{formatUsd(order.gasUsd)}</b>
-          </span>
-        ) : null}
-        <span>{shortAge(order.updatedAt, now)}</span>
-      </div>
-      <div className="trd-order__side">
-        <StatusPill status={order.status} />
-        {waiting ? (
-          <>
-            {left !== null ? (
-              <span className="trd-order__timer" data-urgent={left <= 60 ? 'true' : undefined}>
-                <Hourglass className="size-3" strokeWidth={2} aria-hidden />
-                {t('trading.approvals.expiresIn')} {formatClock(left)}
-              </span>
-            ) : null}
-            <div className="trd-order__actions">
-              <Button
-                disabled={deciding}
-                onClick={() => onDecide(order, false)}
-                data-testid="order-reject"
-              >
-                {t('trading.approvals.reject')}
-              </Button>
-              <Button
-                variant="primary"
-                disabled={deciding}
-                onClick={() => onDecide(order, true)}
-                data-testid="order-approve"
-              >
-                {t('trading.approvals.approve')}
-              </Button>
-            </div>
-          </>
-        ) : order.explorerUrl ? (
+
+      <div className="trd-order__link">
+        {order.explorerUrl ? (
           <Button
             variant="ghost"
             size="icon"
@@ -241,11 +252,77 @@ function OrderRow({
           </Button>
         ) : null}
       </div>
+
+      <div className="trd-order__meta">
+        <span className="trd-order__state" data-tone={tone}>
+          {t(`trading.orders.status.${order.status}`)}
+        </span>
+        <span className="trd-order__fact">
+          <ChainBadge chainId={order.chainId} />
+          {order.provider ? (
+            <span>{`${t('trading.provider.via')} ${providerLabel(order.provider)}`}</span>
+          ) : null}
+        </span>
+        {showWallet ? (
+          <span className="trd-order__fact">
+            <b className="trd-mono">{shortAddress(order.wallet)}</b>
+          </span>
+        ) : null}
+        {order.minOut ? (
+          <Fact label={t('trading.orders.fact.min')} title={t('trading.orders.minimum')}>
+            {formatAmount(order.minOut)}
+          </Fact>
+        ) : null}
+        {order.priceImpactPct !== null ? (
+          <Fact
+            label={t('trading.orders.fact.impact')}
+            title={t('trading.swap.impact')}
+            tone={impact === 'ok' ? undefined : (impact ?? undefined)}
+          >
+            {formatPct(order.priceImpactPct)}
+          </Fact>
+        ) : null}
+        {order.gasUsd !== null ? (
+          <Fact label={t('trading.orders.fact.fee')} title={t('trading.swap.gas')}>
+            {formatUsd(order.gasUsd)}
+          </Fact>
+        ) : null}
+      </div>
+
+      {waiting ? (
+        <div className="trd-order__act">
+          {left !== null ? (
+            <span className="trd-order__timer" data-urgent={left <= 60 ? 'true' : undefined}>
+              <Hourglass className="size-3" strokeWidth={2} aria-hidden />
+              {t('trading.approvals.expiresIn')} {formatClock(left)}
+            </span>
+          ) : null}
+          <div className="trd-order__actions">
+            <Button
+              disabled={deciding}
+              onClick={() => onDecide(order, false)}
+              data-testid="order-reject"
+            >
+              {t('trading.approvals.reject')}
+            </Button>
+            <Button
+              variant="primary"
+              disabled={deciding}
+              onClick={() => onDecide(order, true)}
+              data-testid="order-approve"
+            >
+              {t('trading.approvals.approve')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {order.note ? (
         <div className="trd-order__note">
           {t('trading.orders.note')}: {order.note}
         </div>
       ) : null}
+
       {order.deliveredToken &&
       order.status === 'confirmed' &&
       isWrappedEth(order.deliveredToken) &&
@@ -254,10 +331,13 @@ function OrderRow({
           <UnwrapNote chainId={order.chainId} wallet={order.wallet} />
         </div>
       ) : null}
-      {order.reason &&
-      (order.status === 'failed' || order.status === 'rejected' || order.status === 'expired') ? (
-        <div className="trd-order__reason">
-          {t('trading.orders.reason')}: {order.reason}
+
+      {order.reason && failed ? (
+        <div className="trd-order__reason" title={order.reason}>
+          <TriangleAlert className="size-3 shrink-0" strokeWidth={2} aria-hidden />
+          <span>
+            {t('trading.orders.reason')}: {order.reason}
+          </span>
         </div>
       ) : null}
     </div>

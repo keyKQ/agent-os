@@ -151,6 +151,10 @@ export const trading = {
   'trading.orders.expected': 'Expected',
   'trading.orders.minimum': 'Minimum',
   'trading.orders.value': 'Value',
+  // Short labels for the row's caption line; the full wording is the tooltip.
+  'trading.orders.fact.min': 'min',
+  'trading.orders.fact.impact': 'impact',
+  'trading.orders.fact.fee': 'fee',
 
   // Swap panel
   'trading.swap.title': 'Swap',

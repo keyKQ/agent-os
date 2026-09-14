@@ -111,7 +111,9 @@ export function formatUsd(
   return opts.signed && value > 0 ? `+${body}` : body
 }
 
-/** "+3.2%" / "−0.4%" / "—". */
+/** "+3.2%" / "−0.4%" / "—". A cost basis of nearly zero makes the rate on it
+ *  astronomical (and `toFixed` turns it into "1.19e+22%"), so past four
+ *  digits the figure stops being a number and becomes ">9,999%". */
 export function formatPct(
   value: number | null | undefined,
   opts: { signed?: boolean } = {},
@@ -119,7 +121,7 @@ export function formatPct(
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   const abs = Math.abs(value)
   const digits = abs >= 100 ? 0 : abs >= 10 ? 1 : 2
-  const body = `${abs.toFixed(digits)}%`
+  const body = abs >= 10_000 ? '>9,999%' : `${abs.toFixed(digits)}%`
   if (value < 0) return `−${body}`
   return opts.signed && value > 0 ? `+${body}` : body
 }

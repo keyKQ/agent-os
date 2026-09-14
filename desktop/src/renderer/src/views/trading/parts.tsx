@@ -5,7 +5,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import { ChainBadge } from './ChainMark'
-import { formatUsd, orderTone, pnlTone, shortAddress, type PnlTone } from './logic'
+import { formatUsd, formatUsdCell, orderTone, pnlTone, shortAddress, type PnlTone } from './logic'
 import type { OrderStatus, Token } from './types'
 
 /** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
@@ -161,17 +161,70 @@ export function Money({
   signed,
   toned,
   compact,
+  /** Collapse anything under a cent to "<$0.01" so a tile keeps its width;
+   *  the caller is expected to carry the exact figure in a `title`. */
+  cell,
 }: {
   value: number | null | undefined
   signed?: boolean
   toned?: boolean
   compact?: boolean
+  cell?: boolean
 }) {
   return (
     <Tick value={value ?? null} tone={toned ? pnlTone(value) : undefined}>
-      {formatUsd(value, { signed, compact })}
+      {cell ? formatUsdCell(value, { signed }) : formatUsd(value, { signed, compact })}
     </Tick>
   )
+}
+
+/* Entrance: the hero value counts from 0 to its figure over the window the
+   choreography reserves for it (see --enter-count-* in desk/desk.css), then
+   hands back to the live, ticking value. Shared by the BOOK's hero and the
+   full desk's, so both count on the same clock.
+   The frames are written straight into the node's text rather than through
+   state: a setState per frame re-rendered the whole panel forty times in the
+   busiest 420 ms of the switch, which is main-thread work the landing panels
+   were competing with. React sees two renders now — start and end. */
+const COUNT_DELAY_MS = 220
+const COUNT_MS = 420
+
+export function useCountUp(
+  target: number,
+  active: boolean,
+): { counting: boolean; attach: (el: HTMLSpanElement | null) => void } {
+  // The node arrives through state rather than a ref so the frame loop can
+  // start the moment it mounts, and so nothing ref-shaped crosses render.
+  const [node, attach] = useState<HTMLSpanElement | null>(null)
+  const [counting, setCounting] = useState(false)
+  const spent = useRef(false)
+
+  useEffect(() => {
+    if (!active) {
+      spent.current = false
+      setCounting(false)
+      return
+    }
+    if (!spent.current) setCounting(true)
+  }, [active])
+
+  useEffect(() => {
+    if (!counting || !node) return
+    const start = performance.now() + COUNT_DELAY_MS
+    let raf = requestAnimationFrame(function tick(now: number) {
+      const p = Math.min(1, Math.max(0, (now - start) / COUNT_MS))
+      node.textContent = formatUsd(target * (1 - Math.pow(1 - p, 3)))
+      if (p < 1) {
+        raf = requestAnimationFrame(tick)
+      } else {
+        spent.current = true
+        setCounting(false)
+      }
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [counting, node, target])
+
+  return { counting, attach }
 }
 
 export function Spinner({ className }: { className?: string }) {

@@ -49,7 +49,7 @@ type Tab = 'holdings' | 'history' | 'orders' | 'approvals'
  * and the single action that gets you to the next state: start the
  * gateway, turn trading on, create the vault, unlock it, add a wallet.
  */
-export function TradingView() {
+export function TradingView({ entering }: { entering?: boolean }) {
   const gatewayState = useGateway((s) => s.status.state)
   if (gatewayState !== 'running') {
     return (
@@ -64,10 +64,10 @@ export function TradingView() {
       </div>
     )
   }
-  return <Gate />
+  return <Gate entering={Boolean(entering)} />
 }
 
-function Gate() {
+function Gate({ entering }: { entering: boolean }) {
   useTradingInvalidation()
   const status = useTradingStatus()
   const vault = useWalletStatus()
@@ -138,6 +138,7 @@ function Gate() {
   const providerStatus = status.data?.providers?.find((p) => p.id === provider)
   return (
     <Desk
+      entering={entering}
       provider={provider}
       // Only Uniswap needs a key; Kyber's readiness is whether the region lets it answer.
       providerReady={
@@ -177,11 +178,14 @@ function Desk({
   providerReady,
   providerBlocked,
   needsKey,
+  entering,
 }: {
   provider: ProviderId
   providerReady: boolean
   providerBlocked: boolean
   needsKey: boolean
+  /** The mode switch is playing: the head counts its value up from zero. */
+  entering: boolean
 }) {
   const status = useTradingStatus()
   const vault = useWalletStatus()
@@ -332,7 +336,7 @@ function Desk({
 
         <div className="trd-desk">
           {needsKey ? (
-            <div className="px-6 pt-3">
+            <div className="trd-desk__notice">
               <Notice
                 tone="info"
                 action={
@@ -346,7 +350,7 @@ function Desk({
               </Notice>
             </div>
           ) : providerBlocked ? (
-            <div className="px-6 pt-3">
+            <div className="trd-desk__notice">
               <Notice
                 tone="warn"
                 action={
@@ -372,94 +376,99 @@ function Desk({
             loading={portfolio.isPending}
             onSync={() => sync.mutate(walletAddress ? { wallet: walletAddress } : {})}
             provider={provider}
+            entering={entering}
           />
 
-          <div className="trd-tabs" role="tablist" aria-label={t('trading.title')}>
-            {(['holdings', 'history', 'orders', 'approvals'] as Tab[]).map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={tab === id}
-                className="trd-tab app-no-drag"
-                data-testid={`tab-${id}`}
-                onClick={() => setTab(id)}
-              >
-                {t(`trading.tab.${id}`)}
-                {id === 'approvals' && pending > 0 ? (
-                  <span className="trd-tab__count">{pending}</span>
-                ) : null}
-              </button>
-            ))}
-            <span className="trd-tabs__spacer" />
-            <div className="trd-tabs__tools">
-              <div
-                role="radiogroup"
-                aria-label={t('trading.overview.chains')}
-                className="mac-segmented trd-chainpick"
-              >
+          <div className="trd-panel">
+            <div className="trd-tabs" role="tablist" aria-label={t('trading.title')}>
+              {(['holdings', 'history', 'orders', 'approvals'] as Tab[]).map((id) => (
                 <button
+                  key={id}
                   type="button"
-                  role="radio"
-                  aria-checked={chain === null}
-                  className="mac-segment app-no-drag"
-                  onClick={() => setChain(null)}
+                  role="tab"
+                  aria-selected={tab === id}
+                  className="trd-tab app-no-drag"
+                  data-testid={`tab-${id}`}
+                  onClick={() => setTab(id)}
                 >
-                  {t('trading.overview.chains.all')}
+                  {t(`trading.tab.${id}`)}
+                  {id === 'approvals' && pending > 0 ? (
+                    <span className="trd-tab__count">{pending}</span>
+                  ) : null}
                 </button>
-                {CHAINS.map((c) => (
+              ))}
+              <span className="trd-tabs__spacer" />
+              <div className="trd-tabs__tools">
+                <div
+                  role="radiogroup"
+                  aria-label={t('trading.overview.chains')}
+                  className="mac-segmented trd-chainpick"
+                >
                   <button
-                    key={c.id}
                     type="button"
                     role="radio"
-                    aria-checked={chain === c.id}
+                    aria-checked={chain === null}
                     className="mac-segment app-no-drag"
-                    onClick={() => setChain(c.id)}
+                    onClick={() => setChain(null)}
                   >
-                    <ChainMark chainId={c.id} />
-                    <span data-long>{c.short}</span>
+                    {t('trading.overview.chains.all')}
                   </button>
-                ))}
+                  {CHAINS.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={chain === c.id}
+                      className="mac-segment app-no-drag"
+                      onClick={() => setChain(c.id)}
+                    >
+                      <ChainMark chainId={c.id} />
+                      <span data-long>{c.short}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
 
-          {tab === 'holdings' ? (
-            <>
-              {picked ? <PriceChart holding={picked} onClose={() => setPicked(null)} /> : null}
-              <Holdings
-                holdings={holdings}
-                loading={portfolio.isPending}
-                selected={picked}
-                onSelect={setPicked}
-                showChain={chain === null}
-                onSwap={(h) =>
-                  setPrefill({
-                    chainId: h.chainId,
-                    tokenIn: h.token,
-                    wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
-                    seq: Date.now(),
-                  })
-                }
-              />
-            </>
-          ) : tab === 'history' ? (
-            <History
-              entries={history.entries}
-              loading={history.isPending}
-              now={now}
-              showWallet={showWallet}
-            />
-          ) : (
-            <Orders
-              orders={orders.orders}
-              approvalsOnly={tab === 'approvals'}
-              deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
-              onDecide={onDecide}
-              showWallet={showWallet}
-              highlight={highlight}
-            />
-          )}
+            <div className="trd-panel__body" data-tab={tab}>
+              {tab === 'holdings' ? (
+                <>
+                  {picked ? <PriceChart holding={picked} onClose={() => setPicked(null)} /> : null}
+                  <Holdings
+                    holdings={holdings}
+                    loading={portfolio.isPending}
+                    selected={picked}
+                    onSelect={setPicked}
+                    showChain={chain === null}
+                    onSwap={(h) =>
+                      setPrefill({
+                        chainId: h.chainId,
+                        tokenIn: h.token,
+                        wallet: h.wallet ?? (selected === 'all' ? undefined : selected),
+                        seq: Date.now(),
+                      })
+                    }
+                  />
+                </>
+              ) : tab === 'history' ? (
+                <History
+                  entries={history.entries}
+                  loading={history.isPending}
+                  now={now}
+                  showWallet={showWallet}
+                />
+              ) : (
+                <Orders
+                  orders={orders.orders}
+                  approvalsOnly={tab === 'approvals'}
+                  deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
+                  onDecide={onDecide}
+                  showWallet={showWallet}
+                  highlight={highlight}
+                />
+              )}
+            </div>
+          </div>
         </div>
 
         <SwapPanel

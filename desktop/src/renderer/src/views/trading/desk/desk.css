@@ -26,51 +26,83 @@
    own. A duration appears only when it was measured. "Confirmed" needs a
    hash and a confirmed status, together.
 
-   THE ONE EXCEPTION — the desk power-on (data-enter="trading", ~900 ms)
+   THE ONE EXCEPTION — the desk power-on (data-enter="trading", 880 ms)
    Trading is a mode of the chat, and the switch into it is the one event
    the rules of stillness make room for: a single choreographed entrance,
-   then nothing moves. It reads as a desk being printed onto the chat.
+   then nothing moves. The desk is a set of instruments floating on a bench,
+   so the switch reads as the instruments being set down on it — one
+   movement, four beats, and nothing else.
 
-     0–120    the pane dims to the desk canvas; a 4%-ink dot grid fades in
-     80–420   a lime scan line sweeps top→bottom; what it passes "prints":
-              the first ten transcript rows and the BOOK cards snap from
-              .3/6px to rest, 12 ms apart by row
-     160–520  BOOK slides in from the right, what Trading adds to the strip
-              drops from the top, the seats rise into place
-     260–860  "TRADING DESK" stamps at 12% ink, holds, then dissolves
-     380–700  the hero value counts up from 0 (Book.tsx), the allocation bar
-              draws left→right
-     760–880  one lime hairline pulse on the mode pill — then stillness
+     0–420    a neutral veil, already up on the first frame, lifts off the
+              pane — it covers the route swap rather than dimming a void
+     0–760    the instruments land, 80 ms apart, each rising 10 px with its
+              own edge a step brighter, settling back to its hairline:
+                 head @0 · book @80 · wallets @160 · ticket @240
+              (in BOOK mode: the chat column @0, the BOOK @80)
+     0–600    what Trading adds to the status strip drops in; the seats rise
+     140–700  "TRADING DESK" stamps at 7% ink, holds, then dissolves
+     220–640  the head's four tiles stagger in, the allocation meter draws
+              left→right, and the hero value counts up from 0 (parts.tsx)
+     740–900  one lime hairline pulse on the mode pill — then stillness
+
+   Nothing in it waits. A route change drops the outgoing tree on the frame
+   the click lands, so any delay before the first instrument is a hole in the
+   middle of the switch — see the veil for the measurement that found one.
+
+   Restraint is the design. An earlier cut swept a saturated lime hairline
+   across the full width and outlined all four panels in lime as they
+   arrived: five high-chroma flashes (#ccff00 on #060608 is ~19:1) inside a
+   second, over a scale that resampled every glyph on the panels. It was
+   read as fast and tiring, and it spent the one rationed colour five times
+   for decoration. What survives is a luminance step and a rise. The only
+   lime left in the whole sequence is the pulse that confirms the click.
 
    What does *not* move is as deliberate as what does: the mode pill and the
    row it sits in are the control the switch was made with, and they stay put
-   through the whole sequence. Nothing animates a blur or a blend mode —
-   both cost a full-pane repaint per frame.
+   through the whole sequence. Nothing animates a blur, a filter, a blend
+   mode or a scale — the first three cost a full-pane repaint per frame, the
+   last resamples type. The arriving edge is a static box-shadow on a
+   pseudo-element whose *opacity* animates, so it rides the compositor
+   instead of repainting four large panels.
 
    Resting identity after the entrance: the lime live dot in the pill and a
    1 px lime hairline on the composer capsule. Leaving Trading is the short
-   reverse (data-enter="chat", 300 ms). Reduced motion takes the instant
+   reverse (data-enter="chat", 320 ms). Reduced motion takes the instant
    path; a pending ask (data-still) skips the entrance entirely. Every
-   timing lives in the custom properties below, once. */
+   timing lives in the custom properties below, once, and is mirrored by
+   ENTRANCE_MS / LEAVE_MS in mode-logic.ts. */
+
+/* The entrance's clock lives on the root, not on the shell. The veil is
+   painted by .mac-canvas, which is a *sibling* of the column the shell sits
+   in — declared on .mode-shell these never resolved there, the shorthand was
+   invalid at computed-value time, and the backdrop silently never ran. */
+:root {
+  --enter-total: 880ms;
+  /* The first instrument starts on the frame the route swaps — see the veil
+     below for why nothing here may wait. Four of them, one beat apart:
+     0 + 3 × 80 + 520 = 760. */
+  --enter-land-start: 0ms;
+  --enter-land: 520ms;
+  --enter-land-step: 80ms;
+  --enter-veil: 420ms;
+  --enter-count-start: 220ms;
+  --enter-count: 420ms;
+  /* The stamp arrives while the instruments are still landing and outlives
+     them: it is a watermark you are meant to read, so it needs a hold, not a
+     blink. 140 → 700, legible for ~280 ms of that. */
+  --enter-stamp-start: 140ms;
+  --enter-stamp: 560ms;
+  --enter-pulse-start: 740ms;
+  --enter-pulse: 160ms;
+  --leave-total: 320ms;
+  /* The desk's general ease-out is front-loaded: 80 % of the move in the
+     first third, which is right for a control answering a click and wrong
+     for a panel arriving — it reads as a snap. The entrance uses a plain
+     quadratic ease-out so the instruments settle instead of landing hard. */
+  --enter-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
 
 .mode-shell {
-  --enter-total: 900ms;
-  --enter-dim: 120ms;
-  --enter-scan-start: 80ms;
-  --enter-scan: 340ms;
-  --enter-print-step: 12ms;
-  --enter-slide-start: 160ms;
-  --enter-slide: 360ms;
-  --enter-count-start: 380ms;
-  --enter-count: 320ms;
-  /* The stamp starts before the desk has finished arriving and outlives it:
-     it is a watermark you are meant to read, so it needs a hold, not a
-     blink. 260 → 860, legible for ~320 ms of that. */
-  --enter-stamp-start: 260ms;
-  --enter-stamp: 600ms;
-  --enter-pulse-start: 760ms;
-  --enter-pulse: 120ms;
-  --leave-total: 300ms;
   --desk-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --desk-ease-inout: cubic-bezier(0.45, 0, 0.2, 1);
   position: relative;
@@ -347,7 +379,7 @@
 }
 .trd-quick__chip--mission {
   color: var(--primary);
-  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--primary) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
 }
 .trd-seats {
   display: flex;
@@ -357,18 +389,25 @@
   padding: 0 4px;
   container-type: inline-size;
 }
+/* The same plate the desk's venue pill wears: hairline, pill, 5 % wash — so
+   the chips under the composer and the chips in the BOOK read as one set. */
 .trd-seat {
   display: inline-flex;
   min-width: 0;
   align-items: center;
   gap: 5px;
   height: 22px;
-  padding: 0 8px 0 7px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   font-size: 11px;
+  font-weight: 500;
   color: var(--muted-foreground);
   background: color-mix(in srgb, var(--foreground) 5%, transparent);
   white-space: nowrap;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
 }
 .trd-seat:hover {
   color: var(--foreground);
@@ -400,16 +439,19 @@
   align-items: center;
   gap: 4px;
   height: 22px;
-  padding: 0 8px 0 7px;
+  padding: 0 9px 0 8px;
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   font-size: 11px;
   font-weight: 500;
   color: var(--foreground);
-  box-shadow: inset 0 0 0 0.5px var(--border);
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
 }
 .trd-quick__chip:hover {
   background: color-mix(in srgb, var(--primary) 12%, transparent);
-  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
 }
 /* Shrink chain: labels first, the permission text second; glyphs never. */
 @container (max-width: 560px) {
@@ -843,6 +885,10 @@
 
 /* ── BOOK ─────────────────────────────────────────────────────────────────── */
 
+/* The BOOK is the one instrument on the chat's bench, so it wears the same
+   card the desk's three columns do: a hairline, a surface a step above the
+   canvas, a 1 px top highlight — floating in a gutter rather than butted up
+   against the window edge with a rule down its side. */
 .trd-book {
   position: relative;
   display: flex;
@@ -850,9 +896,12 @@
   min-height: 0;
   flex-direction: column;
   container: book / inline-size;
-  border-left: 1px solid var(--hairline);
-  /* Transparent on purpose: the frame's canvas continues under the BOOK. */
-  background: transparent;
+  margin: 10px 12px 12px 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-surface);
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 4%, transparent);
+  overflow: clip;
   transition: width 240ms var(--desk-ease-inout);
 }
 body[data-dragging] .trd-book {
@@ -863,6 +912,10 @@ body[data-dragging] .trd-book {
   align-items: center;
   gap: 4px;
   padding-top: 8px;
+}
+/* Collapsed, the card is a spine: the same edge, none of the width. */
+.trd-book--spine .trd-book__spinebtn:first-child {
+  margin-bottom: 2px;
 }
 .trd-book__spinebtn {
   position: relative;
@@ -915,8 +968,10 @@ body[data-dragging] .trd-book__handle {
   flex-shrink: 0;
   align-items: center;
   gap: 4px;
-  padding: 8px 6px 6px 10px;
+  min-height: 38px;
+  padding: 0 4px 0 6px;
   border-bottom: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 .trd-book__tabs {
   display: flex;
@@ -929,19 +984,28 @@ body[data-dragging] .trd-book__handle {
   min-width: 0;
   align-items: center;
   gap: 5px;
-  height: 24px;
+  height: 26px;
   padding: 0 8px;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-control);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--muted-foreground);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
 }
 .trd-book__tab:hover {
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
 }
 .trd-book__tab[aria-selected='true'] {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-book__tab:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
 }
 .trd-book__count {
   display: inline-flex;
@@ -962,8 +1026,23 @@ body[data-dragging] .trd-book__handle {
   overflow: hidden;
 }
 .trd-book__body > .trd-ticket {
-  border-left: 0;
+  border: 0;
+  border-radius: 0;
   background: transparent;
+  box-shadow: none;
+}
+/* The BOOK's tab row already says "Swap", and two stacked toolbar bands in a
+   300 px rail is chrome twice over: the ticket keeps only the control the tab
+   cannot carry — which chain it routes on. */
+.trd-book .trd-ticket__head {
+  min-height: 0;
+  padding: 8px 8px 0 10px;
+  justify-content: flex-end;
+  border-bottom: 0;
+  background: transparent;
+}
+.trd-book .trd-ticket__title {
+  display: none;
 }
 .trd-book__portfolio {
   display: flex;
@@ -972,60 +1051,31 @@ body[data-dragging] .trd-book__handle {
   flex-direction: column;
   overflow-y: auto;
 }
+/* The head is the desk's, compressed: the card it already sits inside supplies
+   the edge, so here it is a section of the BOOK rather than a card of its own —
+   a hairline under it, no border, no radius, no corner light. */
 .trd-book__hero {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 12px 14px 10px;
+  gap: 10px;
+  padding: 12px 12px 12px;
+  border: 0;
   border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
-.trd-book__label {
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted-foreground);
+.trd-book__hero::before {
+  display: none;
 }
-.trd-book__value {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+.trd-book__hero .trd-hero__figure > b {
+  font-size: 30px;
 }
-.trd-book__delta {
-  font-size: 11.5px;
-}
-.trd-book__stats {
-  display: grid;
+.trd-book__hero .trd-hero__stats {
   grid-template-columns: 1fr 1fr;
-  gap: 6px 12px;
-  margin-top: 8px;
 }
-.trd-book__stat {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 12px;
-}
-.trd-book__alloc {
-  display: flex;
-  height: 3px;
-  margin-top: 10px;
-  border-radius: 2px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
-}
-.trd-book__alloc > span {
-  height: 100%;
-  background: var(--primary);
-  opacity: 0.9;
-}
-.trd-book__alloc > span + span {
-  opacity: 0.45;
+.trd-book__hero .trd-delta {
+  height: 22px;
+  padding: 0 8px 0 6px;
+  font-size: 11px;
 }
 .trd-book__wallets {
   display: flex;
@@ -1038,27 +1088,37 @@ body[data-dragging] .trd-book__handle {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  height: 24px;
-  padding: 0 8px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   font-size: 11.5px;
   color: var(--muted-foreground);
-  box-shadow: inset 0 0 0 0.5px var(--border);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
 }
 .trd-book__wallet[aria-selected='true'] {
   color: var(--foreground);
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
 }
-.trd-book__wallet svg {
+/* Lime marks the primary wallet, nothing else in the row: the add button's
+   own glyph is chrome, not a signal. */
+.trd-book__wallet:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.trd-book__wallet .trd-book__star {
   color: var(--primary);
 }
 .trd-book__walletvalue {
   color: var(--dim);
 }
 .trd-book__wallet--add {
-  width: 24px;
+  width: 26px;
   padding: 0;
   justify-content: center;
+  color: var(--dim);
 }
 .trd-book__body .trd-tablewrap {
   flex: 1;
@@ -1332,171 +1392,120 @@ body[data-dragging] .trd-book__handle {
 
 /* ── The entrance ────────────────────────────────────────────────────────── */
 
-/* 0–120: the pane dims to the desk canvas and the dot grid fades in. It rides
-   on the column's own canvas, so the whole pane dims at once — toolbar and
-   strip included — instead of stopping short of the window chrome. */
+/* 0–420: the veil, and the reason the sequence has no run-up.
+
+   Switching mode is a route change: React drops the whole chat tree on the
+   frame the click lands. A screencast of the switch showed the content column
+   going black for ~190 ms — the outgoing tree gone, the incoming panels still
+   waiting on their delay — then everything fading up. That black gap is what
+   read as a stutter; the frame timings across the whole switch are clean
+   (120 fps, zero frames over 25 ms), so there was never anything to smooth.
+
+   So the veil is already up on the first frame: it is the cover over the
+   swap, not a layer that dims a room which is empty anyway, and it lifts as
+   the instruments settle. No lime in it — the wash is a luminance step, and
+   the accent is rationed to the one pulse that confirms the click. */
 .mac-content:has(.mode-shell[data-enter='trading']) .mac-canvas::after {
   content: '';
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(
-      circle at 1px 1px,
-      color-mix(in srgb, var(--foreground) 4%, transparent) 1px,
-      transparent 1.5px
-    ),
-    color-mix(in srgb, var(--background) 92%, var(--primary));
-  background-size:
-    14px 14px,
-    100% 100%;
-  animation: desk-dim var(--enter-dim) var(--desk-ease-out) both;
+  background: var(--background);
+  animation: desk-veil var(--enter-veil) var(--enter-ease) both;
 }
-.mode-shell[data-enter='trading'] .trd-frame {
-  position: relative;
-}
-@keyframes desk-dim {
+@keyframes desk-veil {
   from {
-    opacity: 0;
+    opacity: 0.42;
   }
   to {
-    opacity: 1;
+    opacity: 0;
   }
 }
 
-/* 80–420: the scan line. 2 px of lime sitting in a soft band of its own glow.
-   The glow is a gradient rather than a screen-blended box-shadow: a blend mode
-   forces the line to be re-composited against everything under it on every
-   frame, which is what made the sweep stutter. Painted straight, it rides the
-   compositor and the sweep costs nothing. */
-.mode-shell[data-enter='trading'] .trd-frame::after {
+/* 0–760: the instruments land. One movement, one beat apart, and that is the
+   whole of it. The first starts on frame zero, and none of them start from
+   nothing — a pane of dim panels reads as a mode change, a pane of *no*
+   panels reads as a fault.
+
+   What is deliberately NOT here any more: a saturated lime hairline sweeping
+   the full width, and four large panels outlined in lime that ramp up and
+   back down. Both were flashes — #ccff00 on #060608 is ~19:1, and five of
+   them firing inside a second is the thing that made the switch hurt to
+   watch. The arrival is now carried by the panel's own edge brightening a
+   step in neutral ink, which says "this just arrived" without a flash.
+
+   No scale, either: scaling a panel full of type resamples every glyph for
+   the length of the animation, and that shimmer was the other half of the
+   complaint. Only translate and opacity move. */
+.mode-shell[data-enter='trading']
+  :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket, .trd-book, .trd-frame > .chat-desktop) {
+  will-change: transform, opacity;
+  animation: desk-land var(--enter-land) var(--enter-ease)
+    calc(var(--enter-land-start) + var(--enter-land-step) * var(--land, 0)) both;
+}
+.mode-shell[data-enter='trading'] .trd-panel,
+.mode-shell[data-enter='trading'] .trd-book {
+  --land: 1;
+}
+.mode-shell[data-enter='trading'] .trd-rail {
+  --land: 2;
+}
+.mode-shell[data-enter='trading'] .trd-ticket {
+  --land: 3;
+}
+@keyframes desk-land {
+  from {
+    opacity: 0.2;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* …and each lands with its own edge a step brighter, settling back into the
+   hairline it rests on. Drawn inside, so the panels that clip their content
+   keep it; animated on opacity, so four large panels never repaint. */
+.mode-shell[data-enter='trading']
+  :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket, .trd-book)::after {
   content: '';
   position: absolute;
-  top: -18px;
-  left: 0;
-  right: 0;
-  z-index: 3;
-  height: 38px;
+  inset: 0;
+  z-index: 4;
+  border-radius: inherit;
   pointer-events: none;
-  background:
-    linear-gradient(
-      to bottom,
-      transparent 0%,
-      color-mix(in srgb, var(--primary) 22%, transparent) 42%,
-      var(--primary) 47%,
-      var(--primary) 53%,
-      color-mix(in srgb, var(--primary) 22%, transparent) 58%,
-      transparent 100%
-    );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 20%, transparent);
   opacity: 0;
-  will-change: transform, opacity;
-  animation: desk-scan var(--enter-scan) linear var(--enter-scan-start) both;
+  animation: desk-edge var(--enter-land) var(--enter-ease)
+    calc(var(--enter-land-start) + var(--enter-land-step) * var(--land, 0)) both;
 }
-@keyframes desk-scan {
+.mode-shell[data-enter='trading'] :is(.trd-hero, .trd-panel, .trd-rail, .trd-ticket) {
+  position: relative;
+}
+@keyframes desk-edge {
   0% {
-    transform: translateY(0);
-    opacity: 1;
+    opacity: 0;
   }
-  96% {
+  30% {
     opacity: 1;
   }
   100% {
-    transform: translateY(calc(100vh - 80px));
     opacity: 0;
   }
 }
 
-/* What the line passes, prints: rows and cards snap from .3/6px to rest,
-   staggered by row index so the print follows the sweep. Capped at ten rows —
-   a long transcript would otherwise promote dozens of layers in the same
-   frame the desk is mounting, and everything past the tenth row is below the
-   fold anyway. */
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(-n + 10),
-.mode-shell[data-enter='trading'] .trd-book__hero,
-.mode-shell[data-enter='trading'] .trd-book__wallets,
-.mode-shell[data-enter='trading'] .trd-table tbody tr,
-.mode-shell[data-enter='trading'] .trd-book__stat {
-  animation: desk-print 180ms var(--desk-ease-out) both;
-  animation-delay: calc(var(--enter-scan-start) + var(--enter-print-step) * var(--row, 0));
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(2),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(2) {
-  --row: 2;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(3),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(3) {
-  --row: 4;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(4),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(4) {
-  --row: 6;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(5),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(5) {
-  --row: 8;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(6),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(6) {
-  --row: 10;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(7),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(7) {
-  --row: 12;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(8),
-.mode-shell[data-enter='trading'] .trd-table tbody tr:nth-child(n + 8) {
-  --row: 14;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(9) {
-  --row: 16;
-}
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(10) {
-  --row: 18;
-}
-.mode-shell[data-enter='trading'] .trd-book__wallets {
-  --row: 6;
-}
-.mode-shell[data-enter='trading'] .trd-book__stat {
-  --row: 4;
-}
-@keyframes desk-print {
-  from {
-    opacity: 0.3;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-/* 160–520: the BOOK slides in from the right, the strip drops from the
-   top, the seats rise into place. */
-.mode-shell[data-enter='trading'] .trd-book {
-  will-change: transform, opacity;
-  animation: desk-slide-in var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
-}
-@keyframes desk-slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(24px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-/* The row itself must not move. The mode pill lives in it in both modes and
-   is the control the user just clicked — dropping the whole strip blanked it
-   the instant it was pressed (a `both` fill applies the from-state through
-   the delay) and snapped it back 360 ms later. Only what Trading *adds* to
+/* 130–490: the row itself must not move. The mode pill lives in it in both
+   modes and is the control the user just clicked — dropping the whole strip
+   blanked it the instant it was pressed (a `both` fill applies the from-state
+   through the delay) and snapped it back later. Only what Trading *adds* to
    the row arrives. */
 .mode-shell[data-enter='trading'] .trd-strip__mission,
 .mode-shell[data-enter='trading'] .trd-strip__more,
 .mode-shell[data-enter='trading'] .trd-strip__word,
 .mode-shell[data-enter='trading'] .trd-strip__pin,
 .mode-shell[data-enter='trading'] .trd-strip__toggle {
-  animation: desk-drop var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
+  animation: desk-drop var(--enter-land) var(--enter-ease) var(--enter-land-start) both;
 }
 @keyframes desk-drop {
   from {
@@ -1511,8 +1520,7 @@ body[data-dragging] .trd-book__handle {
 .mode-shell[data-enter='trading'] .trd-seats,
 .mode-shell[data-enter='trading'] .trd-mstrip,
 .mode-shell[data-enter='trading'] .trd-mctl {
-  animation: desk-rise var(--enter-slide) var(--desk-ease-out) calc(var(--enter-slide-start) + 60ms)
-    both;
+  animation: desk-rise var(--enter-land) var(--enter-ease) calc(var(--enter-land-start) + 80ms) both;
 }
 @keyframes desk-rise {
   from {
@@ -1525,11 +1533,35 @@ body[data-dragging] .trd-book__handle {
   }
 }
 
-/* 380–700: the allocation bar draws, the stamp lands and dissolves. The
-   hero count-up is JavaScript (Book.tsx) on the same clock. */
-.mode-shell[data-enter='trading'] .trd-book__alloc {
+/* 300–600: the head's own figures settle last — four tiles a beat apart, the
+   allocation meter drawn left→right. The hero count-up is JavaScript
+   (Book.tsx) on the same clock. */
+.mode-shell[data-enter='trading'] .trd-stat {
+  animation: desk-tile 340ms var(--enter-ease)
+    calc(var(--enter-count-start) + 60ms * var(--tile, 0)) both;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(2) {
+  --tile: 1;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(3) {
+  --tile: 2;
+}
+.mode-shell[data-enter='trading'] .trd-stat:nth-child(4) {
+  --tile: 3;
+}
+@keyframes desk-tile {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.mode-shell[data-enter='trading'] .trd-alloc__bar {
   transform-origin: left center;
-  animation: desk-draw var(--enter-count) var(--desk-ease-out) var(--enter-count-start) both;
+  animation: desk-draw var(--enter-count) var(--enter-ease) var(--enter-count-start) both;
 }
 @keyframes desk-draw {
   from {
@@ -1539,43 +1571,44 @@ body[data-dragging] .trd-book__handle {
     transform: scaleX(1);
   }
 }
+
+/* 200–600: the stamp. A watermark the instruments land through, not a title
+   card they wait behind — so it is held at 10 % ink and kept off the weight
+   of the value it sits behind. Only opacity moves — scaling type this size
+   resamples every glyph for the length of the hold, and that shimmer is half
+   of what made the switch tiring to watch. */
 .trd-poweron {
   position: absolute;
-  inset: 0 0 20%;
+  inset: 0 0 22%;
   z-index: 4;
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
   font-family: var(--font-mono);
-  font-size: clamp(48px, 9vw, 112px);
+  font-size: clamp(34px, 5.5vw, 74px);
   font-weight: 700;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
   text-transform: uppercase;
   white-space: nowrap;
   color: var(--foreground);
   opacity: 0;
-  /* Only opacity and transform move: an animated blur on type this size is a
-     full-pane repaint every frame, and it was the most expensive thing in
-     the sequence. The soft arrival now comes from the scale alone. */
-  will-change: opacity, transform;
-  animation: desk-stamp var(--enter-stamp) var(--desk-ease-inout) var(--enter-stamp-start) both;
+  will-change: opacity;
+  animation: desk-stamp var(--enter-stamp) linear var(--enter-stamp-start) both;
 }
 @keyframes desk-stamp {
   0% {
     opacity: 0;
-    transform: scale(1.03);
   }
-  16% {
-    opacity: 0.12;
-    transform: none;
+  26% {
+    opacity: 0.07;
   }
-  70% {
-    opacity: 0.12;
+  64% {
+    opacity: 0.07;
   }
   100% {
     opacity: 0;
-    transform: scale(0.99);
   }
 }
 
@@ -1597,27 +1630,30 @@ body[data-dragging] .trd-book__handle {
   }
 }
 
-/* Leaving: the short reverse — the chat settles back from the desk wash. */
+/* Leaving: the short reverse — the chat drops back into the space the desk
+   was holding. No filter: a saturate() on the whole body is a full-pane
+   repaint for every frame of the exit, and it tinted anything captured
+   mid-flight. */
 .mode-shell[data-enter='chat'] .mode-body {
-  animation: desk-settle var(--leave-total) var(--desk-ease-inout) both;
+  animation: desk-settle var(--leave-total) var(--enter-ease) both;
 }
 @keyframes desk-settle {
   from {
-    opacity: 0.6;
-    transform: translateY(4px);
-    filter: saturate(1.15);
+    opacity: 0;
+    transform: translateY(-6px);
   }
   to {
     opacity: 1;
     transform: none;
-    filter: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .mode-shell[data-enter],
   .mode-shell[data-enter] *,
   .mode-shell[data-enter] *::before,
   .mode-shell[data-enter] *::after,
+  .mac-content:has(.mode-shell[data-enter]) .mac-canvas::after,
   .trd-poweron {
     animation: none !important;
   }
@@ -1627,32 +1663,42 @@ body[data-dragging] .trd-book__handle {
 }
 
 /* ── Orders inside the BOOK ─────────────────────────────────────────────────
-   The order row is laid out for the wide desk (facts left, status and
-   actions right). In a 300–520 px rail that grid overflows, so it stacks:
-   status line first, then the legs, facts and actions in one column. */
+   The order row is laid out for the wide desk (mark, trade, value, who,
+   door). A 300–520 px rail has no room for the last three as columns, so the
+   row unfolds into three lines against one gutter: the trade with its figure,
+   the caption under it, then who and when beside the door. */
 .trd-book .trd-order {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  padding: 10px 12px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 3px 8px;
+  padding: 9px 10px;
 }
-.trd-book .trd-order__side {
-  order: -1;
-  grid-row: auto;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.trd-book .trd-order__mark {
+  width: 20px;
+  height: 20px;
+  align-self: start;
+  grid-area: 1 / 1 / span 3 / 2;
 }
 .trd-book .trd-order__head {
-  flex-wrap: wrap;
-  font-size: 12.5px;
+  grid-area: 1 / 2 / 2 / 3;
+  font-size: 11.5px;
+}
+.trd-book .trd-order__value {
+  grid-area: 1 / 3 / 2 / 4;
 }
 .trd-book .trd-order__meta {
-  gap: 2px 10px;
-  font-size: 11px;
+  grid-area: 2 / 2 / 3 / 4;
 }
-.trd-book .trd-order__actions {
-  margin-left: auto;
+.trd-book .trd-order__who {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  grid-area: 3 / 2 / 4 / 3;
+  justify-content: flex-start;
+}
+.trd-book .trd-order__link {
+  grid-area: 3 / 3 / 4 / 4;
+  align-self: center;
 }
 .trd-book .trd-order__reason,
 .trd-book .trd-order__note {

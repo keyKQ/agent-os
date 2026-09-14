@@ -3,7 +3,7 @@ import { render } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { useConnection } from '@/stores/connection'
-import type { Order, Quote, Token, Wallet } from './types'
+import type { Holding, Order, Quote, Token, Wallet } from './types'
 
 /** Test doubles for the desk: a connected client and the shapes the RPC returns. */
 
@@ -47,6 +47,26 @@ export const WALLET: Wallet = {
   primary: true,
   createdAt: 1_700_000_000_000,
   chains: [8453, 4663],
+}
+
+export function holding(extra: Partial<Holding> = {}): Holding {
+  return {
+    chainId: 8453,
+    wallet: WALLET.address,
+    token: USDC,
+    amount: '900',
+    raw: '900000000',
+    priceUsd: 1,
+    valueUsd: 900,
+    costUsd: 880,
+    avgCostUsd: 0.98,
+    unrealizedUsd: 20,
+    unrealizedPct: 2.27,
+    realizedUsd: 0,
+    change24hPct: 0.4,
+    allocationPct: 72.5,
+    ...extra,
+  }
 }
 
 export function quote(extra: Partial<Quote> = {}): Quote {

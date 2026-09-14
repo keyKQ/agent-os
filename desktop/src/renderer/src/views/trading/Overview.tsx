@@ -3,13 +3,14 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { shortAge } from '~/lib/relative-time'
 import { allocationSegments, formatPct, formatUsd, pnlTone } from './logic'
-import { Money, Spinner } from './parts'
+import { Money, Spinner, useCountUp } from './parts'
 import { providerLabel, type Holding, type ProviderId, type Totals } from './types'
 
 /**
- * The hero: the value in the display face, today's move beside it, four
- * figures under it, and the allocation rule. Everything here is a total of
- * what the table below lists; nothing is computed twice.
+ * The instrument head of the desk: one panel carrying the value in the
+ * display face, today's move as a toned chip, four figures on their own
+ * tiles, and the allocation meter. Everything here is a total of what the
+ * table below lists; nothing is computed twice.
  */
 export function Overview({
   totals,
@@ -20,6 +21,7 @@ export function Overview({
   onSync,
   loading,
   provider,
+  entering,
 }: {
   totals: Totals
   holdings: Holding[]
@@ -30,39 +32,22 @@ export function Overview({
   loading: boolean
   /** Who routes swaps right now, as a pill beside the sync state. */
   provider?: ProviderId
+  /** The mode switch is playing: the value counts up on the same clock. */
+  entering?: boolean
 }) {
   const tone = pnlTone(totals.change24hUsd)
   const segments = allocationSegments(holdings)
   const Arrow = tone === 'down' ? TrendingDown : TrendingUp
+  const { counting, attach } = useCountUp(totals.valueUsd, Boolean(entering) && !loading)
 
   return (
     <section className="trd-hero" data-tone={tone} aria-label={t('trading.overview.value')}>
-      <div className="trd-hero__top">
-        <div>
-          <div className="trd-hero__label">{t('trading.overview.value')}</div>
-          <div className="trd-hero__value">
-            <b data-testid="portfolio-value">
-              {loading ? (
-                <span className="trd-skel" style={{ width: 160, height: 28 }} />
-              ) : (
-                <Money value={totals.valueUsd} />
-              )}
-            </b>
-            {!loading && totals.change24hUsd !== null ? (
-              <span className="trd-hero__delta trd-num" data-tone={tone}>
-                {tone !== 'flat' ? (
-                  <Arrow className="size-3.5" strokeWidth={2} aria-hidden />
-                ) : null}
-                {formatUsd(totals.change24hUsd, { signed: true })}
-                <span>{formatPct(totals.change24hPct, { signed: true })}</span>
-                <small>{t('trading.overview.today')}</small>
-              </span>
-            ) : null}
-          </div>
-        </div>
+      <header className="trd-hero__bar">
+        <span className="trd-hero__label">{t('trading.overview.value')}</span>
         <div className="trd-hero__tools">
           {provider ? (
-            <span className="trd-status" data-tone="live" data-testid="provider-pill">
+            <span className="trd-venue" data-testid="provider-pill">
+              <i aria-hidden />
               {providerLabel(provider)}
             </span>
           ) : null}
@@ -87,9 +72,40 @@ export function Overview({
             disabled={syncing}
             onClick={onSync}
           >
-            <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+            <RefreshCw
+              className="trd-hero__spin size-3.5 text-muted-foreground"
+              strokeWidth={1.75}
+              aria-hidden
+            />
           </Button>
         </div>
+      </header>
+
+      <div className="trd-hero__figure">
+        <b data-testid="portfolio-value">
+          {loading ? (
+            <span className="trd-skel" style={{ width: 190, height: 34 }} />
+          ) : counting ? (
+            <span className="trd-num" data-testid="portfolio-value-counting" ref={attach}>
+              {formatUsd(0)}
+            </span>
+          ) : (
+            <Money value={totals.valueUsd} />
+          )}
+        </b>
+        {!loading && totals.change24hUsd !== null ? (
+          <span
+            className="trd-delta"
+            data-tone={tone}
+            data-testid="portfolio-delta"
+            title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
+          >
+            {tone !== 'flat' ? <Arrow className="size-3.5" strokeWidth={2.25} aria-hidden /> : null}
+            <Money value={totals.change24hUsd} signed cell />
+            <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
+            <small>{t('trading.overview.today')}</small>
+          </span>
+        ) : null}
       </div>
 
       <div className="trd-hero__stats">
@@ -108,19 +124,20 @@ export function Overview({
       {segments.length > 0 ? (
         <div className="trd-alloc" aria-label={t('trading.overview.allocation')}>
           <div className="trd-alloc__bar" aria-hidden>
-            {segments.map((s) => (
+            {segments.map((s, i) => (
               <span
                 key={s.symbol}
+                style={{ ['--i' as string]: i, flexBasis: `${s.pct}%` }}
                 data-other={s.symbol === 'other' ? 'true' : undefined}
-                style={{ flexBasis: `${s.pct}%` }}
                 title={`${s.symbol} ${formatPct(s.pct)}`}
               />
             ))}
           </div>
           <div className="trd-alloc__legend">
-            {segments.map((s) => (
-              <span key={s.symbol}>
-                {s.symbol === 'other' ? t('trading.overview.other') : s.symbol}{' '}
+            {segments.map((s, i) => (
+              <span key={s.symbol} style={{ ['--i' as string]: i }}>
+                <i data-other={s.symbol === 'other' ? 'true' : undefined} aria-hidden />
+                {s.symbol === 'other' ? t('trading.overview.other') : s.symbol}
                 <b>{formatPct(s.pct)}</b>
               </span>
             ))}
@@ -131,6 +148,7 @@ export function Overview({
   )
 }
 
+/** One figure on its own tile: a micro label, the number, its rate beside it. */
 function Stat({
   label,
   value,
@@ -145,10 +163,10 @@ function Stat({
   pct?: number | null
 }) {
   return (
-    <div className="trd-stat">
+    <div className="trd-stat" title={formatUsd(value, { signed })}>
       <span className="trd-stat__label">{label}</span>
       <span className="trd-stat__value">
-        <Money value={value} signed={signed} toned={toned} />
+        <Money value={value} signed={signed} toned={toned} cell />
         {pct !== undefined && pct !== null && Number.isFinite(pct) ? (
           <small className="trd-num" data-tone={pnlTone(pct)}>
             {formatPct(pct, { signed: true })}

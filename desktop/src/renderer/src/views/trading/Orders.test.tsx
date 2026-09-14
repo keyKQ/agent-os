@@ -56,6 +56,42 @@ describe('Orders · approvals', () => {
     expect(onDecide).toHaveBeenCalledWith(waiting, false)
   })
 
+  it('carries the trade, its value and the quiet facts on one row', () => {
+    renderDesk(
+      <Orders
+        orders={[
+          order({
+            orderId: 'c2',
+            status: 'confirmed',
+            initiator: 'manual',
+            note: null,
+            expiresAt: null,
+            priceImpactPct: 4.2,
+          }),
+        ]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    const row = screen.getByTestId('order-row')
+    expect(row).toHaveTextContent('0.2 ETH')
+    expect(row).toHaveTextContent('500 USDC')
+    expect(row).toHaveTextContent('Confirmed')
+    expect(row).toHaveTextContent('You')
+    // The row's own value column, then the caption's short-labelled figures.
+    expect(row).toHaveTextContent('$500.00')
+    expect([...row.querySelectorAll('.trd-order__fact')].map((el) => el.textContent)).toEqual(
+      expect.arrayContaining(['min497', 'impact4.20%', 'fee$0.04']),
+    )
+    // A heavy impact is toned rather than left in the caption's grey.
+    expect(row.querySelector('b[data-tone="warn"]')).toHaveTextContent('4.20%')
+    // Nothing waits, so no timer and no decision buttons.
+    expect(screen.queryByTestId('order-approve')).toBeNull()
+  })
+
   it('locks the buttons while a decision is in flight', () => {
     renderDesk(
       <Orders
