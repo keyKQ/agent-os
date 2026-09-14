@@ -6,6 +6,7 @@ import { QUOTE_REFRESH_MS } from '~/views/trading/logic'
 import type {
   Balance,
   Chart,
+  ChartRange,
   Entry,
   Limits,
   Order,
@@ -248,7 +249,7 @@ export function useLimits(wallet: string | null) {
   })
 }
 
-export function useChart(chainId: number, token: string | null, range: '1d' | '1w' | '1m' | '1y') {
+export function useChart(chainId: number, token: string | null, range: ChartRange) {
   const rpc = useRpc()
   const connected = useConnected()
   return useQuery<Chart>({

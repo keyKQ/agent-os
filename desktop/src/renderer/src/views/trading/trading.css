@@ -864,17 +864,75 @@ tr:focus-within .trd-row__actions {
   justify-content: space-between;
   gap: 10px;
 }
-.trd-chart__title {
+/* Four figures across the top, divided by hairlines rather than boxed. All of
+   them come out of the price response the line's own lookup already made. */
+.trd-chart__strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin: 0;
+  gap: 1px;
+  background: var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.trd-chart__stat {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+}
+.trd-chart__stat dt {
+  font-size: 11px;
+  color: var(--dim);
+}
+.trd-chart__stat dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trd-chart__hero {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-chart__value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.trd-chart__move {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  font-size: 13px;
-  font-weight: 600;
-}
-.trd-chart__title small {
-  font-size: 11px;
-  font-weight: 400;
+  gap: 6px;
+  font-size: 12px;
   color: var(--dim);
+}
+.trd-chart__move[data-tone='up'] .trd-num {
+  color: var(--trd-up, var(--ok));
+}
+.trd-chart__move[data-tone='down'] .trd-num {
+  color: var(--trd-down, var(--danger));
+}
+.trd-chart__move small {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+/* "local": the line is the app's own snapshots, not an indexed pool. */
+.trd-chart__move small:last-child:not(:nth-child(2)) {
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 .trd-chart__canvas {
   height: 180px;

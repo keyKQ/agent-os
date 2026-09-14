@@ -75,6 +75,16 @@ class PriceInfo:
     pair_address: str | None = None
     pair_url: str | None = None
     image_url: str | None = None
+    #: The three below ride along in the same DexScreener pair object the
+    #: fields above are read from — parsing them costs no extra request.
+    #: ``price_native`` is quoted in the *pool's* quote token, which is not
+    #: always the chain's gas coin — a WETH/USDC pool quotes in USDC. The
+    #: symbol travels with it so nothing has to guess.
+    price_native: float | None = None
+    price_native_symbol: str | None = None
+    market_cap_usd: float | None = None
+    #: Venue as DexScreener names it, e.g. "Uniswap v4".
+    market: str | None = None
     fetched_at: float = field(default_factory=time.time)
 
 
@@ -104,6 +114,17 @@ def _f(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _market_label(pair: Any) -> str | None:
+    """ "uniswap" + ["v4"] -> "Uniswap v4". The venue as a human reads it."""
+    dex = str((pair or {}).get("dexId") or "").strip()
+    if not dex:
+        return None
+    labels = (pair or {}).get("labels")
+    tail = " ".join(str(x).strip() for x in labels if str(x).strip()) if labels else ""
+    name = dex[:1].upper() + dex[1:]
+    return f"{name} {tail}".strip()
 
 
 class PriceService:
@@ -297,6 +318,12 @@ class PriceService:
             pair_address=str(pair.get("pairAddress") or "") or None,
             pair_url=str(pair.get("url") or "") or None,
             image_url=str(info.get("imageUrl") or "") or None,
+            price_native=_f(pair.get("priceNative")),
+            price_native_symbol=str((pair.get("quoteToken") or {}).get("symbol") or "") or None,
+            # marketCap is absent for tokens DexScreener cannot supply; fdv is
+            # the honest stand-in, and None rather than a zero when neither is.
+            market_cap_usd=_f(pair.get("marketCap")) or _f(pair.get("fdv")),
+            market=_market_label(pair),
             fetched_at=time.time(),
         )
 
@@ -421,6 +448,8 @@ class PriceService:
             frame, aggregate = "hour", "4"
         elif timeframe == "15m":
             frame, aggregate = "minute", "15"
+        elif timeframe == "5m":
+            frame, aggregate = "minute", "5"
         body = await self._get(
             f"{GECKOTERMINAL_BASE}/networks/base/pools/{info.pair_address}/ohlcv/{frame}",
             params={"aggregate": aggregate, "limit": limit},

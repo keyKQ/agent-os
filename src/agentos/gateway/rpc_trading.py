@@ -15,7 +15,12 @@ from agentos.gateway.rpc import RpcContext, RpcHandlerError, get_dispatcher
 from agentos.trading import get_trading_service
 from agentos.trading.chains import ChainSpec, resolve_chain
 from agentos.trading.providers import PROVIDER_IDS
-from agentos.trading.service import TradingError, TradingService, _err
+from agentos.trading.service import (
+    DEFAULT_CHART_RANGE,
+    TradingError,
+    TradingService,
+    _err,
+)
 
 _d = get_dispatcher()
 
@@ -531,7 +536,7 @@ async def _trading_chart(params: dict | None, ctx: RpcContext) -> dict[str, Any]
     chain = _chain(p)
     assert chain is not None
     token = _str(p, "token", required=True) or ""
-    range_key = _str(p, "range") or "1w"
+    range_key = _str(p, "range") or DEFAULT_CHART_RANGE
     service = _service(ctx)
     try:
         return await service.chart(chain, token, range_key)

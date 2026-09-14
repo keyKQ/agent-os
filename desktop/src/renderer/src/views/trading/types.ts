@@ -238,17 +238,34 @@ export interface ProbeResult {
 /** The RPC error code a geo-blocked provider raises on quote and swap. */
 export const PROVIDER_BLOCKED_CODE = 'trading.provider_blocked'
 
+/** One close, in unix *seconds* — the units both producers emit. */
 export interface ChartPoint {
   t: number
-  o?: number
-  h?: number
-  l?: number
   c: number
+}
+
+export type ChartRange = '1h' | '6h' | '1d' | '1w' | 'all'
+
+/** The figures above the line. Every one rides on a response the chart's own
+ *  price lookup already made, so none of them costs a request. */
+export interface ChartStats {
+  priceUsd: number | null
+  priceNative: number | null
+  /** The pool's quote token, which a WETH/USDC pair reports as USDC — not
+   *  necessarily the chain's gas coin. */
+  quoteSymbol: string
+  marketCapUsd: number | null
+  /** The venue, as DexScreener names it: "Uniswap v4". */
+  market: string | null
+  /** Move across the selected range, not a fixed 24h. */
+  changePct: number | null
 }
 
 export interface Chart {
   source: 'geckoterminal' | 'snapshots'
+  range: ChartRange
   points: ChartPoint[]
+  stats: ChartStats
 }
 
 export interface Limits {

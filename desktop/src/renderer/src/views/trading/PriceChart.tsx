@@ -1,44 +1,88 @@
 import { X } from 'lucide-react'
 import {
   AreaSeries,
-  CandlestickSeries,
   ColorType,
   createChart,
   type IChartApi,
+  type TickMarkType,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useChart } from '~/stores/trading'
-import { formatUsd } from './logic'
+import { formatPct, formatPrice, formatUsd } from './logic'
 import { Spinner } from './parts'
-import type { Chart, Holding } from './types'
+import type { Chart, ChartRange, Holding } from './types'
 
-type Range = '1d' | '1w' | '1m' | '1y'
-const RANGES: Range[] = ['1d', '1w', '1m', '1y']
+const RANGES: ChartRange[] = ['1h', '6h', '1d', '1w', 'all']
+
+/** A tick label on the machine's own clock: a time inside a day, a date across
+ *  days. `t` is unix seconds, the units both chart producers emit. */
+function clock(time: Time, withTime: boolean): string {
+  const at = new Date(Number(time) * 1000)
+  return withTime
+    ? at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888'
 }
 
 /**
- * The picked holding's price under the table. Candles when a pool has
- * OHLC (Base, via GeckoTerminal); an area line from the app's own
- * snapshots otherwise (Robinhood Chain), and it says which.
+ * The picked holding's price under the table: one line, never candles.
+ *
+ * A line needs a close per point and nothing else, which is also the cheapest
+ * thing to fetch — the short ranges are served from the snapshots the sync
+ * loop already writes, without a request. The strip above it reads its four
+ * figures out of the price response the line's own lookup made, so it too is
+ * free. When the line came from snapshots rather than an indexed pool, it
+ * says so.
  */
 export function PriceChart({ holding, onClose }: { holding: Holding; onClose: () => void }) {
-  const [range, setRange] = useState<Range>('1w')
+  const [range, setRange] = useState<ChartRange>('1d')
   const query = useChart(holding.chainId, holding.token.address, range)
+  const stats = query.data?.stats
+  const price = stats?.priceUsd ?? holding.priceUsd
+  const change = stats?.changePct ?? null
+  const tone = change === null ? 'flat' : change > 0 ? 'up' : change < 0 ? 'down' : 'flat'
+  // A token priced against itself is a tautology, not a figure.
+  const quote =
+    stats?.quoteSymbol && stats.quoteSymbol.toUpperCase() !== holding.token.symbol.toUpperCase()
+      ? stats.quoteSymbol
+      : null
+
   return (
     <section className="trd-chart" aria-label={t('trading.chart.title')}>
+      <dl className="trd-chart__strip">
+        <Stat label={t('trading.chart.price')} value={formatPrice(price)} />
+        <Stat
+          label={t('trading.chart.marketCap')}
+          value={formatUsd(stats?.marketCapUsd ?? null, { compact: true })}
+        />
+        <Stat
+          label={`${t('trading.chart.priceIn')} ${quote ?? t('trading.chart.quote')}`}
+          value={
+            stats?.priceNative != null && quote
+              ? `${stats.priceNative.toPrecision(4)} ${quote}`
+              : '—'
+          }
+        />
+        <Stat label={t('trading.chart.market')} value={stats?.market ?? '—'} mono={false} />
+      </dl>
+
       <div className="trd-chart__head">
-        <div className="trd-chart__title">
-          {holding.token.symbol}
-          <span className="trd-num">{formatUsd(holding.priceUsd)}</span>
-          {query.data?.source === 'snapshots' ? (
-            <small>{t('trading.chart.snapshots')}</small>
-          ) : null}
+        <div className="trd-chart__hero">
+          <b className="trd-chart__value trd-num">{formatPrice(price)}</b>
+          <div className="trd-chart__move" data-tone={tone}>
+            <span className="trd-num">{formatPct(change, { signed: true })}</span>
+            <small>{t(`trading.chart.range.${range}`)}</small>
+            {query.data?.source === 'snapshots' ? (
+              <small title={t('trading.chart.snapshots')}>{t('trading.chart.local')}</small>
+            ) : null}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div role="radiogroup" aria-label={t('trading.chart.title')} className="mac-segmented">
@@ -65,6 +109,7 @@ export function PriceChart({ holding, onClose }: { holding: Holding; onClose: ()
           </Button>
         </div>
       </div>
+
       {query.isPending ? (
         <div className="trd-chart__empty">
           <Spinner />
@@ -78,14 +123,21 @@ export function PriceChart({ holding, onClose }: { holding: Holding; onClose: ()
   )
 }
 
+function Stat({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="trd-chart__stat">
+      <dt>{label}</dt>
+      <dd className={mono ? 'trd-num' : undefined}>{value}</dd>
+    </div>
+  )
+}
+
 function Canvas({ chart }: { chart: Chart }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const fg = cssVar('--muted-foreground')
-    const up = cssVar('--ok')
-    const down = cssVar('--danger')
     const primary = cssVar('--primary')
     const hairline = cssVar('--hairline')
     let api: IChartApi
@@ -99,9 +151,20 @@ function Canvas({ chart }: { chart: Chart }) {
           fontSize: 10,
           attributionLogo: false,
         },
-        grid: { vertLines: { color: hairline }, horzLines: { color: hairline } },
+        // Only the horizontals: the value is what is being read, and vertical
+        // rules chop a line this thin into segments.
+        grid: { vertLines: { visible: false }, horzLines: { color: hairline, style: 2 } },
         rightPriceScale: { borderVisible: false },
-        timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
+        // The library labels in UTC by default, which reads as the wrong hour
+        // to anyone not on it. Both the axis and the crosshair use the
+        // machine's own clock instead.
+        localization: { timeFormatter: (time: Time) => clock(time, true) },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: true,
+          secondsVisible: false,
+          tickMarkFormatter: (time: Time, type: TickMarkType) => clock(time, type >= 3),
+        },
         crosshair: { mode: 0 },
         handleScroll: false,
         handleScale: false,
@@ -110,37 +173,19 @@ function Canvas({ chart }: { chart: Chart }) {
       // jsdom and headless renderers have no canvas; the chart is decoration there.
       return
     }
-    const points = [...chart.points].sort((a, b) => a.t - b.t)
-    const candles = points.every((p) => p.o !== undefined && p.h !== undefined && p.l !== undefined)
-    if (candles) {
-      const series = api.addSeries(CandlestickSeries, {
-        upColor: up,
-        downColor: down,
-        borderVisible: false,
-        wickUpColor: up,
-        wickDownColor: down,
-      })
-      series.setData(
-        points.map((p) => ({
-          time: Math.floor(p.t / 1000) as UTCTimestamp,
-          open: p.o as number,
-          high: p.h as number,
-          low: p.l as number,
-          close: p.c,
-        })),
-      )
-    } else {
-      const series = api.addSeries(AreaSeries, {
-        lineColor: primary,
-        lineWidth: 2,
-        topColor: `color-mix(in srgb, ${primary} 30%, transparent)`,
-        bottomColor: 'transparent',
-        priceLineVisible: false,
-      })
-      series.setData(
-        points.map((p) => ({ time: Math.floor(p.t / 1000) as UTCTimestamp, value: p.c })),
-      )
-    }
+    const series = api.addSeries(AreaSeries, {
+      lineColor: primary,
+      lineWidth: 2,
+      topColor: `color-mix(in srgb, ${primary} 30%, transparent)`,
+      bottomColor: 'transparent',
+      priceLineVisible: false,
+    })
+    series.setData(
+      [...chart.points]
+        .sort((a, b) => a.t - b.t)
+        // `t` is unix seconds, which is what the library wants: no divide.
+        .map((p) => ({ time: Math.floor(p.t) as UTCTimestamp, value: p.c })),
+    )
     api.timeScale().fitContent()
     return () => api.remove()
   }, [chart])

@@ -606,14 +606,55 @@ class TestSwapFlow:
                 token_in="USDC", token_out="WETH", amount_in="1", amount_pct=None, **common
             )
 
+    async def test_chart_short_range_is_served_from_local_snapshots(
+        self, funded_service: TradingService, fake_prices: FakePrices
+    ) -> None:
+        """The cheap path: 1h/6h/1d read sqlite and never ask GeckoTerminal."""
+        service = funded_service
+        fake_prices.candles = [[1, 1, 2, 0.5, 1.5, 9]]
+        now = service._now()
+        for i in range(40):
+            service.ledger.add_snapshot(BASE.chain_id, WETH, now - 3_000 + i * 60, 100.0 + i)
+
+        before = len([r for r in fake_prices.requests if "geckoterminal" in str(r.url)])
+        chart = await service.chart(BASE, WETH, "1h")
+        after = len([r for r in fake_prices.requests if "geckoterminal" in str(r.url)])
+
+        assert chart["source"] == "snapshots"
+        assert after == before, "a local-first range must not hit GeckoTerminal"
+        assert chart["points"][-1]["c"] == 139.0
+        # Change is measured across the range that was asked for, not a fixed 24h.
+        assert chart["stats"]["changePct"] == pytest.approx(39.0)
+
+    async def test_chart_thins_a_dense_snapshot_run(self, funded_service: TradingService) -> None:
+        """A day of 30-second snapshots is ~2,880 points; the wire carries 180."""
+        service = funded_service
+        now = service._now()
+        for i in range(2_000):
+            service.ledger.add_snapshot(BASE.chain_id, WETH, now - 80_000 + i * 40, float(i))
+
+        chart = await service.chart(BASE, WETH, "1d")
+        assert chart["source"] == "snapshots"
+        assert len(chart["points"]) == 180
+        # Striding keeps the ends, so the range change stays honest.
+        assert chart["points"][0]["c"] == 0.0
+        assert chart["points"][-1]["c"] == 1_999.0
+
     async def test_chart_and_lot_cost_override(
         self, funded_service: TradingService, fake_prices: FakePrices
     ) -> None:
         service = funded_service
         wallet = service.test_wallet  # type: ignore[attr-defined]
         fake_prices.candles = [[1, 1, 2, 0.5, 1.5, 9]]
+        # No local history yet, so even a local-first range reaches for candles
+        # — and reduces them to closes, because the desk draws a line.
         chart = await service.chart(BASE, WETH, "1d")
-        assert chart["source"] == "geckoterminal" and chart["points"][0]["c"] == 1.5
+        assert chart["source"] == "geckoterminal"
+        assert chart["points"][0] == {"t": 1.0, "c": 1.5}
+        # The strip's figures come out of the same price response.
+        assert chart["stats"]["marketCapUsd"] is not None
+        assert chart["stats"]["market"] == "Uniswap v4"
+        assert chart["stats"]["quoteSymbol"] == "USDC"
         await service.sync_all()
         snaps = await service.chart(ROBINHOOD, AAPL, "1w")
         assert snaps["source"] == "snapshots"

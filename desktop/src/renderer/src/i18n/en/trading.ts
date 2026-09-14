@@ -223,11 +223,18 @@ export const trading = {
 
   // Chart
   'trading.chart.title': 'Price',
+  'trading.chart.price': 'Price',
+  'trading.chart.marketCap': 'Market cap',
+  'trading.chart.priceIn': 'Price in',
+  'trading.chart.quote': 'quote',
+  'trading.chart.market': 'Market',
+  'trading.chart.range.1h': '1H',
+  'trading.chart.range.6h': '6H',
   'trading.chart.range.1d': '1D',
   'trading.chart.range.1w': '1W',
-  'trading.chart.range.1m': '1M',
-  'trading.chart.range.1y': '1Y',
+  'trading.chart.range.all': 'ALL',
   'trading.chart.empty': 'No price history yet',
+  'trading.chart.local': 'local',
   'trading.chart.snapshots': 'From the app’s own price snapshots',
   'trading.chart.close': 'Close chart',
 

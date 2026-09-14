@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
@@ -93,17 +94,53 @@ BATCH_PAUSE_S = 0.35
 SEL_WETH_WITHDRAW = "0x2e1a7d4d"
 
 
+def _thin(points: list[dict[str, float]], limit: int) -> list[dict[str, float]]:
+    """Even stride down to ``limit`` points, last one always kept.
+
+    A day of 30-second snapshots is 2,880 points for a line a few hundred
+    pixels wide. Striding is enough — the shape survives, and it keeps the
+    payload and the chart's own work proportional to what is visible.
+    """
+    if limit <= 0 or len(points) <= limit:
+        return points
+    step = len(points) / limit
+    out = [points[int(i * step)] for i in range(limit)]
+    if out[-1] is not points[-1]:
+        out[-1] = points[-1]
+    return out
+
+
 def _origin(initiator: str) -> DecisionOrigin:
     return "autonomous" if initiator == "agent" else "human_mediated"
 
 
-CHART_RANGES: dict[str, tuple[str, int, float]] = {
-    # range -> (geckoterminal timeframe, limit, seconds back for snapshots)
-    "1d": ("15m", 96, 86_400),
-    "1w": ("hour", 168, 7 * 86_400),
-    "1m": ("4h", 180, 30 * 86_400),
-    "1y": ("day", 365, 365 * 86_400),
+@dataclass(frozen=True)
+class ChartRange:
+    """One tab on the chart.
+
+    ``local_first`` is the cheap path: the sync loop already writes a price
+    snapshot for every held token every ``sync_interval_seconds``, so the
+    short windows can be drawn from sqlite without touching the network at
+    all. GeckoTerminal is the fallback there, and the primary for the long
+    windows the local table cannot reach back to.
+    """
+
+    timeframe: str
+    limit: int
+    seconds: float
+    local_first: bool
+    #: Most points worth drawing; denser snapshot runs are bucketed down.
+    max_points: int = 180
+
+
+CHART_RANGES: dict[str, ChartRange] = {
+    "1h": ChartRange("minute", 60, 3_600, local_first=True, max_points=120),
+    "6h": ChartRange("5m", 72, 6 * 3_600, local_first=True),
+    "1d": ChartRange("15m", 96, 86_400, local_first=True),
+    "1w": ChartRange("hour", 168, 7 * 86_400, local_first=False),
+    "all": ChartRange("day", 365, 5 * 365 * 86_400, local_first=False, max_points=365),
 }
+DEFAULT_CHART_RANGE = "1d"
 
 
 class TradingError(RuntimeError):
@@ -985,17 +1022,63 @@ class TradingService:
         return {"entries": entries, "nextBefore": next_before}
 
     async def chart(self, chain: ChainSpec, token: str, range_key: str) -> dict[str, Any]:
-        timeframe, limit, seconds = CHART_RANGES.get(range_key, CHART_RANGES["1w"])
+        """One close-price line for a token, drawn from the cheapest source.
+
+        The line only needs a close per point, so candles are reduced on the
+        way out. Short windows read the local snapshot table first and cost no
+        request at all; they fall back to GeckoTerminal when the table is too
+        young to cover them (a fresh install, or a token only just acquired).
+        """
+        spec = CHART_RANGES.get(range_key) or CHART_RANGES[DEFAULT_CHART_RANGE]
         address = NATIVE_ADDRESS if is_native(token) else normalize_address(token)
-        candles = await self.prices.ohlcv(chain, address, timeframe=timeframe, limit=limit)
-        if candles:
-            return {"source": "geckoterminal", "range": range_key, "points": candles}
-        since = self._now() - seconds
-        snaps = self.ledger.snapshots(chain.chain_id, address, since)
+        since = self._now() - spec.seconds
+
+        local: list[dict[str, float]] = [
+            {"t": float(s["ts"]), "c": float(s["price_usd"])}
+            for s in self.ledger.snapshots(chain.chain_id, address, since)
+        ]
+        source = ""
+        points: list[dict[str, float]] = []
+        # Two points is a segment, not a chart: anything thinner is treated as
+        # no local history rather than drawn as a stub.
+        if spec.local_first and len(local) > 2:
+            source, points = "snapshots", local
+        else:
+            candles = await self.prices.ohlcv(
+                chain, address, timeframe=spec.timeframe, limit=spec.limit
+            )
+            if candles:
+                source = "geckoterminal"
+                points = [{"t": float(c["t"]), "c": float(c["c"])} for c in candles]
+            elif local:
+                source, points = "snapshots", local
+
+        stats = await self._chart_stats(chain, address, points)
         return {
-            "source": "snapshots",
+            "source": source or "snapshots",
             "range": range_key,
-            "points": [{"t": float(s["ts"]), "c": float(s["price_usd"])} for s in snaps],
+            "points": _thin(points, spec.max_points),
+            "stats": stats,
+        }
+
+    async def _chart_stats(
+        self, chain: ChainSpec, address: str, points: list[dict[str, float]]
+    ) -> dict[str, Any]:
+        """The figures above the line. Free: the spot fetch behind them is the
+        same cached DexScreener response the chart's pair lookup already used.
+        """
+        lookup = NATIVE_ADDRESS if is_native(address) else normalize_address(address)
+        info = (await self.prices.prices(chain, [lookup])).get(lookup)
+        first = points[0]["c"] if points else None
+        last = points[-1]["c"] if points else None
+        change = (last - first) / first * 100 if first and last else None
+        return {
+            "priceUsd": info.price_usd if info else None,
+            "priceNative": info.price_native if info else None,
+            "quoteSymbol": (info.price_native_symbol if info else None) or chain.native_symbol,
+            "marketCapUsd": info.market_cap_usd if info else None,
+            "market": info.market if info else None,
+            "changePct": change,
         }
 
     def limits(self, wallet: str | None) -> dict[str, Any]:
