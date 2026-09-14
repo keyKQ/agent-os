@@ -6,19 +6,24 @@ import type { RawProject } from '@/views/projects/logic'
 import { projectId, projectName } from '@/views/projects/logic'
 import {
   ensureTradingSessionKey,
+  readTradingAgentVersion,
   readTradingSessionFiled,
+  writeTradingAgentVersion,
   writeTradingSessionFiled,
   writeTradingSessionKey,
 } from '~/stores/trading-ui'
+import { syncTradingAgent, TRADING_AGENT_ID, TRADING_AGENT_VERSION } from './agent'
 import { TRADING_PROJECT_NAME, tradingProjectKnowledge } from './desk-logic'
 import { mintTradingSessionKey } from './mode-logic'
 import type { Wallet } from '../types'
 
 /**
  * One chat per desk, remembered across launches. The session key is minted
- * here; the gateway creates the session on the first send. Once it exists,
- * it is filed into the "Trading desk" project (created on demand) whose
- * knowledge tells the agent where it is and what it may use.
+ * here under the desk's own `trading` agent; the gateway creates the session
+ * on the first send. The agent itself is the desktop's: it is created (or
+ * brought up to this build's spec) the first time the desk is active. Once
+ * the session exists, it is filed into the "Trading desk" project (created
+ * on demand) whose knowledge tells the agent the current wallets and limits.
  */
 
 export function useTradingSession(
@@ -44,6 +49,28 @@ export function useTradingSession(
     ctxRef.current = ctx
   }, [ctx])
 
+  // The agent is written once per spec version; a failure (gateway busy,
+  // registry read-only) leaves the stamp alone so the next launch retries.
+  // The chat still works meanwhile: the gateway runs an unregistered agent
+  // id with default tools, and the entry takes effect on the next turn.
+  const syncingRef = useRef(false)
+  useEffect(() => {
+    if (!active || syncingRef.current) return
+    if (readTradingAgentVersion() >= TRADING_AGENT_VERSION) return
+    syncingRef.current = true
+    void (async () => {
+      try {
+        await rpc.waitForConnection()
+        await syncTradingAgent(rpc)
+        writeTradingAgentVersion(TRADING_AGENT_VERSION)
+      } catch {
+        // Retried on the next launch.
+      } finally {
+        syncingRef.current = false
+      }
+    })()
+  }, [rpc, active])
+
   const ensureFiled = useCallback(() => {
     if (filingRef.current || readTradingSessionFiled()) return
     filingRef.current = true
@@ -56,7 +83,7 @@ export function useTradingSession(
         if (!project) {
           const created = await rpc.call<{ project?: RawProject }>('projects.create', {
             name: TRADING_PROJECT_NAME,
-            agentId: 'main',
+            agentId: TRADING_AGENT_ID,
             knowledge,
           })
           project = created?.project

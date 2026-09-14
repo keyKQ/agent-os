@@ -1,5 +1,6 @@
 import { canonicalSessionKey, webchatSessionKey } from '@/views/chat/logic'
 import { sessionPath } from '~/components/sidebar/SessionRow'
+import { TRADING_AGENT_ID } from './agent'
 
 /**
  * Trading is not a page: it is what the chat becomes when the open session
@@ -12,8 +13,9 @@ export type DeskMode = 'chat' | 'trading'
 /** Route state that marks a navigation as "the user asked for the desk". */
 export const ENTER_STATE = { enterDesk: true } as const
 
+/** A desk session runs under the desk's own agent, never `main`. */
 export function mintTradingSessionKey(): string {
-  return webchatSessionKey('main', 'trading-' + Math.random().toString(36).slice(2, 8))
+  return webchatSessionKey(TRADING_AGENT_ID, 'trading-' + Math.random().toString(36).slice(2, 8))
 }
 
 /** The mode the route is in: the desk's own session, or any other chat. */

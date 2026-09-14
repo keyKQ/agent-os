@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isTradingAgentKey } from '~/views/trading/desk/agent'
 import { BOOK_DEFAULT, BOOK_MAX, BOOK_MIN } from '~/views/trading/desk/desk-logic'
 
 /**
@@ -11,6 +12,8 @@ const WIDTH_KEY = 'agentos-desktop.trading.bookWidth'
 const OPEN_KEY = 'agentos-desktop.trading.bookOpen'
 const SESSION_KEY = 'agentos-desktop.trading.sessionKey'
 const FILED_KEY = 'agentos-desktop.trading.sessionFiled'
+/** The spec version of the `trading` agent this desktop last wrote to the gateway. */
+const AGENT_VERSION_KEY = 'agentos-desktop.trading.agentVersion'
 /** The chat the user left to enter Trading mode; the pill's "Chat" goes back there. */
 const RETURN_KEY = 'agentos-desktop.trading.returnSession'
 
@@ -84,10 +87,15 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   },
 }))
 
-/** The desk's chat session, remembered across launches. */
+/**
+ * The desk's chat session, remembered across launches. A key from before the
+ * desk had its own agent (`agent:main:…`) is not the desk's any more: it reads
+ * as absent, so a fresh one is minted and the old chat stays in the sidebar.
+ */
 export function readTradingSessionKey(): string {
   try {
-    return localStorage.getItem(SESSION_KEY) || ''
+    const key = localStorage.getItem(SESSION_KEY) || ''
+    return isTradingAgentKey(key) ? key : ''
   } catch {
     return ''
   }
@@ -134,4 +142,17 @@ export function readTradingSessionFiled(): boolean {
 
 export function writeTradingSessionFiled(filed: boolean): void {
   save(FILED_KEY, String(filed))
+}
+
+export function readTradingAgentVersion(): number {
+  try {
+    const raw = Number(localStorage.getItem(AGENT_VERSION_KEY))
+    return Number.isFinite(raw) ? raw : 0
+  } catch {
+    return 0
+  }
+}
+
+export function writeTradingAgentVersion(version: number): void {
+  save(AGENT_VERSION_KEY, String(version))
 }

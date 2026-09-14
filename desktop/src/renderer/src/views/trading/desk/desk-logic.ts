@@ -1,6 +1,7 @@
 import type { RawJob } from '@/views/cron/logic'
 import { chainName, formatAmount, formatPct, formatUsd, sameAddress, shortAddress } from '../logic'
 import { CHAINS, providerLabel, type Order, type Wallet } from '../types'
+import { TRADING_AGENT_ID } from './agent'
 
 /**
  * Pure decisions for the chat-centric desk: the strip's status word, the
@@ -330,7 +331,7 @@ export function validateMission(form: MissionForm): MissionValidation {
   return { ok: true }
 }
 
-/** The `cron.add` params for a mission that posts into this chat. */
+/** The `cron.add` params for a mission that posts into this chat, run by the desk's agent. */
 export function missionCronPayload(
   form: MissionForm,
   prompt: string,
@@ -341,7 +342,7 @@ export function missionCronPayload(
     name: form.name.trim(),
     enabled: true,
     payloadKind: 'agent_turn',
-    agentId: 'main',
+    agentId: TRADING_AGENT_ID,
     sessionTarget: 'current',
     targetSessionKey: sessionKey,
     text: prompt,

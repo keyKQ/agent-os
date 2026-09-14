@@ -6,6 +6,7 @@ import { projectId, projectName, sortProjects, type RawProject } from '@/views/p
 import type { AgentEntry } from '@/views/sessions/logic'
 import { useConnection } from '@/stores/connection'
 import { t } from '~/i18n'
+import { TRADING_AGENT_ID } from '~/views/trading/desk/agent'
 
 interface ProjectsList {
   projects?: RawProject[]
@@ -85,7 +86,10 @@ interface AgentsList {
   agents?: AgentEntry[]
 }
 
-/** Registry agents (agents.list), for the new-project row and the page's chip. */
+/**
+ * Registry agents (agents.list), for the new-project row and the page's chip.
+ * The desk's `trading` agent is the desktop's own, not a choice to offer.
+ */
 export function useAgents(): AgentEntry[] {
   const rpc = useRpc()
   const connected = useConnection((s) => s.state === 'connected')
@@ -99,7 +103,10 @@ export function useAgents(): AgentEntry[] {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   })
-  return useMemo(() => (query.data?.agents ?? []).filter((a) => a.id), [query.data])
+  return useMemo(
+    () => (query.data?.agents ?? []).filter((a) => a.id && a.id !== TRADING_AGENT_ID),
+    [query.data],
+  )
 }
 
 /**

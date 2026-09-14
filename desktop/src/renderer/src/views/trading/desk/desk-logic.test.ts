@@ -141,14 +141,19 @@ describe('missions', () => {
   it('builds the cron.add payload that posts into this chat', () => {
     const form = missionPrefill('dca', { primary: WALLET.address })
     form.name = 'DCA ETH'
-    const payload = missionCronPayload(form, 'PROMPT', 'agent:main:webchat:trading-x', 'Asia/Tokyo')
+    const payload = missionCronPayload(
+      form,
+      'PROMPT',
+      'agent:trading:webchat:trading-x',
+      'Asia/Tokyo',
+    )
     expect(payload).toMatchObject({
       name: 'DCA ETH',
       enabled: true,
       payloadKind: 'agent_turn',
-      agentId: 'main',
+      agentId: 'trading',
       sessionTarget: 'current',
-      targetSessionKey: 'agent:main:webchat:trading-x',
+      targetSessionKey: 'agent:trading:webchat:trading-x',
       text: 'PROMPT',
       schedule: { kind: 'every', every_seconds: 86_400 },
       tz: 'Asia/Tokyo',

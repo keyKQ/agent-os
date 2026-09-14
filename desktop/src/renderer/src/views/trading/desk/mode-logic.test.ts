@@ -12,7 +12,7 @@ import {
   toggleTarget,
 } from './mode-logic'
 
-const DESK = 'agent:main:webchat:trading-abc123'
+const DESK = 'agent:trading:webchat:trading-abc123'
 
 describe('deriveMode', () => {
   it('is trading only for the desk session', () => {
@@ -21,8 +21,8 @@ describe('deriveMode', () => {
     expect(deriveMode('', DESK)).toBe('chat')
     expect(deriveMode(DESK, '')).toBe('chat')
   })
-  it('mints desk keys in the main agent', () => {
-    expect(mintTradingSessionKey()).toMatch(/^agent:main:webchat:trading-[a-z0-9]+$/)
+  it('mints desk keys under the desk agent', () => {
+    expect(mintTradingSessionKey()).toMatch(/^agent:trading:webchat:trading-[a-z0-9]+$/)
   })
 })
 

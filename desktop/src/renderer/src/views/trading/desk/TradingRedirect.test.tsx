@@ -18,7 +18,7 @@ describe('TradingRedirect', () => {
   beforeEach(() => localStorage.clear())
 
   it('forwards /trading into the desk session with the query and the enter mark', () => {
-    writeTradingSessionKey('agent:main:webchat:trading-t1')
+    writeTradingSessionKey('agent:trading:webchat:trading-t1')
     render(
       <MemoryRouter initialEntries={['/trading?order=o9']}>
         <Routes>
@@ -28,7 +28,7 @@ describe('TradingRedirect', () => {
       </MemoryRouter>,
     )
     expect(screen.getByTestId('landing')).toHaveTextContent(
-      '/sessions/agent%3Amain%3Awebchat%3Atrading-t1?order=o9|{"enterDesk":true}',
+      '/sessions/agent%3Atrading%3Awebchat%3Atrading-t1?order=o9|{"enterDesk":true}',
     )
   })
 
@@ -42,7 +42,7 @@ describe('TradingRedirect', () => {
       </MemoryRouter>,
     )
     expect(screen.getByTestId('landing')).toHaveTextContent(
-      /\/sessions\/agent%3Amain%3Awebchat%3Atrading-/,
+      /\/sessions\/agent%3Atrading%3Awebchat%3Atrading-/,
     )
   })
 })
