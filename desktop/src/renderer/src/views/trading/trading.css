@@ -16,11 +16,10 @@
    30 px, separated by hairlines, never boxed. Three columns: wallets (rail),
    the ledger (overview, holdings, history, approvals), the ticket (swap).
 
-   Signature: the ticket's primary button wears the quote's countdown as a
-   line draining along its own bottom edge, so the button itself says how
-   fresh the price is without pushing its label off centre; and allocation is
-   drawn as a thin lime rule under each holding's value, a ledger line rather
-   than a pie.
+   Signature: the ticket's primary button wears the quote's countdown as a lit
+   edge travelling its own perimeter, so the button itself says how fresh the
+   price is without pushing its label off centre; and allocation is drawn as a
+   thin lime rule under each holding's value, a ledger line rather than a pie.
 
    Colour: palette tokens only. Up is --ok, down is --danger, live is
    --primary. The one gradient is the hero's wash, tinted by today's move.
@@ -1528,7 +1527,7 @@ tr:focus-within .trd-row__actions {
 /* The signature: the primary button wears the countdown ring around its glyph. */
 /* The one action on the ticket. A single centred label — the countdown that
    used to sit beside it as a ring pushed the text off centre and read as a
-   spinner stuck mid-load. */
+   spinner stuck mid-load. It is the button's own lit edge now (below). */
 .trd-cta {
   position: relative;
   display: flex;
@@ -1537,7 +1536,6 @@ tr:focus-within .trd-row__actions {
   width: 100%;
   height: 44px;
   margin-top: 6px;
-  overflow: hidden;
   border-radius: var(--radius);
   font-size: 14px;
   font-weight: 600;
@@ -1563,24 +1561,60 @@ tr:focus-within .trd-row__actions {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
-/* How much of the quote's life is left, as the button's own bottom edge.
-   --fresh is 1 at a fresh quote and drains to 0; the line is the ink of the
-   label at low opacity, so it belongs to the button in every palette. */
+/* How much of the quote's life is left: a lit edge travelling the button's
+   own perimeter. --fresh is 1 at a fresh quote and drains to 0.
+
+   Registering it as a typed custom property is what makes this readable — an
+   unregistered variable is a string, so the conic angle would jump once a
+   second; typed, the browser interpolates it and the edge glides. Both layers
+   are a padded box masked down to its own border, which is how you get a
+   gradient border: ::before is the unlit track, ::after the lit arc. */
+@property --fresh {
+  syntax: '<number>';
+  /* Must inherit: the arc is drawn by ::after, and a non-inherited custom
+     property never reaches a pseudo-element — it would read the initial 0 and
+     the edge would never light. */
+  inherits: true;
+  initial-value: 0;
+}
+.trd-cta[data-fresh] {
+  transition:
+    background-color 80ms ease-out,
+    transform 80ms ease-out,
+    --fresh 900ms linear;
+}
+/* The band stands off the face by 2px. Flush against it the lit arc — which
+   is the button's own colour — merged into the button, and the *unlit* track
+   was the only thing you could see: the effect read backwards. Held away, the
+   arc is a lit line travelling around the button and the track is barely
+   there. */
+.trd-cta[data-fresh]::before,
 .trd-cta[data-fresh]::after {
   content: '';
   position: absolute;
-  /* Inset from the corners: running the line into the radius made it read as
-     a misaligned shadow under the button rather than a rule inside it. */
-  bottom: 6px;
-  left: 14px;
-  right: 14px;
-  height: 2px;
-  border-radius: 1px;
-  transform: scaleX(var(--fresh, 0));
-  transform-origin: left center;
-  background: currentColor;
-  opacity: 0.24;
-  transition: transform 900ms linear;
+  inset: -5px;
+  padding: 2px;
+  border-radius: calc(var(--radius) + 5px);
+  pointer-events: none;
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.trd-cta[data-fresh]::before {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.trd-cta[data-fresh]::after {
+  background: conic-gradient(
+    from -90deg,
+    var(--primary) calc(var(--fresh) * 360deg),
+    transparent calc(var(--fresh) * 360deg)
+  );
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--primary) 70%, transparent));
 }
 .trd-ticket__fresh {
   display: flex;
