@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ENTRANCE_MS } from './mode-logic'
 import { useEntrance } from './useEntrance'
 
 const reduced = vi.hoisted(() => ({ value: false }))
@@ -24,7 +25,7 @@ describe('useEntrance', () => {
     expect(result.current.enter).toBeNull()
     rerender({ mode: 'trading' })
     expect(result.current.enter).toBe('trading')
-    act(() => vi.advanceTimersByTime(800))
+    act(() => vi.advanceTimersByTime(ENTRANCE_MS + 100))
     expect(result.current.enter).toBeNull()
     // Re-rendering in trading mode does not replay it.
     rerender({ mode: 'trading' })
@@ -63,7 +64,7 @@ describe('useEntrance', () => {
         useEntrance({ mode: p.mode, still: false, requested: true }),
       { initialProps: { mode: 'trading' as 'chat' | 'trading' } },
     )
-    act(() => vi.advanceTimersByTime(800))
+    act(() => vi.advanceTimersByTime(ENTRANCE_MS + 100))
     r.rerender({ mode: 'chat' })
     expect(r.result.current.enter).toBe('chat')
     act(() => vi.advanceTimersByTime(400))

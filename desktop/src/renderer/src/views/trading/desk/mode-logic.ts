@@ -48,7 +48,7 @@ export function redirectTarget(tradingKey: string, search: string): string {
 }
 
 /** Timings, mirrored by the custom properties at the top of desk.css. */
-export const ENTRANCE_MS = 700
+export const ENTRANCE_MS = 900
 export const LEAVE_MS = 300
 
 /**

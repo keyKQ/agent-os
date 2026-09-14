@@ -102,7 +102,10 @@ export function Book({
   const history = useHistory(walletAddress, undefined, !collapsed && tab === 'history')
   const totals = portfolio.data?.totals ?? EMPTY_TOTALS
   const holdings = portfolio.data?.holdings ?? []
-  const counted = useCountUp(totals.valueUsd, entering && !portfolio.isPending)
+  const { counting, attach: attachCount } = useCountUp(
+    totals.valueUsd,
+    entering && !portfolio.isPending,
+  )
   const pendingCount = orders.orders.filter(isAwaitingApproval).length
   const byWallet = useMemo(() => {
     const m = new Map<string, number>()
@@ -249,9 +252,9 @@ export function Book({
               <b className="trd-book__value" data-testid="book-value">
                 {portfolio.isPending ? (
                   <span className="trd-skel" style={{ width: 120, height: 24 }} />
-                ) : counted !== null ? (
-                  <span className="trd-num" data-testid="book-value-counting">
-                    {formatUsd(counted)}
+                ) : counting ? (
+                  <span className="trd-num" data-testid="book-value-counting" ref={attachCount}>
+                    {formatUsd(0)}
                   </span>
                 ) : (
                   <Money value={totals.valueUsd} />
@@ -393,33 +396,48 @@ function Stat({ label, value, toned }: { label: string; value: number; toned?: b
 
 /* Entrance: the hero value counts from 0 to its figure over the window the
    choreography reserves for it (see --enter-count-* in desk.css), then hands
-   back to the live, ticking value. Returns null when not counting. */
+   back to the live, ticking value.
+   The frames are written straight into the node's text rather than through
+   state: a setState per frame re-rendered the whole BOOK forty times in the
+   busiest 320 ms of the switch, which is main-thread work the sweep and the
+   slide were competing with. React sees two renders now — start and end. */
 const COUNT_DELAY_MS = 380
 const COUNT_MS = 320
 
-function useCountUp(target: number, active: boolean): number | null {
-  const [shown, setShown] = useState<number | null>(null)
-  const done = useRef(false)
+function useCountUp(
+  target: number,
+  active: boolean,
+): { counting: boolean; attach: (el: HTMLSpanElement | null) => void } {
+  // The node arrives through state rather than a ref so the frame loop can
+  // start the moment it mounts, and so nothing ref-shaped crosses render.
+  const [node, attach] = useState<HTMLSpanElement | null>(null)
+  const [counting, setCounting] = useState(false)
+  const spent = useRef(false)
+
   useEffect(() => {
-    if (!active) return
-    done.current = false
+    if (!active) {
+      spent.current = false
+      setCounting(false)
+      return
+    }
+    if (!spent.current) setCounting(true)
+  }, [active])
+
+  useEffect(() => {
+    if (!counting || !node) return
     const start = performance.now() + COUNT_DELAY_MS
     let raf = requestAnimationFrame(function tick(now: number) {
       const p = Math.min(1, Math.max(0, (now - start) / COUNT_MS))
-      const eased = 1 - Math.pow(1 - p, 3)
+      node.textContent = formatUsd(target * (1 - Math.pow(1 - p, 3)))
       if (p < 1) {
-        setShown(target * eased)
         raf = requestAnimationFrame(tick)
       } else {
-        done.current = true
-        setShown(null)
+        spent.current = true
+        setCounting(false)
       }
     })
-    return () => {
-      cancelAnimationFrame(raf)
-      done.current = false
-    }
-  }, [active, target])
-  if (!active || done.current) return null
-  return shown ?? 0
+    return () => cancelAnimationFrame(raf)
+  }, [counting, node, target])
+
+  return { counting, attach }
 }

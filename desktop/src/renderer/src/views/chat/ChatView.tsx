@@ -120,6 +120,11 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
   const rpc = useRpc()
   const navigate = useNavigate()
   const reduce = useReducedMotion()
+  // While the desk is powering on the chat stops springing: the hero's blur
+  // exit and the composer's centre-to-bottom dock move are Motion layout
+  // animations that ran straight over the entrance and read as a lurch. The
+  // switch is the desk's moment; the chat just takes its place.
+  const snap = Boolean(reduce) || Boolean(desk?.entering)
   const { key: rawParam } = useParams()
   const paramKey = useMemo(
     () => (rawParam ? canonicalSessionKey(decodeURIComponent(rawParam)) : ''),
@@ -695,7 +700,7 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
           {!docked ? (
             <motion.div
               key="hero"
-              exit={reduce ? undefined : { opacity: 0, y: -28, filter: 'blur(6px)' }}
+              exit={snap ? undefined : { opacity: 0, y: -28, filter: 'blur(6px)' }}
               transition={ease}
               className="chat-desktop-hero"
             >
@@ -708,10 +713,10 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
 
         <motion.div
           layout
-          transition={reduce ? { duration: 0 } : spring}
+          transition={snap ? { duration: 0 } : spring}
           className={docked ? 'shrink-0' : 'flex flex-1 flex-col justify-center pt-24'}
         >
-          <motion.div layout="position" transition={reduce ? { duration: 0 } : spring}>
+          <motion.div layout="position" transition={snap ? { duration: 0 } : spring}>
             {instruments.dockAbove}
             <PendingQueue
               queue={pending.queue}

@@ -25,20 +25,26 @@
    own. A duration appears only when it was measured. "Confirmed" needs a
    hash and a confirmed status, together.
 
-   THE ONE EXCEPTION — the desk power-on (data-enter="trading", ~700 ms)
+   THE ONE EXCEPTION — the desk power-on (data-enter="trading", ~900 ms)
    Trading is a mode of the chat, and the switch into it is the one event
    the rules of stillness make room for: a single choreographed entrance,
    then nothing moves. It reads as a desk being printed onto the chat.
 
      0–120    the pane dims to the desk canvas; a 4%-ink dot grid fades in
      80–420   a lime scan line sweeps top→bottom; what it passes "prints":
-              transcript rows and BOOK cards snap from .3/6px to rest,
-              12 ms apart by row
-     160–520  BOOK slides in from the right, the strip drops from the top,
-              the seats rise into place
+              the first ten transcript rows and the BOOK cards snap from
+              .3/6px to rest, 12 ms apart by row
+     160–520  BOOK slides in from the right, what Trading adds to the strip
+              drops from the top, the seats rise into place
+     260–860  "TRADING DESK" stamps at 12% ink, holds, then dissolves
      380–700  the hero value counts up from 0 (Book.tsx), the allocation bar
-              draws left→right, "TRADING DESK" stamps at 8% ink and dissolves
-     600–700  one lime hairline pulse on the mode pill — then stillness
+              draws left→right
+     760–880  one lime hairline pulse on the mode pill — then stillness
+
+   What does *not* move is as deliberate as what does: the mode pill and the
+   row it sits in are the control the switch was made with, and they stay put
+   through the whole sequence. Nothing animates a blur or a blend mode —
+   both cost a full-pane repaint per frame.
 
    Resting identity after the entrance: the lime live dot in the pill and a
    1 px lime hairline on the composer capsule. Leaving Trading is the short
@@ -47,7 +53,7 @@
    timing lives in the custom properties below, once. */
 
 .mode-shell {
-  --enter-total: 700ms;
+  --enter-total: 900ms;
   --enter-dim: 120ms;
   --enter-scan-start: 80ms;
   --enter-scan: 340ms;
@@ -56,10 +62,13 @@
   --enter-slide: 360ms;
   --enter-count-start: 380ms;
   --enter-count: 320ms;
-  --enter-stamp-start: 380ms;
-  --enter-stamp: 320ms;
-  --enter-pulse-start: 600ms;
-  --enter-pulse: 100ms;
+  /* The stamp starts before the desk has finished arriving and outlives it:
+     it is a watermark you are meant to read, so it needs a hold, not a
+     blink. 260 → 860, legible for ~320 ms of that. */
+  --enter-stamp-start: 260ms;
+  --enter-stamp: 600ms;
+  --enter-pulse-start: 760ms;
+  --enter-pulse: 120ms;
   --leave-total: 300ms;
   --desk-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --desk-ease-inout: cubic-bezier(0.45, 0, 0.2, 1);
@@ -1350,23 +1359,32 @@ body[data-dragging] .trd-book__handle {
   }
 }
 
-/* 80–420: the scan line. 2 px of lime with a 24 px glow, screen-blended so
-   it lights what it crosses instead of covering it. */
+/* 80–420: the scan line. 2 px of lime sitting in a soft band of its own glow.
+   The glow is a gradient rather than a screen-blended box-shadow: a blend mode
+   forces the line to be re-composited against everything under it on every
+   frame, which is what made the sweep stutter. Painted straight, it rides the
+   compositor and the sweep costs nothing. */
 .mode-shell[data-enter='trading'] .trd-frame::after {
   content: '';
   position: absolute;
-  top: 0;
+  top: -18px;
   left: 0;
   right: 0;
   z-index: 3;
-  height: 2px;
+  height: 38px;
   pointer-events: none;
-  background: var(--primary);
-  box-shadow:
-    0 0 24px 6px color-mix(in srgb, var(--primary) 55%, transparent),
-    0 0 2px 1px var(--primary);
-  mix-blend-mode: screen;
+  background:
+    linear-gradient(
+      to bottom,
+      transparent 0%,
+      color-mix(in srgb, var(--primary) 22%, transparent) 42%,
+      var(--primary) 47%,
+      var(--primary) 53%,
+      color-mix(in srgb, var(--primary) 22%, transparent) 58%,
+      transparent 100%
+    );
   opacity: 0;
+  will-change: transform, opacity;
   animation: desk-scan var(--enter-scan) linear var(--enter-scan-start) both;
 }
 @keyframes desk-scan {
@@ -1384,8 +1402,11 @@ body[data-dragging] .trd-book__handle {
 }
 
 /* What the line passes, prints: rows and cards snap from .3/6px to rest,
-   staggered by row index so the print follows the sweep. */
-.mode-shell[data-enter='trading'] .chat-thread > .msg,
+   staggered by row index so the print follows the sweep. Capped at ten rows —
+   a long transcript would otherwise promote dozens of layers in the same
+   frame the desk is mounting, and everything past the tenth row is below the
+   fold anyway. */
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(-n + 10),
 .mode-shell[data-enter='trading'] .trd-book__hero,
 .mode-shell[data-enter='trading'] .trd-book__wallets,
 .mode-shell[data-enter='trading'] .trd-table tbody tr,
@@ -1424,7 +1445,7 @@ body[data-dragging] .trd-book__handle {
 .mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(9) {
   --row: 16;
 }
-.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(n + 10) {
+.mode-shell[data-enter='trading'] .chat-thread > .msg:nth-child(10) {
   --row: 18;
 }
 .mode-shell[data-enter='trading'] .trd-book__wallets {
@@ -1447,6 +1468,7 @@ body[data-dragging] .trd-book__handle {
 /* 160–520: the BOOK slides in from the right, the strip drops from the
    top, the seats rise into place. */
 .mode-shell[data-enter='trading'] .trd-book {
+  will-change: transform, opacity;
   animation: desk-slide-in var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
 }
 @keyframes desk-slide-in {
@@ -1459,7 +1481,16 @@ body[data-dragging] .trd-book__handle {
     transform: none;
   }
 }
-.mode-shell[data-enter='trading'] .trd-strip {
+/* The row itself must not move. The mode pill lives in it in both modes and
+   is the control the user just clicked — dropping the whole strip blanked it
+   the instant it was pressed (a `both` fill applies the from-state through
+   the delay) and snapped it back 360 ms later. Only what Trading *adds* to
+   the row arrives. */
+.mode-shell[data-enter='trading'] .trd-strip__mission,
+.mode-shell[data-enter='trading'] .trd-strip__more,
+.mode-shell[data-enter='trading'] .trd-strip__word,
+.mode-shell[data-enter='trading'] .trd-strip__pin,
+.mode-shell[data-enter='trading'] .trd-strip__toggle {
   animation: desk-drop var(--enter-slide) var(--desk-ease-out) var(--enter-slide-start) both;
 }
 @keyframes desk-drop {
@@ -1519,31 +1550,35 @@ body[data-dragging] .trd-book__handle {
   white-space: nowrap;
   color: var(--foreground);
   opacity: 0;
+  /* Only opacity and transform move: an animated blur on type this size is a
+     full-pane repaint every frame, and it was the most expensive thing in
+     the sequence. The soft arrival now comes from the scale alone. */
+  will-change: opacity, transform;
   animation: desk-stamp var(--enter-stamp) var(--desk-ease-inout) var(--enter-stamp-start) both;
 }
 @keyframes desk-stamp {
   0% {
     opacity: 0;
-    transform: scale(1.04);
-    filter: blur(6px);
+    transform: scale(1.03);
   }
-  35% {
-    opacity: 0.08;
+  16% {
+    opacity: 0.12;
     transform: none;
-    filter: blur(0);
   }
   70% {
-    opacity: 0.08;
+    opacity: 0.12;
   }
   100% {
     opacity: 0;
-    transform: scale(0.985);
+    transform: scale(0.99);
   }
 }
 
-/* 600–700: one hairline pulse on the pill, and the sequence is over. */
+/* One hairline pulse on the pill, and the sequence is over. `forwards`, not
+   `both`: a backwards fill lit the ring the moment the pill was clicked and
+   held it for the whole entrance, which is a state, not a pulse. */
 .mode-shell[data-enter='trading'] .trd-pill {
-  animation: desk-pulse var(--enter-pulse) ease-out var(--enter-pulse-start) both;
+  animation: desk-pulse var(--enter-pulse) ease-out var(--enter-pulse-start) forwards;
 }
 @keyframes desk-pulse {
   from {

@@ -219,6 +219,7 @@ export function useDeskFrame(input: {
   const bookReady = ready && wallets.length > 0
 
   const desk: DeskProps = {
+    entering,
     wallets,
     primary,
     limits: limits.data ?? null,

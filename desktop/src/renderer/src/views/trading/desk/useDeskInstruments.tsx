@@ -41,6 +41,10 @@ export interface DeskGate {
 
 /** What the desk hands the chat when the open session is the desk's. */
 export interface DeskProps {
+  /** The power-on is playing: the chat snaps its own layout instead of
+      springing, so Motion's hero exit and dock move do not fight the
+      desk's choreography. */
+  entering: boolean
   wallets: Wallet[]
   primary: string | null
   limits: Limits | null
