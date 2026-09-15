@@ -18,9 +18,53 @@ import {
   rejectionMessage,
   riskStamp,
   statusWord,
+  tradingProjectKnowledge,
   validateMission,
   withoutDryRun,
 } from './desk-logic'
+
+describe('tradingProjectKnowledge', () => {
+  const second = {
+    ...WALLET,
+    address: '0x2222222222222222222222222222222222222222',
+    label: '10k',
+    primary: false,
+  }
+
+  it('names the primary as the order wallet and the others as name-only', () => {
+    const text = tradingProjectKnowledge({
+      wallets: [WALLET, second],
+      chains: [8453],
+      limits: null,
+    })
+    expect(text).toContain(`Primary wallet: Main (${WALLET.address}). Every order comes from it`)
+    expect(text).toMatch(/do not read or report any other wallet's balance/)
+    expect(text).toContain(`Other wallets, only when the user names them: 10k (${second.address}).`)
+    expect(text).toContain('Chains: Base.')
+    // The primary is not listed twice, and never as a peer of the others.
+    expect(text.indexOf(WALLET.address)).toBe(text.lastIndexOf(WALLET.address))
+  })
+
+  it('falls back to the first wallet when none is marked primary, and says so when there are none', () => {
+    const alone = tradingProjectKnowledge({ wallets: [second], chains: [], limits: null })
+    expect(alone).toContain(`Primary wallet: 10k (${second.address})`)
+    expect(alone).not.toContain('Other wallets')
+    expect(tradingProjectKnowledge({ wallets: [], chains: [], limits: null })).toContain(
+      'Wallets: none yet.',
+    )
+  })
+
+  it('carries the engine limits', () => {
+    const text = tradingProjectKnowledge({
+      wallets: [WALLET],
+      chains: [8453],
+      limits: { thresholdUsd: 100, dailyCapUsd: 1000 },
+    })
+    expect(text).toContain(
+      "Orders above $100.00 wait for the user's approval; $1,000.00 per wallet per day.",
+    )
+  })
+})
 
 describe('statusWord', () => {
   it('ranks awaiting over live over running over idle', () => {
@@ -201,20 +245,114 @@ describe('missions', () => {
   })
 
   it('edits a job back into a form', () => {
+    const second = {
+      ...WALLET,
+      address: '0x2222222222222222222222222222222222222222',
+      label: '10k',
+      primary: false,
+    }
     const form = missionFromJob(
       {
         name: 'DCA ETH',
-        message:
-          '[Trading desk mission] DCA ETH\nGoal: Buy 10 USD of ETH.\nDry run: this run, only quote and report. Do not swap.',
+        message: [
+          '[Trading desk mission] DCA ETH',
+          'Goal: Buy 10 USD of ETH.',
+          'Wallets: 10k · 0x2222…2222, Main · 0x1111…1111 · Chains: Robinhood Chain, Base',
+          'Budget: at most $300.00 in total for this mission and at most $10.00 per order. Never exceed it.',
+          'Cadence: this message arrives every 1 hour from a scheduled job.',
+          'Rules: use the wallet-trading skill.',
+          'Stop: after 30 runs. Count the previous runs in this conversation; on the last one, end your reply with "MISSION COMPLETE".',
+          'Dry run: this run, only quote and report. Do not swap.',
+        ].join('\n'),
         scheduleKind: 'every',
         scheduleRaw: 3600,
       },
       WALLET.address,
+      [WALLET, second],
     )
     expect(form.name).toBe('DCA ETH')
     expect(form.goal).toBe('Buy 10 USD of ETH.')
     expect(form.dryRun).toBe(true)
     expect(form.interval).toEqual({ kind: 'every', seconds: 3600 })
+    // Not the blank contract's defaults: what the job actually says.
+    expect(form.budgetTotalUsd).toBe('300')
+    expect(form.budgetPerOrderUsd).toBe('10')
+    expect(form.wallets).toEqual([second.address, WALLET.address])
+    expect(form.chains).toEqual([4663, 8453])
+    expect(form.stop).toEqual({ kind: 'runs', runs: 30 })
+  })
+
+  it('reads every stop rule and an absent budget back', () => {
+    const read = (stopLine: string) =>
+      missionFromJob(
+        { name: 'x', message: `[Trading desk mission] x\nGoal: g\n${stopLine}` },
+        WALLET.address,
+        [WALLET],
+      )
+    expect(
+      read('Stop: after 2026-12-31. When that moment has passed, reply exactly "MISSION COMPLETE".')
+        .stop,
+    ).toEqual({ kind: 'until', until: '2026-12-31' })
+    expect(
+      read('Stop: when the goal is reached, end your reply with "MISSION COMPLETE".').stop,
+    ).toEqual({
+      kind: 'goal',
+    })
+    const none = read('Rules: none')
+    expect(none.stop).toEqual({ kind: 'none' })
+    expect(none.budgetTotalUsd).toBe('')
+    expect(none.budgetPerOrderUsd).toBe('')
+    // A wallet the list does not know cannot be ticked; the primary stands in.
+    expect(
+      missionFromJob(
+        { name: 'x', message: 'Goal: g\nWallets: 0x9999…9999 · Chains: Base' },
+        WALLET.address,
+        [WALLET],
+      ).wallets,
+    ).toEqual([WALLET.address])
+  })
+
+  it('round-trips every prefilled contract through its prompt', () => {
+    const second = {
+      ...WALLET,
+      address: '0x2222222222222222222222222222222222222222',
+      label: '10k',
+      primary: false,
+    }
+    const wallets = [WALLET, second]
+    const ctx = { wallets, limits: { thresholdUsd: 100, dailyCapUsd: 1000 } }
+    for (const kind of ['swap', 'dca', 'dip', 'rebalance', 'custom'] as const) {
+      const form = missionPrefill(kind, { primary: WALLET.address, chains: [8453, 4663] })
+      form.name = `Mission ${kind}`
+      form.goal = form.goal || 'Do the thing.'
+      form.wallets = [WALLET.address, second.address]
+      const job = {
+        name: form.name,
+        message: composeMissionPrompt(form, ctx),
+        scheduleKind: 'every',
+        scheduleRaw: form.interval.kind === 'every' ? form.interval.seconds : 0,
+      }
+      const back = missionFromJob(job, WALLET.address, wallets)
+      // A job always edits as a custom contract; every other field survives.
+      expect({ ...back, kind }).toEqual(form)
+    }
+    const until = missionPrefill('custom', { primary: WALLET.address })
+    until.name = 'Until'
+    until.goal = 'g'
+    until.stop = { kind: 'until', until: '2026-12-31' }
+    until.budgetTotalUsd = '1234.5'
+    until.budgetPerOrderUsd = ''
+    const back = missionFromJob(
+      {
+        name: 'Until',
+        message: composeMissionPrompt(until, ctx),
+        scheduleKind: 'every',
+        scheduleRaw: 3600,
+      },
+      WALLET.address,
+      wallets,
+    )
+    expect(back).toEqual(until)
   })
 })
 

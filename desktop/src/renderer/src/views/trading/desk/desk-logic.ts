@@ -399,14 +399,85 @@ export function jobText(job: RawJob): string {
   return String(job.message || job.prompt || '')
 }
 
-/** The form a job edits back into: name, goal line, cadence. Budgets stay in the text. */
-export function missionFromJob(job: RawJob, primary: string | null): MissionForm {
+/** "$1,234.50" as the form writes it: "1234.5". Absent → "". */
+function usdField(text: string): string {
+  const n = Number(text.replace(/,/g, ''))
+  return Number.isFinite(n) && n > 0 ? String(n) : ''
+}
+
+/**
+ * The wallets a `Wallets:` line names, in order, resolved against the list.
+ * Each entry is what `walletDisplay` wrote: `label · 0x1111…1111`, or just the
+ * short address for a wallet the list did not know at the time.
+ */
+function walletsFromLine(part: string, wallets: readonly Wallet[]): string[] {
+  const out: string[] = []
+  for (const token of part.split(', ')) {
+    const entry = token.trim()
+    if (!entry) continue
+    const sep = entry.lastIndexOf(' · ')
+    const label = sep >= 0 ? entry.slice(0, sep) : entry
+    const short = sep >= 0 ? entry.slice(sep + 3) : entry
+    const hit =
+      wallets.find((w) => shortAddress(w.address) === short) ??
+      wallets.find((w) => sep >= 0 && w.label === label) ??
+      wallets.find((w) => sep < 0 && w.label === label)
+    if (hit && !out.some((a) => sameAddress(a, hit.address))) out.push(hit.address)
+  }
+  return out
+}
+
+function stopFromLine(line: string | undefined): StopRule {
+  if (!line) return { kind: 'none' }
+  const runs = /^Stop: after (\d+) runs\./.exec(line)
+  if (runs) return { kind: 'runs', runs: Number(runs[1]) }
+  const until = /^Stop: after (.+?)\. When that moment has passed/.exec(line)
+  if (until?.[1]) return { kind: 'until', until: until[1] }
+  if (line.startsWith('Stop: when the goal is reached')) return { kind: 'goal' }
+  return { kind: 'none' }
+}
+
+/**
+ * The form a job edits back into. Everything `composeMissionPrompt` wrote is
+ * read back — goal, budget, wallets, chains, stop rule, dry run — so editing
+ * a mission starts from what it is, not from the blank contract's defaults.
+ */
+export function missionFromJob(
+  job: RawJob,
+  primary: string | null,
+  wallets: readonly Wallet[] = [],
+): MissionForm {
   const form = missionPrefill('custom', { primary })
   form.name = String(job.name || '')
   const text = jobText(job)
-  const goal = text.split('\n').find((l) => l.startsWith('Goal: '))
+  const lines = text.split('\n')
+  const goal = lines.find((l) => l.startsWith('Goal: '))
   form.goal = goal ? goal.slice('Goal: '.length) : text
   form.dryRun = isDryRunText(text)
+
+  const budget = lines.find((l) => l.startsWith('Budget: '))
+  form.budgetTotalUsd = usdField(/at most \$([\d,.]+) in total/.exec(budget ?? '')?.[1] ?? '')
+  form.budgetPerOrderUsd = usdField(/at most \$([\d,.]+) per order/.exec(budget ?? '')?.[1] ?? '')
+
+  const scope = lines.find((l) => l.startsWith('Wallets: '))
+  if (scope) {
+    const cut = scope.lastIndexOf(' · Chains: ')
+    const walletPart = (cut >= 0 ? scope.slice(0, cut) : scope).slice('Wallets: '.length)
+    const chainPart = cut >= 0 ? scope.slice(cut + ' · Chains: '.length) : ''
+    if (walletPart !== 'the primary wallet') {
+      const named = walletsFromLine(walletPart, wallets)
+      if (named.length) form.wallets = named
+    }
+    const chains: number[] = []
+    for (const name of chainPart.split(', ')) {
+      const id = CHAINS.find((c) => c.name === name.trim())?.id
+      if (id !== undefined) chains.push(id)
+    }
+    if (chains.length) form.chains = chains
+  }
+
+  form.stop = stopFromLine(lines.find((l) => l.startsWith('Stop: ')))
+
   const kind = String(job.scheduleKind || job.schedule_kind || '')
   const raw = job.scheduleRaw ?? job.schedule_raw ?? job.expression ?? job.schedule
   if (kind === 'every' && Number(raw) > 0) form.interval = { kind: 'every', seconds: Number(raw) }
@@ -473,9 +544,21 @@ export function tradingProjectKnowledge(ctx: {
   chains: readonly number[]
   limits: { thresholdUsd: number; dailyCapUsd: number } | null
 }): string {
-  const wallets = ctx.wallets.length
-    ? ctx.wallets.map((w) => `${w.label} (${w.address})${w.primary ? ' — primary' : ''}`).join('; ')
-    : 'none yet'
+  // The primary is the wallet orders come from; the others exist only so a
+  // wallet the user names by label can be resolved. Listing them as peers
+  // invited the agent to "check the other wallet too".
+  const primary = ctx.wallets.find((w) => w.primary) ?? ctx.wallets[0] ?? null
+  const others = ctx.wallets.filter((w) => w !== primary)
+  const wallets = primary
+    ? [
+        `Primary wallet: ${primary.label} (${primary.address}). Every order comes from it unless the user names another wallet in this chat; do not read or report any other wallet's balance for an order.`,
+        others.length
+          ? `Other wallets, only when the user names them: ${others.map((w) => `${w.label} (${w.address})`).join('; ')}.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : 'Wallets: none yet.'
   const chains = (ctx.chains.length ? ctx.chains : CHAINS.map((c) => c.id))
     .map((c) => chainName(c))
     .join(', ')
@@ -484,7 +567,7 @@ export function tradingProjectKnowledge(ctx: {
     : ''
   return [
     'You are at the trading desk of the AgentOS desktop app. The user can see wallets, holdings and orders beside this chat.',
-    `Wallets: ${wallets}. Chains: ${chains}.`,
+    `${wallets} Chains: ${chains}.`,
     'Use the wallet-trading skill: `agentos wallet …` and `agentos trade … --json`. Prefer `--wait` on swaps and report the order id, status and explorer link.',
     limits,
     'Never bypass an approval; if the user rejects an order they will say why in this chat.',

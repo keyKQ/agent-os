@@ -52,6 +52,18 @@ describe('trading agent spec', () => {
     expect(files).not.toHaveProperty('USER.md')
     expect(files).not.toHaveProperty('MEMORY.md')
   })
+  it('makes the primary the only wallet an order touches unless the user names another', () => {
+    // A desk once answered "swap 50% ETH" by reading the second wallet's
+    // balance too and holding on both; the rule now names one wallet.
+    const files = tradingAgentFiles()
+    expect(files['AGENTS.md']).toContain('## Which wallet')
+    expect(files['AGENTS.md']).toMatch(/Never look up another wallet's balance/)
+    expect(files['AGENTS.md']).toMatch(/a small balance does not/)
+    expect(files['AGENTS.md']).toMatch(/Size is the user's call/)
+    expect(files['SOUL.md']).toMatch(/The wallet is never ambiguous/)
+    expect(files['TOOLS.md']).toMatch(/No `--wallet` means the\s+primary/)
+    expect(files['TOOLS.md']).not.toMatch(/wallet balances \[ADDR\]/)
+  })
 })
 
 describe('syncTradingAgent', () => {
