@@ -112,6 +112,7 @@ function createFallbackApi(): DesktopApi {
       start: cannotControl,
       stop: stoppedOnly,
       restart: cannotControl,
+      operatorSecret: async () => null,
       onChanged: () => () => {},
     },
     // A browser tab has the web Notification API and nothing else: no Dock,

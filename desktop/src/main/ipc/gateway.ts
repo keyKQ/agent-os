@@ -7,6 +7,7 @@ export function registerGatewayIpc(supervisor: GatewaySupervisor): void {
   ipcMain.handle(IPC.gateway.start, () => supervisor.start())
   ipcMain.handle(IPC.gateway.stop, () => supervisor.stop())
   ipcMain.handle(IPC.gateway.restart, () => supervisor.restart())
+  ipcMain.handle(IPC.gateway.operatorSecret, () => supervisor.operatorSecret())
 
   supervisor.subscribe((status) => {
     for (const win of BrowserWindow.getAllWindows()) {

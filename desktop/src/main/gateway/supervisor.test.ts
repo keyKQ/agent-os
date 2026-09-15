@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { EventEmitter } from 'node:events'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 import type { GatewaySettings } from '@shared/settings'
@@ -111,10 +114,22 @@ describe('GatewaySupervisor (spawn arguments)', () => {
       return child
     })
     let probes = 0
+    const secretDir = mkdtempSync(path.join(os.tmpdir(), 'agentos-sup-'))
+    let seenSecret: string | null = null
+    let seenMode: number | null = null
     const sup = new GatewaySupervisor(() => managed, {
-      // Not running before the spawn; healthy right after it.
-      probe: async () => probes++ > 0,
+      // Not running before the spawn; healthy right after it. The probe is
+      // where the "gateway" reads its secret, as the real one does at boot.
+      probe: async (url) => {
+        const file = spawnCalls[0]?.env.AGENTOS_OPERATOR_SECRET_FILE
+        if (file && seenSecret === null) {
+          seenSecret = readFileSync(file, 'utf8').trim()
+          seenMode = statSync(file).mode
+        }
+        return probes++ > 0 && url.length > 0
+      },
       locate: (override) => override,
+      secretDir,
       spawn: spawn as unknown as typeof import('node:child_process').spawn,
     })
     const status = await sup.start()
@@ -130,8 +145,24 @@ describe('GatewaySupervisor (spawn arguments)', () => {
     ])
     expect(spawnCalls[0]?.env.AGENTOS_AUTH_TOKEN).toBe('secret')
     expect(spawnCalls[0]?.env.AGENTOS_AUTH_MODE).toBe('token')
+    // The operator secret travelled by file, 0600, and is what the renderer
+    // will present; the file is gone once the gateway is up.
+    const secretFile = spawnCalls[0]?.env.AGENTOS_OPERATOR_SECRET_FILE
+    expect(secretFile).toBeTruthy()
+    expect(secretFile).toContain(secretDir)
+    expect(seenSecret).toMatch(/^[0-9a-f]{64}$/)
+    expect(seenMode! & 0o777).toBe(0o600)
+    expect(sup.operatorSecret()).toBe(seenSecret)
+    expect(existsSync(secretFile!)).toBe(false)
+    expect(spawnCalls[0]?.env.AGENTOS_OPERATOR_SECRET).toBeUndefined()
     // The old double-underscore names never reached the gateway's settings.
     expect(spawnCalls[0]?.env.AGENTOS_GATEWAY__PORT).toBeUndefined()
     expect(spawnCalls[0]?.env.AGENTOS_AUTH__TOKEN).toBeUndefined()
+  })
+
+  it('has no operator secret to offer for an adopted or external gateway', async () => {
+    const sup = new GatewaySupervisor(() => external, { probe: async () => true })
+    await sup.start()
+    expect(sup.operatorSecret()).toBeNull()
   })
 })

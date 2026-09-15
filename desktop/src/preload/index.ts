@@ -47,6 +47,7 @@ const api: DesktopApi = {
     start: () => ipcRenderer.invoke(IPC.gateway.start),
     stop: () => ipcRenderer.invoke(IPC.gateway.stop),
     restart: () => ipcRenderer.invoke(IPC.gateway.restart),
+    operatorSecret: () => ipcRenderer.invoke(IPC.gateway.operatorSecret),
     onChanged: (listener) => listen<GatewayStatus>(IPC.gateway.changed, listener),
   },
   notify: {

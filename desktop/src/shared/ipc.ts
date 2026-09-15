@@ -34,6 +34,7 @@ export const IPC = {
     start: 'gateway:start',
     stop: 'gateway:stop',
     restart: 'gateway:restart',
+    operatorSecret: 'gateway:operatorSecret',
     /** Main -> renderer: status transitions. */
     changed: 'gateway:changed',
   },
@@ -134,6 +135,12 @@ export interface DesktopApi {
     start(): Promise<GatewayStatus>
     stop(): Promise<GatewayStatus>
     restart(): Promise<GatewayStatus>
+    /**
+     * The secret this app handed the gateway it spawned; presented at the
+     * WebSocket handshake so the gateway knows the connection is the
+     * operator's, never an agent's. Null for an adopted or external gateway.
+     */
+    operatorSecret(): Promise<string | null>
     onChanged(listener: (status: GatewayStatus) => void): () => void
   }
   notify: {

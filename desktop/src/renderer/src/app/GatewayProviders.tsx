@@ -10,6 +10,7 @@ import { WsRpcClient, type RpcState } from '@/lib/ws-rpc'
 import { approvalMonitor } from '@/services/approval-monitor'
 import { useConnection } from '@/stores/connection'
 import { useTheme as useWebTheme } from '@/stores/theme'
+import { desktopApi } from '~/lib/desktop-api'
 import { useGateway } from '~/stores/gateway'
 import { useSettings } from '~/stores/settings'
 import { useTheme } from '~/theme/theme-store'
@@ -82,13 +83,28 @@ export function GatewayProviders({ children }: { children: ReactNode }) {
     }
 
     let cancelled = false
-    fetchBootstrap()
-      .catch(() => fallbackBootstrap())
-      .then((b) => {
+    // The operator secret is what tells the gateway this connection is the
+    // user's app, not an agent's shell; without it (adopted or external
+    // gateway) the gateway falls back to its own rules.
+    // A renderer can be newer than the preload it runs under (dev reload,
+    // mid-update): an older bridge has no operatorSecret, and that is a
+    // connection without proof, not a crash.
+    const bridge = desktopApi().gateway as { operatorSecret?: () => Promise<string | null> }
+    const secretPromise =
+      typeof bridge.operatorSecret === 'function'
+        ? bridge.operatorSecret().catch(() => null)
+        : Promise.resolve<string | null>(null)
+    Promise.all([fetchBootstrap().catch(() => fallbackBootstrap()), secretPromise]).then(
+      ([b, secret]) => {
         if (cancelled) return
         setBootstrap(b)
-        rpc.connect(resolveWsUrl(b.ws_url), token || undefined)
-      })
+        rpc.connect(
+          resolveWsUrl(b.ws_url),
+          token || undefined,
+          secret ? { operatorSecret: secret } : null,
+        )
+      },
+    )
     // Approvals are a REST poller against the same origin; only worth running
     // while there is a gateway to ask.
     approvalMonitor.start()

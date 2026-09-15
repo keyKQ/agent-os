@@ -1,5 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { createWriteStream, mkdirSync, rmSync, writeFileSync, type WriteStream } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { GatewaySettings } from '@shared/settings'
 import { STOPPED_GATEWAY, type GatewayStatus } from '@shared/gateway'
@@ -38,12 +40,15 @@ export class GatewaySupervisor {
       locate?: (override: string | null) => string | null
       /** Where the spawned gateway's stdout/stderr are appended (~/Library/Logs/AgentOS). */
       logPath?: string
+      /** Where the one-shot operator secret file is written before a spawn. */
+      secretDir?: string
       spawn?: typeof nodeSpawn
     } = {},
   ) {
     this.probe = deps.probe ?? defaultProbe
     this.locate = deps.locate ?? ((override) => locateCli({ override }))
     this.logPath = deps.logPath ?? null
+    this.secretDir = deps.secretDir ?? os.tmpdir()
     this.spawn = deps.spawn ?? nodeSpawn
   }
 
@@ -51,6 +56,46 @@ export class GatewaySupervisor {
 
   private readonly logPath: string | null
   private logFile: WriteStream | null = null
+
+  private readonly secretDir: string
+  /**
+   * The operator secret of the gateway this app spawned. The gateway reads it
+   * from a 0600 file at boot and deletes the file, so no child of the gateway
+   * (an agent's shell) can find it; the renderer presents it at the WebSocket
+   * handshake and the gateway then knows the app's connection is the user's,
+   * not an agent's (src/agentos/gateway/agent_surface.py). Only in memory
+   * here; never logged, never in settings.
+   */
+  private secret: string | null = null
+
+  /** Null for an adopted or external gateway: those were not ours to brief. */
+  operatorSecret(): string | null {
+    return this.child && this.status.state !== 'stopped' ? this.secret : null
+  }
+
+  private writeSecretFile(): string | null {
+    this.secret = randomBytes(32).toString('hex')
+    const file = path.join(this.secretDir, `agentos-operator-${process.pid}-${Date.now()}.secret`)
+    try {
+      mkdirSync(this.secretDir, { recursive: true })
+      writeFileSync(file, this.secret + '\n', { mode: 0o600 })
+      return file
+    } catch {
+      // Without the file the gateway falls back to its exec-window rule and
+      // the app still works; the connection just cannot prove it is ours.
+      this.secret = null
+      return null
+    }
+  }
+
+  private discardSecretFile(file: string | null): void {
+    if (!file) return
+    try {
+      rmSync(file, { force: true })
+    } catch {
+      /* the gateway already deleted it */
+    }
+  }
 
   /**
    * Every line the gateway prints goes to disk, or nobody can answer "why
@@ -124,6 +169,7 @@ export class GatewaySupervisor {
     // config.toml, whereas an environment variable loses to a `port =` line
     // the onboarding wrote (verified against GatewayConfig.load). The auth
     // env names follow AuthConfig's prefix, `AGENTOS_AUTH_<FIELD>`.
+    const secretFile = this.writeSecretFile()
     const child = this.spawn(
       cli,
       ['gateway', 'run', '--bind', cfg.host, '--port', String(cfg.port)],
@@ -131,6 +177,7 @@ export class GatewaySupervisor {
         env: {
           ...process.env,
           ...(cfg.token ? { AGENTOS_AUTH_TOKEN: cfg.token, AGENTOS_AUTH_MODE: 'token' } : {}),
+          ...(secretFile ? { AGENTOS_OPERATOR_SECRET_FILE: secretFile } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
@@ -175,6 +222,9 @@ export class GatewaySupervisor {
       READY_TIMEOUT_MS,
       () => generation === this.startGeneration && this.child === child,
     )
+    // The gateway deletes the file at boot; if it never got that far, do not
+    // leave a secret lying in the temp dir.
+    this.discardSecretFile(secretFile)
     if (this.child !== child) return this.current() // exited or stopped meanwhile
     if (!ready) {
       child.kill('SIGTERM')
