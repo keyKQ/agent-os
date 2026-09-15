@@ -22,7 +22,6 @@ import {
   initiatorKey,
   isAwaitingApproval,
   isOrderLive,
-  isOrderSettled,
   isPositiveAmount,
   needsRetype,
   orderTone,
@@ -191,9 +190,7 @@ describe('tones', () => {
   it('classifies order lifecycles', () => {
     expect(isAwaitingApproval({ status: 'awaiting_approval' })).toBe(true)
     expect(isOrderLive({ status: 'submitted' })).toBe(true)
-    expect(isOrderSettled({ status: 'confirmed' })).toBe(true)
-    expect(isOrderSettled({ status: 'submitted' })).toBe(false)
-    expect(isOrderSettled({ status: 'quoted' })).toBe(false)
+    expect(isOrderLive({ status: 'confirmed' })).toBe(false)
   })
   it('grades price impact', () => {
     expect(impactTone(0.2)).toBe('ok')

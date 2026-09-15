@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -112,6 +112,7 @@ export function Orders({
   onDecide,
   showWallet,
   highlight,
+  onHighlighted,
 }: {
   orders: Order[]
   approvalsOnly: boolean
@@ -120,6 +121,8 @@ export function Orders({
   showWallet: boolean
   /** An order id to scroll to (from a notification). */
   highlight: string | null
+  /** The row has been brought into view: the owner may drop the highlight. */
+  onHighlighted?: () => void
 }) {
   // Approval timers count down by the second; nothing else on the page does.
   const now = useNow(1000)
@@ -150,6 +153,7 @@ export function Orders({
           onDecide={onDecide}
           showWallet={showWallet}
           highlighted={highlight === o.orderId}
+          onHighlighted={onHighlighted}
         />
       ))}
     </div>
@@ -183,6 +187,7 @@ function OrderRow({
   onDecide,
   showWallet,
   highlighted,
+  onHighlighted,
 }: {
   order: Order
   now: number
@@ -190,7 +195,16 @@ function OrderRow({
   onDecide: (order: Order, approve: boolean) => void
   showWallet: boolean
   highlighted: boolean
+  onHighlighted?: () => void
 }) {
+  // Scroll once when the highlight lands, not on every tick of the timer.
+  const rowRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!highlighted) return
+    rowRef.current?.scrollIntoView({ block: 'center' })
+    onHighlighted?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlighted])
   const waiting = isAwaitingApproval(order)
   const left = waiting ? approvalSecondsLeft(order, now) : null
   const by = initiatorKey(order.initiator)
@@ -205,9 +219,7 @@ function OrderRow({
       data-status={order.status}
       data-tone={tone}
       data-testid="order-row"
-      ref={(el) => {
-        if (highlighted && el) el.scrollIntoView({ block: 'center' })
-      }}
+      ref={rowRef}
     >
       <span className="trd-order__mark" data-tone={tone} aria-hidden>
         <Glyph className="size-3.5" strokeWidth={2} />

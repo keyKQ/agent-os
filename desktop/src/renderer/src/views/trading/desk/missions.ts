@@ -44,8 +44,10 @@ export interface MissionsApi {
   loading: boolean
   /** Job ids with a run in flight right now. */
   running: ReadonlySet<string>
+  /** The job, or null when the gateway refused (already toasted). */
   create: (form: MissionForm, prompt: string) => Promise<RawJob | null>
-  update: (id: string, patch: Record<string, unknown>) => Promise<void>
+  /** True when saved; false when the gateway refused (already toasted). */
+  update: (id: string, patch: Record<string, unknown>) => Promise<boolean>
   setEnabled: (job: RawJob, enabled: boolean) => void
   runNow: (job: RawJob) => void
   remove: (job: RawJob) => void
@@ -78,7 +80,10 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   // Runs: start marks the job live, finished clears it and refreshes the
   // list (next_run moved). A mission that reports completion turns itself
   // off; a first run in dry-run mode drops the dry-run line for the next.
+  // Bound once per desk (the frame owns this hook): a second listener
+  // would send every `cron.update` twice.
   useEffect(() => {
+    if (!enabled) return
     const invalidate = () => void queryClient.invalidateQueries({ queryKey: MISSIONS_KEY })
     const offStart = rpc.on('cron.run.start', (payload) => {
       const id = (payload as RunStartPayload | undefined)?.jobId
@@ -126,7 +131,7 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
       offFinished()
       offHello()
     }
-  }, [rpc, queryClient, sessionKey])
+  }, [rpc, queryClient, sessionKey, enabled])
 
   const create = useMutation({
     mutationFn: async ({ form, prompt }: { form: MissionForm; prompt: string }) => {
@@ -179,8 +184,10 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
       try {
         await update.mutateAsync({ id, patch })
         toast.success(t('trading.mission.updated'), { id: 'mission-update' })
+        return true
       } catch (err) {
         fail(t('trading.mission.failed'), err)
+        return false
       }
     },
     setEnabled: (job, enabled) => {

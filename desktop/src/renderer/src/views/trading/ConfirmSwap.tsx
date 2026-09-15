@@ -34,6 +34,7 @@ export function ConfirmSwap({
   amount,
   slippagePct,
   refreshing,
+  quoteError = null,
   onRefresh,
   onClose,
   onSent,
@@ -47,6 +48,8 @@ export function ConfirmSwap({
   amount: string
   slippagePct: number | undefined
   refreshing: boolean
+  /** Why the last refresh failed, so a dead Refresh button is never a mystery. */
+  quoteError?: string | null
   onRefresh: () => void
   onClose: () => void
   onSent: (orders: Order[]) => void
@@ -196,6 +199,14 @@ export function ConfirmSwap({
         <div className="trd-warn" data-tone="warn" role="status" data-testid="confirm-stale">
           <TriangleAlert className="size-3.5" strokeWidth={2} aria-hidden />
           <span>{t('trading.confirm.stale')}</span>
+        </div>
+      ) : null}
+      {quoteError ? (
+        <div className="trd-warn" data-tone="danger" role="alert" data-testid="confirm-quote-error">
+          <TriangleAlert className="size-3.5" strokeWidth={2} aria-hidden />
+          <span>
+            {t('trading.confirm.refreshFailed')}: {quoteError}
+          </span>
         </div>
       ) : null}
 

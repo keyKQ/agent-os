@@ -36,6 +36,7 @@ import {
   type ChainId,
   type Order,
   type ProviderId,
+  type Quote,
   type Token,
   type Wallet,
 } from './types'
@@ -88,6 +89,7 @@ export function SwapPanel({
   provider,
   providerReady,
   onSwitchProvider,
+  onOpenSettings,
   unlocked,
   prefill,
   onSent,
@@ -99,8 +101,10 @@ export function SwapPanel({
   provider: ProviderId
   /** Uniswap has its key, or Kyber is not known to be blocked. */
   providerReady: boolean
-  /** Opens Settings › Trading, the one place a blocked provider is fixed. */
-  onSwitchProvider: () => void
+  /** Make another provider route the swaps (a blocked Kyber → Uniswap). */
+  onSwitchProvider: (id: ProviderId) => void
+  /** Opens Settings › Trading, the one place a Uniswap key is added. */
+  onOpenSettings: () => void
   unlocked: boolean
   prefill: SwapPrefill | null
   onSent: (orders: Order[]) => void
@@ -125,7 +129,12 @@ export function SwapPanel({
   }
   const followed =
     selectedWallet !== 'all' ? selectedWallet : (primary ?? wallets[0]?.address ?? '')
-  const wallet = walletChoice.override ?? followed
+  // An override must still be a wallet that exists: a removed one falls back.
+  const override =
+    walletChoice.override && wallets.some((w) => sameAddress(w.address, walletChoice.override))
+      ? walletChoice.override
+      : null
+  const wallet = override ?? followed
   const setWallet = (address: string) =>
     setWalletChoice((c) => ({ ...c, override: address || null }))
 
@@ -186,6 +195,10 @@ export function SwapPanel({
       }
     : null
   const quote = useQuote(params)
+  // The query keeps the previous params' price as a placeholder while the new
+  // one loads. That price is about another swap: nothing on the ticket may
+  // show it, and Review must not open on it.
+  const fresh: Quote | null = quote.data && !quote.isPlaceholderData ? quote.data : null
   const countdown = quoteCountdown(quote.fetchedAt, now)
   const quoteError = quote.error
     ? quote.error instanceof Error
@@ -210,12 +223,19 @@ export function SwapPanel({
               : insufficient
                 ? 'trading.swap.cta.insufficient'
                 : null
-  const canReview = ctaKey === null && quote.data !== undefined && !quote.isError
+  const canReview = ctaKey === null && fresh !== null && !quote.isError
+  // A gate the ticket can open itself: the button does that instead of sitting dead.
+  const gateAction: (() => void) | null =
+    unlocked && !providerReady
+      ? provider === 'uniswap'
+        ? onOpenSettings
+        : () => onSwitchProvider('uniswap')
+      : null
 
   function flip() {
     setTokenIn(tokenOut)
     setTokenOut(tokenIn)
-    setAmount(quote.data && tokenOut ? quote.data.amountOut : '')
+    setAmount(fresh && tokenOut ? fresh.amountOut : '')
   }
 
   const selectedWalletObj = wallets.find((w) => sameAddress(w.address, wallet)) ?? null
@@ -269,7 +289,7 @@ export function SwapPanel({
               : undefined
           }
           usd={
-            quote.data?.valueUsd ??
+            fresh?.valueUsd ??
             (available?.priceUsd !== null && available?.priceUsd !== undefined && parsed
               ? Number(parsed) * available.priceUsd
               : null)
@@ -309,46 +329,40 @@ export function SwapPanel({
         >
           <output
             className="trd-amount trd-amount--out"
-            data-pending={quote.isFetching && !quote.data ? 'true' : undefined}
+            data-pending={quote.isFetching && !fresh ? 'true' : undefined}
             aria-label={t('trading.swap.to')}
             data-testid="quote-out"
           >
-            {quote.data && ready
-              ? formatAmount(quote.data.amountOut)
-              : quote.isFetching
-                ? '…'
-                : '0'}
+            {fresh && ready ? formatAmount(fresh.amountOut) : quote.isFetching ? '…' : '0'}
           </output>
         </Leg>
 
-        {ready && quote.data ? (
+        {ready && fresh ? (
           <div className="trd-facts" data-testid="quote-facts">
             <div className="trd-fact">
               <span>
                 {t('trading.swap.rate')}{' '}
                 <span className="text-dim" data-testid="quote-provider">
-                  {t('trading.provider.via')} {providerLabel(quote.data.provider ?? provider)}
+                  {t('trading.provider.via')} {providerLabel(fresh.provider ?? provider)}
                 </span>
               </span>
               <b>
-                1 {tokenIn?.symbol} ≈ {formatAmount(quote.data.rate)} {tokenOut?.symbol}
+                1 {tokenIn?.symbol} ≈ {formatAmount(fresh.rate)} {tokenOut?.symbol}
               </b>
             </div>
             <div className="trd-fact">
               <span>{t('trading.swap.impact')}</span>
-              <b data-tone={impactTone(quote.data.priceImpactPct)}>
-                {formatPct(quote.data.priceImpactPct)}
-              </b>
+              <b data-tone={impactTone(fresh.priceImpactPct)}>{formatPct(fresh.priceImpactPct)}</b>
             </div>
             <div className="trd-fact">
               <span>{t('trading.swap.minOut')}</span>
               <b>
-                {formatAmount(quote.data.minOut)} {tokenOut?.symbol}
+                {formatAmount(fresh.minOut)} {tokenOut?.symbol}
               </b>
             </div>
             <div className="trd-fact">
               <span>{t('trading.swap.gas')}</span>
-              <b>{formatUsd(quote.data.gasUsd)}</b>
+              <b>{formatUsd(fresh.gasUsd)}</b>
             </div>
             <div className="trd-fact">
               <span>{t('trading.swap.slippage')}</span>
@@ -360,7 +374,7 @@ export function SwapPanel({
                   value={slippage === 'auto' ? 'auto' : 'custom'}
                   onChange={(e) =>
                     setSlippage(
-                      e.target.value === 'auto' ? 'auto' : String(quote.data?.slippagePct ?? 0.5),
+                      e.target.value === 'auto' ? 'auto' : String(fresh?.slippagePct ?? 0.5),
                     )
                   }
                 >
@@ -377,27 +391,23 @@ export function SwapPanel({
                     onChange={(e) => setSlippage(e.target.value)}
                   />
                 ) : (
-                  <b>{formatPct(quote.data.slippagePct)}</b>
+                  <b>{formatPct(fresh.slippagePct)}</b>
                 )}
               </span>
             </div>
           </div>
         ) : null}
 
-        {ready && quote.data ? <QuoteWarnings warnings={quote.data.warnings} /> : null}
+        {ready && fresh ? <QuoteWarnings warnings={fresh.warnings} /> : null}
 
-        {ready && quote.data ? (
-          <div
-            className="trd-guard"
-            data-decision={quote.data.guard.decision}
-            data-testid="quote-guard"
-          >
-            {quote.data.guard.decision === 'allow' ? (
+        {ready && fresh ? (
+          <div className="trd-guard" data-decision={fresh.guard.decision} data-testid="quote-guard">
+            {fresh.guard.decision === 'allow' ? (
               <CircleCheck className="size-3.5" strokeWidth={2} aria-hidden />
             ) : (
               <ShieldAlert className="size-3.5" strokeWidth={2} aria-hidden />
             )}
-            <span>{t(`trading.swap.guard.${quote.data.guard.decision}`)}</span>
+            <span>{t(`trading.swap.guard.${fresh.guard.decision}`)}</span>
           </div>
         ) : null}
 
@@ -406,7 +416,10 @@ export function SwapPanel({
             {isProviderBlocked(quote.error) ? (
               <span className="flex flex-col items-start gap-2">
                 {t('trading.provider.blocked')}
-                <Button onClick={onSwitchProvider} data-testid="provider-blocked-fix">
+                <Button
+                  onClick={() => onSwitchProvider('uniswap')}
+                  data-testid="provider-blocked-fix"
+                >
                   {t('trading.provider.switch')}
                 </Button>
               </span>
@@ -425,15 +438,15 @@ export function SwapPanel({
         <button
           type="button"
           className="trd-cta app-no-drag"
-          disabled={!canReview}
+          disabled={gateAction ? false : !canReview}
           data-testid="swap-review"
-          data-fresh={ready && quote.data && !countdown.expired ? 'true' : undefined}
+          data-fresh={ready && fresh && !countdown.expired ? 'true' : undefined}
           style={
             {
-              '--fresh': ready && quote.data && !countdown.expired ? countdown.fraction : 0,
+              '--fresh': ready && fresh && !countdown.expired ? countdown.fraction : 0,
             } as CSSProperties
           }
-          onClick={() => setConfirm(true)}
+          onClick={gateAction ?? (() => setConfirm(true))}
         >
           {ctaKey ? t(ctaKey as 'trading.swap.pick') : t('trading.swap.cta')}
         </button>
@@ -488,9 +501,9 @@ export function SwapPanel({
         />
       ) : null}
 
-      {confirm && quote.data && tokenIn && tokenOut && selectedWalletObj ? (
+      {confirm && fresh && tokenIn && tokenOut && selectedWalletObj ? (
         <ConfirmSwap
-          quote={quote.data}
+          quote={fresh}
           fetchedAt={quote.fetchedAt}
           wallet={selectedWalletObj}
           tokenIn={tokenIn}
@@ -498,9 +511,10 @@ export function SwapPanel({
           amount={parsed as string}
           slippagePct={slippagePct}
           refreshing={quote.isFetching}
+          quoteError={quoteError}
           onRefresh={() => void quote.refetch()}
           onClose={() => setConfirm(false)}
-          onSwitchProvider={onSwitchProvider}
+          onSwitchProvider={() => onSwitchProvider('uniswap')}
           onSent={(orders) => {
             setConfirm(false)
             setAmount('')

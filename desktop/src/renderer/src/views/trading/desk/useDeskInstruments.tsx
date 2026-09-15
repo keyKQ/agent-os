@@ -1,5 +1,5 @@
 import { KeyRound } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
@@ -10,11 +10,12 @@ import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { invalidateTrading, useOrderDecision, useOrders, useTradingStatus } from '~/stores/trading'
-import { useTradingUi } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { Notice } from '~/views/settings/parts'
 import { errorText, isAwaitingApproval, sameAddress } from '../logic'
-import { providerLabel, type Limits, type Order, type ProviderId, type Wallet } from '../types'
+import { useSwitchProvider } from '../useSwitchProvider'
+import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
+import type { Limits, Order, ProviderId, Wallet } from '../types'
 import { ApprovalsRegion } from './ApprovalsRegion'
 import { ComposerSeats } from './ComposerSeats'
 import {
@@ -27,9 +28,11 @@ import {
 } from './desk-logic'
 import { MissionContract } from './MissionContract'
 import { MissionControls, MissionStrip, missionWord } from './MissionControls'
-import { useMissions } from './missions'
+import type { MissionsApi } from './missions'
 
 const ROTATE_MS = 6000
+const NO_JOBS: RawJob[] = []
+const NO_RUNS: ReadonlySet<string> = new Set()
 /** A settled ask stays in the region this long as a stamp. */
 const STAMP_TTL_MS = 10 * 60_000
 
@@ -49,6 +52,8 @@ export interface DeskProps {
   primary: string | null
   limits: Limits | null
   gate: DeskGate
+  /** The desk's missions, bound once by the frame (the strip reads them too). */
+  missions: MissionsApi
   /** After the first send: files the session into the desk project. */
   onFirstSend: () => void
   /** Start over in a fresh desk chat. */
@@ -98,23 +103,12 @@ export function useDeskInstruments(
 ): DeskInstruments {
   const rpc = useRpc()
   const queryClient = useQueryClient()
-  const tradingStatus = useTradingStatus()
-  const switchProvider = useMutation({
-    mutationFn: (provider: ProviderId) =>
-      rpc.call<{ provider: ProviderId }>('trading.setProvider', { provider }),
-    onSuccess: (res) => {
-      toast.success(`${t('trading.seat.provider.saved')}: ${providerLabel(res?.provider)}`, {
-        id: 'trd-provider',
-      })
-      invalidateTrading(queryClient)
-    },
-    onError: (err) => toast.error(errorText(err), { id: 'trd-provider-err' }),
-  })
+  const enabled = desk !== null
+  const tradingStatus = useTradingStatus(enabled)
+  const switchProvider = useSwitchProvider()
   const navigate = useNavigate()
   const location = useLocation()
   const openSettings = useUi((s) => s.openSettings)
-  const setBookTab = useTradingUi((s) => s.setBookTab)
-  const enabled = desk !== null
   const { sessionKey, sendText, submitText, busy, composerValue, idle, hasMessages, focusOrderId } =
     ctx
   const { setFocusOrderId } = ctx
@@ -162,24 +156,41 @@ export function useDeskInstruments(
       ),
     [decide],
   )
+  // A mutation, not a bare call: `isPending` locks the card, so a second
+  // Enter on the reason cannot reject twice and post two chat messages. The
+  // ref closes the gap before React has re-rendered with `isPending`.
+  const rejectInFlight = useRef(false)
+  const reject = useMutation({
+    mutationFn: ({ order, reason }: { order: Order; reason: string }) =>
+      rpc.call('trading.orders.reject', { orderId: order.orderId, reason: reason || 'user' }),
+    onSuccess: (_res, { order, reason }) => {
+      toast.success(t('trading.approvals.rejected'), { id: `trd-order-${order.orderId}` })
+      // The agent reads the reason where it asked.
+      sendText(rejectionMessage(order, reason))
+    },
+    onError: (err, { order }) =>
+      toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
+        id: `trd-order-${order.orderId}`,
+      }),
+    onSettled: () => {
+      rejectInFlight.current = false
+      invalidateTrading(queryClient)
+    },
+  })
+  const { mutate: rejectMutate } = reject
   const onReject = useCallback(
     (order: Order, reason: string) => {
-      const clean = reason.trim()
-      rpc
-        .call('trading.orders.reject', { orderId: order.orderId, reason: clean || 'user' })
-        .then(() => {
-          toast.success(t('trading.approvals.rejected'), { id: `trd-order-${order.orderId}` })
-          // The agent reads the reason where it asked.
-          sendText(rejectionMessage(order, clean))
-        })
-        .catch((err: unknown) =>
-          toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
-            id: `trd-order-${order.orderId}`,
-          }),
-        )
+      if (rejectInFlight.current) return
+      rejectInFlight.current = true
+      rejectMutate({ order, reason: reason.trim() })
     },
-    [rpc, sendText],
+    [rejectMutate],
   )
+  const deciding = decide.isPending
+    ? (decide.variables?.orderId ?? null)
+    : reject.isPending
+      ? (reject.variables?.order.orderId ?? null)
+      : null
   // A notification lands on its card; the URL is cleaned so a reload does not repeat it.
   const orderParam = enabled ? new URLSearchParams(location.search).get('order') : null
   const [seenOrderParam, setSeenOrderParam] = useState<string | null>(null)
@@ -194,17 +205,23 @@ export function useDeskInstruments(
   }, [orderParam, navigate, desk, pendingOrders, sessionKey])
 
   // ── Missions ────────────────────────────────────────────────────────────
-  const missions = useMissions(sessionKey, enabled)
+  // Bound once by the frame and handed down: a second `useMissions` here
+  // would listen to `cron.run.finished` twice and update every job twice.
+  const missionJobs = desk?.missions.missions ?? NO_JOBS
+  const missionRuns = desk?.missions.running ?? NO_RUNS
   const [contract, setContract] = useState<{ kind: MissionKind; job?: RawJob | null } | null>(null)
+  // The composer's wallet chip is the one wallet affordance that is always on
+  // screen in Trading, so it opens the manager rather than nudging a tab.
+  const [walletSheet, setWalletSheet] = useState<WalletSheetMode | null>(null)
   const missionLine = useMemo(() => {
-    const first = missions.missions[0]
+    const first = missionJobs[0]
     if (!first) return null
     const s = missionStatus(first, {
-      running: Boolean(first.id && missions.running.has(first.id)),
+      running: Boolean(first.id && missionRuns.has(first.id)),
       pendingApprovals: pendingOrders.length,
     })
     return `${first.name} · ${missionWord(s.state, s.until)}`
-  }, [missions.missions, missions.running, pendingOrders.length])
+  }, [missionJobs, missionRuns, pendingOrders.length])
 
   // ── Placeholder rotation ────────────────────────────────────────────────
   const [focused, setFocused] = useState(false)
@@ -228,6 +245,7 @@ export function useDeskInstruments(
     }
   }
 
+  const { missions } = desk
   const primaryWallet =
     desk.wallets.find((w) => sameAddress(w.address, desk.primary)) ?? desk.wallets[0] ?? null
   const placeholder = composerPlaceholder({
@@ -246,7 +264,7 @@ export function useDeskInstruments(
         pending={pendingOrders}
         settled={settled}
         wallets={desk.wallets}
-        deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
+        deciding={deciding}
         onApprove={onApprove}
         onReject={onReject}
         focusOrderId={focusOrderId}
@@ -306,20 +324,19 @@ export function useDeskInstruments(
           onStartMission={() => setContract({ kind: 'custom' })}
           provider={desk.gate.provider}
           providers={tradingStatus.data?.providers ?? []}
-          switching={switchProvider.isPending}
+          switching={switchProvider.switching}
           wallet={primaryWallet}
           typing={composerValue.length > 0}
           onOpenSettings={() => openSettings('trading')}
-          onSwitchProvider={(id) => switchProvider.mutate(id)}
-          onOpenWallets={() => {
-            setBookTab('portfolio')
-            desk.onOpenBookTab('portfolio')
-          }}
+          onSwitchProvider={switchProvider.switchTo}
+          onOpenWallets={() => setWalletSheet({ kind: 'manage' })}
           onQuick={(kind) => setContract({ kind })}
         />
       </div>
     ),
-    modal: contract ? (
+    modal: walletSheet ? (
+      <WalletSheet mode={walletSheet} onClose={() => setWalletSheet(null)} />
+    ) : contract ? (
       <MissionContract
         kind={contract.kind}
         job={contract.job ?? null}

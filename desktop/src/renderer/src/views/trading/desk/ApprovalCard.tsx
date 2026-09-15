@@ -156,7 +156,8 @@ export function ApprovalCard({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  onReject(order, reason)
+                  // One decision per ask: a second Enter while it is in flight is nothing.
+                  if (!deciding) onReject(order, reason)
                 }
                 if (e.key === 'Escape') setRejecting(false)
               }}

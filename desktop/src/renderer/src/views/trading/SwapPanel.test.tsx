@@ -1,5 +1,6 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { ConfirmSwap } from './ConfirmSwap'
 import { SwapPanel } from './SwapPanel'
 import { ETH, quote, renderDesk, USDC, WALLET } from './test-utils'
 
@@ -21,6 +22,7 @@ function mount(extra: Partial<Parameters<typeof SwapPanel>[0]> = {}) {
       provider="uniswap"
       providerReady
       onSwitchProvider={vi.fn()}
+      onOpenSettings={vi.fn()}
       unlocked
       prefill={{ chainId: 8453, tokenIn: ETH, tokenOut: USDC, seq: 1 }}
       onSent={vi.fn()}
@@ -175,6 +177,117 @@ describe('SwapPanel', () => {
     expect(rpcCall.mock.calls.some((c) => c[0] === 'trading.quote')).toBe(false)
   })
 
+  it('opens Settings from the no-key button and switches provider from the blocked one', () => {
+    const onOpenSettings = vi.fn()
+    const onSwitchProvider = vi.fn()
+    const { unmount } = mount({ providerReady: false, onOpenSettings, onSwitchProvider })
+    const cta = screen.getByTestId('swap-review')
+    expect(cta).toHaveTextContent('Add a Uniswap key')
+    expect(cta).not.toBeDisabled()
+    fireEvent.click(cta)
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+    expect(onSwitchProvider).not.toHaveBeenCalled()
+    unmount()
+
+    mount({ provider: 'kyber', providerReady: false, onOpenSettings, onSwitchProvider })
+    const fix = screen.getByTestId('swap-review')
+    expect(fix).toHaveTextContent('Switch to Uniswap')
+    expect(fix).not.toBeDisabled()
+    fireEvent.click(fix)
+    expect(onSwitchProvider).toHaveBeenCalledWith('uniswap')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the vault gate closed: a locked vault is not something the ticket can open', () => {
+    mount({ unlocked: false })
+    const cta = screen.getByTestId('swap-review')
+    expect(cta).toHaveTextContent('Unlock the vault')
+    expect(cta).toBeDisabled()
+  })
+
+  it('hides the previous price while a new amount is being quoted', async () => {
+    let release: (() => void) | null = null
+    rpcCall.mockImplementation(async (method: string, params?: { amountIn?: string }) => {
+      if (method === 'wallet.balances')
+        return {
+          balances: [
+            {
+              chainId: 8453,
+              token: ETH,
+              raw: '1',
+              amount: '1',
+              priceUsd: 2500,
+              valueUsd: 2500,
+              change24hPct: 0,
+            },
+          ],
+        }
+      if (method === 'trading.quote') {
+        if (params?.amountIn === '0.2') {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return quote({ amountIn: '0.2', amountOut: '500.24', minOut: '497.74' })
+        }
+        return quote()
+      }
+      return {}
+    })
+    mount()
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '0.1' } })
+    await waitFor(() => expect(screen.getByTestId('quote-out')).toHaveTextContent('250.12'))
+    expect(screen.getByTestId('swap-review')).not.toBeDisabled()
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Amount' }), {
+      target: { value: '0.2' },
+    })
+    await waitFor(() => expect(release).not.toBeNull())
+    // The old price is about another swap: not shown, not reviewable.
+    expect(screen.getByTestId('quote-out')).toHaveTextContent('…')
+    expect(screen.getByTestId('quote-out')).not.toHaveTextContent('250.12')
+    expect(screen.getByTestId('quote-out')).toHaveAttribute('data-pending', 'true')
+    expect(screen.queryByTestId('quote-facts')).toBeNull()
+    expect(screen.queryByTestId('quote-guard')).toBeNull()
+    expect(screen.getByTestId('swap-review')).toBeDisabled()
+
+    await act(async () => {
+      release?.()
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(screen.getByTestId('quote-out')).toHaveTextContent('500.24'))
+    expect(screen.getByTestId('quote-facts')).toHaveTextContent('497.74 USDC')
+    expect(screen.getByTestId('swap-review')).not.toBeDisabled()
+  })
+
+  it('drops a wallet override once that wallet is gone', () => {
+    const second = {
+      ...WALLET,
+      address: '0x2222222222222222222222222222222222222222',
+      label: 'Second',
+      primary: false,
+    }
+    const view = (wallets: (typeof WALLET)[]) => (
+      <SwapPanel
+        wallets={wallets}
+        primary={WALLET.address}
+        selectedWallet="all"
+        provider="uniswap"
+        providerReady
+        onSwitchProvider={vi.fn()}
+        onOpenSettings={vi.fn()}
+        unlocked
+        prefill={null}
+        onSent={vi.fn()}
+      />
+    )
+    const { rerender } = renderDesk(view([WALLET, second]))
+    const select = screen.getByLabelText('From wallet')
+    fireEvent.change(select, { target: { value: second.address } })
+    expect(select).toHaveValue(second.address)
+    rerender(view([WALLET]))
+    expect(screen.getByLabelText('From wallet')).toHaveValue(WALLET.address)
+  })
+
   it('shows the route error the gateway returns', async () => {
     rpcCall.mockImplementation(async (method: string) => {
       if (method === 'trading.quote') throw new Error('trading.no_route: No route for this pair')
@@ -273,6 +386,35 @@ describe('SwapPanel · providers', () => {
   it('does not ask for a key when Kyber is the provider', () => {
     mount({ provider: 'kyber', providerReady: true })
     expect(screen.getByTestId('swap-review')).toHaveTextContent('Enter an amount')
+  })
+})
+
+describe('ConfirmSwap', () => {
+  it('says why a refresh failed instead of leaving a dead button', () => {
+    const sheet = (quoteError: string | null) => (
+      <ConfirmSwap
+        quote={quote()}
+        fetchedAt={0}
+        wallet={WALLET}
+        tokenIn={ETH}
+        tokenOut={USDC}
+        amount="0.1"
+        slippagePct={undefined}
+        refreshing={false}
+        quoteError={quoteError}
+        onRefresh={vi.fn()}
+        onClose={vi.fn()}
+        onSent={vi.fn()}
+      />
+    )
+    const { rerender } = renderDesk(sheet(null))
+    expect(screen.getByTestId('confirm-stale')).toBeInTheDocument()
+    expect(screen.queryByTestId('confirm-quote-error')).toBeNull()
+    rerender(sheet('trading.no_route: No route for this pair'))
+    expect(screen.getByTestId('confirm-quote-error')).toHaveTextContent(
+      'Could not refresh the price: trading.no_route: No route for this pair',
+    )
+    expect(screen.getByTestId('confirm-refresh')).toBeInTheDocument()
   })
 })
 

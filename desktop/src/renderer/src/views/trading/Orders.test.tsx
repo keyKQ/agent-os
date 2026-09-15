@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Orders } from './Orders'
 import { order, renderDesk, USDC } from './test-utils'
@@ -187,6 +187,37 @@ describe('Orders · approvals', () => {
         wallet: order().wallet,
       }),
     )
+  })
+
+  it('scrolls a highlighted row into view once, then hands the highlight back', () => {
+    vi.useFakeTimers()
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const onHighlighted = vi.fn()
+    const view = (highlight: string | null) => (
+      <Orders
+        orders={[order({ orderId: 'h1' }), order({ orderId: 'h2' })]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={highlight}
+        onHighlighted={onHighlighted}
+      />
+    )
+    const { rerender } = renderDesk(view('h2'))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    expect(onHighlighted).toHaveBeenCalledTimes(1)
+    // The approval timers re-render the rows every second; no more scrolling.
+    act(() => {
+      vi.advanceTimersByTime(3000)
+    })
+    rerender(view('h2'))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    // Highlight cleared by the owner: still nothing.
+    rerender(view(null))
+    expect(scrollIntoView).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
   })
 
   it('shows the empty invitation when nothing waits', () => {

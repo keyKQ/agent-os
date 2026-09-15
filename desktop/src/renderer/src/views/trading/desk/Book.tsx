@@ -6,6 +6,7 @@ import {
   History as HistoryIcon,
   ListChecks,
   Plus,
+  Settings2,
   Star,
   TrendingDown,
   TrendingUp,
@@ -17,13 +18,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useTradingUi, type BookTab } from '~/stores/trading-ui'
-import {
-  useHistory,
-  useOrderDecision,
-  useOrders,
-  usePortfolio,
-  useWalletMutation,
-} from '~/stores/trading'
+import { useHistory, useOrderDecision, useOrders, usePortfolio } from '~/stores/trading'
 import { History } from '../History'
 import { Holdings } from '../Holdings'
 import {
@@ -67,6 +62,7 @@ export function Book({
   onResize,
   onToggle,
   onSwitchProvider,
+  onOpenSettings,
   highlightOrder,
   entering = false,
 }: {
@@ -79,7 +75,8 @@ export function Book({
   width: number
   onResize: (width: number) => void
   onToggle: () => void
-  onSwitchProvider: () => void
+  onSwitchProvider: (id: ProviderId) => void
+  onOpenSettings: () => void
   highlightOrder: string | null
   /** The desk is powering on: the hero value counts up once. */
   entering?: boolean
@@ -92,7 +89,6 @@ export function Book({
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
   const now = useNow(30_000)
   const decide = useOrderDecision()
-  const walletWrite = useWalletMutation()
 
   const selected: string | 'all' =
     walletSel !== 'all' && !wallets.some((w) => sameAddress(w.address, walletSel))
@@ -334,6 +330,20 @@ export function Book({
                   </span>
                 </button>
               ))}
+              {/* The chips are a filter, so everything *about* a wallet — its
+                  address above all — lives one click away in the manager. The
+                  rail is 300–520 px wide; an address does not fit in it and
+                  should not be cut down to fit. */}
+              <button
+                type="button"
+                className="trd-book__wallet trd-book__wallet--add app-no-drag"
+                onClick={() => setSheet({ kind: 'manage' })}
+                title={t('trading.rail.manage')}
+                aria-label={t('trading.rail.manage')}
+                data-testid="book-manage-wallets"
+              >
+                <Settings2 className="size-3" strokeWidth={2} aria-hidden />
+              </button>
               <button
                 type="button"
                 className="trd-book__wallet trd-book__wallet--add app-no-drag"
@@ -371,6 +381,7 @@ export function Book({
             provider={provider}
             providerReady={providerReady}
             onSwitchProvider={onSwitchProvider}
+            onOpenSettings={onOpenSettings}
             unlocked={unlocked}
             prefill={prefill}
             onSent={() => setTab('orders')}
@@ -393,15 +404,7 @@ export function Book({
           />
         )}
       </div>
-      {sheet ? (
-        <WalletSheet
-          mode={sheet}
-          onClose={() => {
-            setSheet(null)
-            walletWrite.reset()
-          }}
-        />
-      ) : null}
+      {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
     </aside>
   )
 }

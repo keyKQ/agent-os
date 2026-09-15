@@ -67,7 +67,10 @@ export function StatusStrip({
       </div>
       <div className="trd-strip__centre">
         <ModePill mode={mode} onSwitch={onSwitchMode} live={trading && word !== 'idle'} />
-        {trading ? (
+        {/* No word for "idle": a label that says nothing is happening is
+            chrome, not information. The row stays empty until there is
+            something to say. */}
+        {trading && word !== 'idle' ? (
           <div className="trd-strip__word" data-word={word} data-testid="status-word">
             {t(`trading.strip.${word}`)}
           </div>

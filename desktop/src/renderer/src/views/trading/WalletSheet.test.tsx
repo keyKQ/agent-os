@@ -140,3 +140,86 @@ describe('WalletSheet', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 })
+
+/* The desk's rails are 300–520 px wide and only ever showed a wallet's name,
+   so this sheet is where the address and everything that acts on a wallet
+   lives. The address must be the whole address: shortening it here would
+   reproduce the gap the sheet exists to close. */
+describe('WalletSheet · manage', () => {
+  const SECOND = {
+    ...WALLET,
+    address: '0x2222222222222222222222222222222222222222',
+    label: '10k',
+    primary: false,
+  }
+
+  function mockVault() {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'wallet.list') return { wallets: [WALLET, SECOND], primary: WALLET.address }
+      if (method === 'wallet.status')
+        return {
+          initialized: true,
+          unlocked: true,
+          unlockMode: 'session',
+          walletCount: 2,
+          primary: WALLET.address,
+          vaultPath: '/v',
+        }
+      if (method === 'trading.status')
+        return {
+          enabled: true,
+          chains: [
+            {
+              chainId: 8453,
+              key: 'base',
+              name: 'Base',
+              native: 'ETH',
+              explorer: 'https://basescan.org',
+              rpcUrl: '',
+              healthy: true,
+            },
+          ],
+        }
+      if (method === 'trading.portfolio')
+        return { totals: {}, holdings: [], wallets: [], updatedAt: 0, syncing: false }
+      return {}
+    })
+  }
+
+  it('writes every address out in full and copies the whole one', async () => {
+    const writeText = vi.fn(async () => {})
+    Object.assign(navigator, { clipboard: { writeText } })
+    mockVault()
+    renderDesk(<WalletSheet mode={{ kind: 'manage' }} onClose={vi.fn()} />)
+
+    const rows = await screen.findAllByTestId('manage-address')
+    expect(rows.map((n) => n.textContent)).toEqual([WALLET.address, SECOND.address])
+
+    fireEvent.click(screen.getAllByTestId('manage-copy')[1]!)
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(SECOND.address))
+  })
+
+  it('offers make-primary only on the wallets that are not primary', async () => {
+    mockVault()
+    renderDesk(<WalletSheet mode={{ kind: 'manage' }} onClose={vi.fn()} />)
+    await screen.findAllByTestId('manage-address')
+    // Two wallets, one of them primary: exactly one offer to change that.
+    expect(screen.getAllByTestId('manage-primary')).toHaveLength(1)
+    expect(screen.getAllByTestId('manage-remove')).toHaveLength(2)
+  })
+
+  it('returns to the manager when a flow it opened is closed', async () => {
+    mockVault()
+    const onClose = vi.fn()
+    renderDesk(<WalletSheet mode={{ kind: 'manage' }} onClose={onClose} />)
+    await screen.findAllByTestId('manage-address')
+
+    fireEvent.click(screen.getAllByTestId('manage-rename')[0]!)
+    expect(screen.getByText('Rename wallet')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('Cancel'))
+    await screen.findAllByTestId('manage-address')
+    // Closing the sub-flow must not close the sheet the caller opened.
+    expect(onClose).not.toHaveBeenCalled()
+  })
+})

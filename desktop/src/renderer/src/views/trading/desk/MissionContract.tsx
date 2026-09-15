@@ -43,11 +43,13 @@ export function MissionContract({
   onClose: () => void
   /** One-shot: send the prompt into the chat. */
   onSend: (prompt: string) => void
+  /** Resolves null when the gateway refused: the contract stays open to retry. */
   onCreate: (form: MissionForm, prompt: string) => Promise<unknown>
+  /** Resolves false when the gateway refused: the contract stays open to retry. */
   onUpdate: (id: string, form: MissionForm, prompt: string) => Promise<unknown>
 }) {
   const [form, setForm] = useState<MissionForm>(() =>
-    job ? missionFromJob(job, primary) : missionPrefill(kind, { primary }),
+    job ? missionFromJob(job, primary, wallets) : missionPrefill(kind, { primary }),
   )
   const [showPrompt, setShowPrompt] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -80,8 +82,9 @@ export function MissionContract({
     }
     setSaving(true)
     try {
-      if (job?.id) await onUpdate(job.id, form, prompt)
-      else await onCreate(form, prompt)
+      const res = job?.id ? await onUpdate(job.id, form, prompt) : await onCreate(form, prompt)
+      // A refusal has already been toasted; closing would throw the contract away.
+      if (res === null || res === false) return
       onClose()
     } finally {
       setSaving(false)

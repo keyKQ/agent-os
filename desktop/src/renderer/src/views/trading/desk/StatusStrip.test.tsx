@@ -7,7 +7,7 @@ import { StatusStrip } from './StatusStrip'
 const pill = { mode: 'trading' as const, onSwitchMode: vi.fn() }
 
 describe('StatusStrip', () => {
-  it('carries one status word and a pin only when something is waiting', () => {
+  it('says nothing while idle, then carries one status word and a pin', () => {
     const onOpenApprovals = vi.fn()
     const { rerender } = renderDesk(
       <StatusStrip
@@ -22,7 +22,8 @@ describe('StatusStrip', () => {
         onOpenApprovals={onOpenApprovals}
       />,
     )
-    expect(screen.getByTestId('status-word')).toHaveTextContent('Idle')
+    expect(screen.queryByTestId('status-word')).toBeNull()
+    expect(screen.getByTestId('status-strip')).not.toHaveTextContent('Idle')
     expect(screen.queryByTestId('strip-pin')).toBeNull()
     rerender(
       <StatusStrip

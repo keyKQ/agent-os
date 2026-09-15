@@ -1,16 +1,37 @@
-import { Check, Copy, TriangleAlert } from 'lucide-react'
-import { useId, useState } from 'react'
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  KeyRound,
+  Lock,
+  Pencil,
+  Plus,
+  Star,
+  Trash2,
+  TriangleAlert,
+  Wallet as WalletIcon,
+} from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { useWalletMutation } from '~/stores/trading'
-import { errorText, shortAddress, walletLabel } from './logic'
-import { Sheet } from './parts'
-import type { UnlockMode, Wallet } from './types'
+import { desktopApi } from '~/lib/desktop-api'
+import {
+  usePortfolio,
+  useTradingStatus,
+  useWalletMutation,
+  useWallets,
+  useWalletStatus,
+} from '~/stores/trading'
+import { ChainBadge } from './ChainMark'
+import { errorText, formatPct, pnlTone, shortAddress, walletLabel } from './logic'
+import { Money, Sheet } from './parts'
+import type { ChainStatus, Totals, UnlockMode, Wallet } from './types'
 
 export type WalletSheetMode =
   | { kind: 'setup' }
   | { kind: 'unlock' }
+  | { kind: 'manage' }
   | { kind: 'create' }
   | { kind: 'import' }
   | { kind: 'rename'; wallet: Wallet }
@@ -19,26 +40,295 @@ export type WalletSheetMode =
 
 /**
  * Every write to the vault, one sheet each: create the vault, unlock it,
- * create or import a wallet, rename, export, remove. Secrets typed here
- * live in component state and are gone when the sheet closes.
+ * manage the wallets, create or import one, rename, export, remove. Secrets
+ * typed here live in component state and are gone when the sheet closes.
+ *
+ * `manage` is the hub, and the flows it opens are held here rather than
+ * handed back to the caller: a flow reached from the manager closes back into
+ * the manager, so renaming three wallets is three clicks and not three trips
+ * out to the rail.
  */
 export function WalletSheet({ mode, onClose }: { mode: WalletSheetMode; onClose: () => void }) {
-  switch (mode.kind) {
-    case 'setup':
-      return <SetupSheet onClose={onClose} />
-    case 'unlock':
-      return <UnlockSheet onClose={onClose} />
-    case 'create':
-      return <CreateSheet onClose={onClose} />
-    case 'import':
-      return <ImportSheet onClose={onClose} />
-    case 'rename':
-      return <RenameSheet wallet={mode.wallet} onClose={onClose} />
-    case 'export':
-      return <ExportSheet wallet={mode.wallet} onClose={onClose} />
-    case 'remove':
-      return <RemoveSheet wallet={mode.wallet} onClose={onClose} />
+  const [sub, setSub] = useState<WalletSheetMode | null>(null)
+  const [seenMode, setSeenMode] = useState(mode)
+  // The caller moved the sheet itself: whatever the hub had open is stale.
+  if (seenMode !== mode) {
+    setSeenMode(mode)
+    if (sub) setSub(null)
   }
+  const active = sub ?? mode
+  const close = sub ? () => setSub(null) : onClose
+
+  switch (active.kind) {
+    case 'setup':
+      return <SetupSheet onClose={close} />
+    case 'unlock':
+      return <UnlockSheet onClose={close} />
+    case 'manage':
+      return <ManageSheet onClose={close} onOpen={setSub} />
+    case 'create':
+      return <CreateSheet onClose={close} />
+    case 'import':
+      return <ImportSheet onClose={close} />
+    case 'rename':
+      return <RenameSheet wallet={active.wallet} onClose={close} />
+    case 'export':
+      return <ExportSheet wallet={active.wallet} onClose={close} />
+    case 'remove':
+      return <RemoveSheet wallet={active.wallet} onClose={close} />
+  }
+}
+
+/**
+ * The wallet manager: every wallet the vault holds, with the facts a wallet
+ * actually has — its name, its full address, what it is worth, which chains
+ * it lives on — and every action that acts on one, in reach.
+ *
+ * The address is written out in full rather than shortened. This is the one
+ * screen whose job is the address: a truncated `0x1111…1111` cannot be read
+ * against a hardware wallet or pasted from a screenshot, and the whole
+ * complaint that led here was that the desk never showed it anywhere.
+ *
+ * The chain badges are the explorer links. One row per chain would have been
+ * five more buttons on a surface that already carries four.
+ */
+function ManageSheet({
+  onClose,
+  onOpen,
+}: {
+  onClose: () => void
+  onOpen: (m: WalletSheetMode) => void
+}) {
+  const { wallets, isPending } = useWallets()
+  const portfolio = usePortfolio(undefined, true)
+  const status = useTradingStatus()
+  const vault = useWalletStatus()
+  const chains = status.data?.chains ?? []
+  const locked = Boolean(vault.data?.initialized && !vault.data.unlocked)
+
+  const totalsByWallet = useMemo(() => {
+    const m = new Map<string, Totals>()
+    for (const row of portfolio.data?.wallets ?? [])
+      m.set(row.wallet.address.toLowerCase(), row.totals)
+    return m
+  }, [portfolio.data])
+
+  return (
+    <Sheet
+      title={t('trading.rail.title')}
+      onClose={onClose}
+      wide
+      note={t('trading.sheet.manage.note')}
+      foot={
+        <>
+          <Button onClick={() => onOpen({ kind: 'import' })} data-testid="manage-import">
+            <KeyRound className="size-3.5" strokeWidth={1.75} aria-hidden />
+            {t('trading.rail.import')}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => onOpen({ kind: 'create' })}
+            data-testid="manage-create"
+          >
+            <Plus className="size-3.5" strokeWidth={2} aria-hidden />
+            {t('trading.rail.create')}
+          </Button>
+        </>
+      }
+    >
+      {locked ? (
+        <button
+          type="button"
+          className="trd-wman__locked"
+          onClick={() => onOpen({ kind: 'unlock' })}
+          data-testid="manage-unlock"
+        >
+          <Lock className="size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('trading.sheet.manage.locked')}
+        </button>
+      ) : null}
+
+      {isPending ? (
+        <div className="trd-wman">
+          {[0, 1].map((i) => (
+            <div key={i} className="trd-wman__row">
+              <span className="trd-skel" style={{ width: '60%', height: 16 }} />
+              <span className="trd-skel" style={{ width: '100%', height: 14 }} />
+            </div>
+          ))}
+        </div>
+      ) : wallets.length === 0 ? (
+        <p className="trd-wman__empty">
+          <WalletIcon className="size-4" strokeWidth={1.75} aria-hidden />
+          {t('trading.sheet.manage.empty')}
+        </p>
+      ) : (
+        <div className="trd-wman">
+          {wallets.map((w) => (
+            <ManageRow
+              key={w.address}
+              wallet={w}
+              totals={totalsByWallet.get(w.address.toLowerCase())}
+              chains={chains}
+              onOpen={onOpen}
+            />
+          ))}
+        </div>
+      )}
+    </Sheet>
+  )
+}
+
+function ManageRow({
+  wallet,
+  totals,
+  chains,
+  onOpen,
+}: {
+  wallet: Wallet
+  totals: Totals | undefined
+  chains: ChainStatus[]
+  onOpen: (m: WalletSheetMode) => void
+}) {
+  const [copied, setCopied] = useState(false)
+  const write = useWalletMutation()
+  const label = walletLabel(wallet)
+  const delta = totals?.change24hUsd ?? null
+
+  async function copyAddress() {
+    try {
+      await navigator.clipboard.writeText(wallet.address)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+      toast.success(t('trading.rail.copied'), { id: 'trd-copy' })
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  return (
+    <section className="trd-wman__row" data-primary={wallet.primary || undefined}>
+      <header className="trd-wman__top">
+        <span className="trd-wman__name">
+          {wallet.primary ? (
+            <Star
+              className="trd-wman__star size-3.5"
+              strokeWidth={2}
+              fill="currentColor"
+              aria-label={t('trading.rail.primary')}
+            />
+          ) : null}
+          {label}
+        </span>
+        <span className="trd-wman__value">
+          {totals ? (
+            <Money value={totals.valueUsd} />
+          ) : (
+            <span className="trd-skel" style={{ width: 56 }} />
+          )}
+          {totals ? (
+            <span className="trd-wman__delta trd-num" data-tone={pnlTone(delta)}>
+              {formatPct(totals.change24hPct ?? null, { signed: true })}
+            </span>
+          ) : null}
+        </span>
+      </header>
+
+      <div className="trd-wman__addr">
+        {/* Selectable and complete: this is the value people came for. */}
+        <code className="trd-num" data-testid="manage-address">
+          {wallet.address}
+        </code>
+        <button
+          type="button"
+          className="trd-wman__copy"
+          onClick={() => void copyAddress()}
+          title={t('trading.rail.receive')}
+          aria-label={`${t('trading.rail.receive')} · ${label}`}
+          data-testid="manage-copy"
+        >
+          {copied ? (
+            <Check className="size-3.5" strokeWidth={2.5} aria-hidden />
+          ) : (
+            <Copy className="size-3.5" strokeWidth={1.75} aria-hidden />
+          )}
+        </button>
+      </div>
+
+      {wallet.chains.length ? (
+        <div className="trd-wman__chains">
+          {wallet.chains.map((chainId) => {
+            const chain = chains.find((c) => c.chainId === chainId)
+            if (!chain) return <ChainBadge key={chainId} chainId={chainId} />
+            return (
+              <button
+                key={chainId}
+                type="button"
+                className="trd-wman__chain"
+                title={`${t('trading.rail.explorer')} · ${chain.name}`}
+                onClick={() =>
+                  void desktopApi().app.openExternal(`${chain.explorer}/address/${wallet.address}`)
+                }
+              >
+                <ChainBadge chainId={chainId} />
+                <ExternalLink className="size-3 opacity-60" strokeWidth={1.75} aria-hidden />
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+
+      <footer className="trd-wman__acts">
+        {!wallet.primary ? (
+          <button
+            type="button"
+            className="trd-wman__act"
+            disabled={write.isPending}
+            data-testid="manage-primary"
+            onClick={() =>
+              write.mutate(
+                { method: 'wallet.setPrimary', params: { address: wallet.address } },
+                {
+                  onError: (err) => toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`),
+                },
+              )
+            }
+          >
+            <Star className="size-3.5" strokeWidth={1.75} aria-hidden />
+            {t('trading.rail.setPrimary')}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="trd-wman__act"
+          onClick={() => onOpen({ kind: 'rename', wallet })}
+          data-testid="manage-rename"
+        >
+          <Pencil className="size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('trading.rail.rename')}
+        </button>
+        <button
+          type="button"
+          className="trd-wman__act"
+          onClick={() => onOpen({ kind: 'export', wallet })}
+          data-testid="manage-export"
+        >
+          <KeyRound className="size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('trading.rail.export')}
+        </button>
+        <span className="trd-wman__spacer" />
+        <button
+          type="button"
+          className="trd-wman__act trd-wman__act--danger"
+          onClick={() => onOpen({ kind: 'remove', wallet })}
+          data-testid="manage-remove"
+        >
+          <Trash2 className="size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('trading.rail.remove')}
+        </button>
+      </footer>
+    </section>
+  )
 }
 
 function Field({

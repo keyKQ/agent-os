@@ -40,6 +40,57 @@ describe('MissionContract', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
+  it('stays open when the gateway refuses the job, so nothing typed is lost', async () => {
+    const onCreate = vi.fn(async () => null)
+    const onClose = vi.fn()
+    renderDesk(
+      <MissionContract
+        kind="dca"
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={onClose}
+        onSend={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn(async () => false)}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('contract-name'), { target: { value: 'Mine' } })
+    fireEvent.click(screen.getByTestId('contract-submit'))
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByTestId('contract-submit')).not.toBeDisabled())
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByTestId('contract-name')).toHaveValue('Mine')
+  })
+
+  it('stays open when an edit is refused', async () => {
+    const onUpdate = vi.fn(async () => false)
+    const onClose = vi.fn()
+    renderDesk(
+      <MissionContract
+        kind="custom"
+        job={{
+          id: 'j1',
+          name: 'DCA ETH',
+          message: 'Goal: buy',
+          scheduleKind: 'every',
+          scheduleRaw: 3600,
+        }}
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={onClose}
+        onSend={vi.fn()}
+        onCreate={vi.fn(async () => ({}))}
+        onUpdate={onUpdate}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('contract-submit'))
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByTestId('contract-submit')).not.toBeDisabled())
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('refuses an empty goal and names the missing field', () => {
     renderDesk(
       <MissionContract

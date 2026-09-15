@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { t } from '~/i18n'
-import { isAwaitingApproval } from '../logic'
 import type { Order, Wallet } from '../types'
 import { ApprovalCard } from './ApprovalCard'
 
@@ -75,5 +74,3 @@ export function ApprovalsRegion({
     </div>
   )
 }
-
-export { isAwaitingApproval }

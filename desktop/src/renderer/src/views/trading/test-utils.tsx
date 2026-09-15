@@ -12,11 +12,14 @@ export function renderDesk(ui: ReactNode) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
   })
-  return render(
+  const wrap = (node: ReactNode) => (
     <MemoryRouter>
-      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
-    </MemoryRouter>,
+      <QueryClientProvider client={client}>{node}</QueryClientProvider>
+    </MemoryRouter>
   )
+  const result = render(wrap(ui))
+  // `rerender` keeps the same providers, so component state survives a prop change.
+  return { ...result, rerender: (next: ReactNode) => result.rerender(wrap(next)) }
 }
 
 export const ETH: Token = {

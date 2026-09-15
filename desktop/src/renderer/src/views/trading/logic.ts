@@ -235,10 +235,6 @@ export function chainShort(chainId: number): string {
   return CHAINS.find((c) => c.id === chainId)?.short ?? String(chainId)
 }
 
-export function isChainId(value: unknown): value is ChainId {
-  return CHAINS.some((c) => c.id === value)
-}
-
 /** Two tokens are the same asset: same chain, same address (case-insensitive). */
 export function sameToken(
   a: Pick<Token, 'chainId' | 'address'> | null,
@@ -284,10 +280,6 @@ export function isAwaitingApproval(order: Pick<Order, 'status'>): boolean {
 
 export function isOrderLive(order: Pick<Order, 'status'>): boolean {
   return order.status === 'submitted' || order.status === 'approved'
-}
-
-export function isOrderSettled(order: Pick<Order, 'status'>): boolean {
-  return !isOrderLive(order) && !isAwaitingApproval(order) && order.status !== 'quoted'
 }
 
 // ── Sorting and grouping ────────────────────────────────────────────────────
@@ -452,11 +444,6 @@ export const EMPTY_TOTALS: Totals = {
   gasUsd: 0,
   change24hUsd: null,
   change24hPct: null,
-}
-
-/** The address a page-level query means: an explicit wallet, or all of them. */
-export function walletParam(selected: string | 'all'): { address?: string } {
-  return selected === 'all' ? {} : { address: selected }
 }
 
 /** Pending-approval count for a badge; capped so the pill never widens. */

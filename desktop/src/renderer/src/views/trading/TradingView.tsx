@@ -39,6 +39,7 @@ import {
   type Totals,
   type Wallet,
 } from './types'
+import { useSwitchProvider } from './useSwitchProvider'
 import { WalletRail, type WalletAction, type WalletSelection } from './WalletRail'
 import { WalletSheet, type WalletSheetMode } from './WalletSheet'
 
@@ -74,6 +75,31 @@ function Gate({ entering }: { entering: boolean }) {
   const openSettings = useUi((s) => s.openSettings)
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
 
+  // A failed status call is not "no vault yet": say the gateway did not
+  // answer, and offer the one thing that helps — asking again.
+  if (status.isError || vault.isError) {
+    return (
+      <State
+        icon={
+          <CandlestickChart className="trd-state__mark size-9" strokeWidth={1.25} aria-hidden />
+        }
+        title={t('trading.offline.title')}
+        body={t('trading.offline.body')}
+        action={
+          <Button
+            variant="primary"
+            onClick={() => {
+              void status.refetch()
+              void vault.refetch()
+            }}
+            data-testid="trading-retry"
+          >
+            {t('trading.offline.retry')}
+          </Button>
+        }
+      />
+    )
+  }
   if (status.isPending || vault.isPending) return null
   if (status.data && !status.data.enabled) {
     return (
@@ -233,6 +259,7 @@ function Desk({
   const decide = useOrderDecision()
   const sync = useSync()
   const walletWrite = useWalletMutation()
+  const switchProvider = useSwitchProvider()
 
   const totalsByWallet = useMemo(() => {
     const m = new Map<string, Totals>()
@@ -465,6 +492,7 @@ function Desk({
                   onDecide={onDecide}
                   showWallet={showWallet}
                   highlight={highlight}
+                  onHighlighted={() => setHighlight(null)}
                 />
               )}
             </div>
@@ -477,7 +505,8 @@ function Desk({
           selectedWallet={selected}
           provider={provider}
           providerReady={providerReady}
-          onSwitchProvider={() => openSettings('trading')}
+          onSwitchProvider={switchProvider.switchTo}
+          onOpenSettings={() => openSettings('trading')}
           unlocked={Boolean(vault.data?.unlocked)}
           prefill={prefill}
           onSent={() => setTab('orders')}

@@ -42,6 +42,7 @@ export function SessionRoute() {
   const active = mode === 'trading' && gatewayRunning
   const { frameRef, ...frame } = useDeskFrame({
     sessionKey: paramKey,
+    mode,
     active,
     entering: enter === 'trading',
     onSwitchMode,
@@ -56,7 +57,8 @@ export function SessionRoute() {
       data-testid="mode-shell"
     >
       {frame.strip}
-      {frame.banner}
+      {/* The full desk carries its own gate states; the frame's banner would say it twice. */}
+      {active && frame.fullDesk ? null : frame.banner}
       {active && frame.fullDesk ? (
         <div className="trd-page__desk">
           <TradingView entering={enter === 'trading'} />

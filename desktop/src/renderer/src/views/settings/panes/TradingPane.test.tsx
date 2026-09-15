@@ -73,7 +73,7 @@ beforeEach(() => {
         unlockMode: 'auto',
         walletCount: 2,
         primary: '0x1',
-        vaultPath: '/home/.agentos/wallets',
+        vaultPath: '/opt/agentos/wallets',
       }
     }
     if (method === 'trading.probe') return { ok: true, latencyMs: 412, error: null }

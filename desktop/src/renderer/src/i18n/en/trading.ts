@@ -1,6 +1,5 @@
 /** Copy for the Trading page, its sheets, and Settings › Trading. */
 export const trading = {
-  'sidebar.trading': 'Trading',
   'settings.shortcuts.trading': 'Switch Chat / Trading',
   'trading.mode.label': 'Mode',
   'trading.mode.chat': 'Chat',
@@ -14,6 +13,7 @@ export const trading = {
   'trading.title': 'Trading',
   'trading.offline.title': 'Waiting for the gateway',
   'trading.offline.body': 'The gateway runs the vault and the ledger. Start it from the sidebar.',
+  'trading.offline.retry': 'Try again',
   'trading.disabled.title': 'Trading is turned off',
   'trading.disabled.body': 'Turn it on in Settings › Trading to open the desk.',
   'trading.openSettings': 'Open Trading settings',
@@ -32,10 +32,8 @@ export const trading = {
   'trading.noKey.body':
     'Balances and history work without it. Quotes and swaps need a key from the Uniswap developer dashboard.',
   'trading.noKey.cta': 'Add key',
-  'trading.refresh': 'Refresh',
   'trading.sync': 'Resync from chain',
   'trading.syncing': 'Syncing',
-  'trading.synced': 'Synced',
   'trading.lastSync': 'Last sync',
   'trading.never': 'never',
 
@@ -51,6 +49,7 @@ export const trading = {
   'trading.rail.limits.left': 'left of',
   'trading.rail.limits.threshold': 'asks above',
   'trading.rail.menu': 'Wallet actions',
+  'trading.rail.manage': 'Manage wallets',
   'trading.rail.receive': 'Copy address',
   'trading.rail.copied': 'Address copied',
   'trading.rail.setPrimary': 'Make primary',
@@ -75,7 +74,6 @@ export const trading = {
   'trading.holdings.title': 'Holdings',
   'trading.holdings.empty': 'Nothing held yet',
   'trading.holdings.empty.body': 'Send ETH or USDC to a wallet address and it shows up here.',
-  'trading.holdings.loading': 'Reading balances',
   'trading.holdings.dust.one': 'position under',
   'trading.holdings.dust.many': 'positions under',
   'trading.holdings.dust.hidden': 'hidden',
@@ -91,9 +89,7 @@ export const trading = {
   'trading.holdings.swap': 'Swap',
   'trading.holdings.chart': 'Chart',
   'trading.holdings.unverified': 'Unverified token',
-  'trading.holdings.native': 'Native',
   'trading.holdings.noPrice': 'No price',
-  'trading.holdings.sort': 'Sort by',
 
   // Tabs
   'trading.tab.holdings': 'Holdings',
@@ -105,8 +101,6 @@ export const trading = {
   'trading.history.empty': 'No activity yet',
   'trading.history.empty.body':
     'Swaps, deposits and withdrawals are written here as the chain confirms them.',
-  'trading.history.loading': 'Reading the ledger',
-  'trading.history.more': 'Load older',
   'trading.history.kind.swap': 'Swap',
   'trading.history.kind.deposit': 'Deposit',
   'trading.history.kind.withdraw': 'Withdrawal',
@@ -148,7 +142,6 @@ export const trading = {
   'trading.orders.status.failed': 'Failed',
   'trading.orders.note': 'Note',
   'trading.orders.reason': 'Reason',
-  'trading.orders.expected': 'Expected',
   'trading.orders.minimum': 'Minimum',
   'trading.orders.value': 'Value',
   // Short labels for the row's caption line; the full wording is the tooltip.
@@ -174,13 +167,10 @@ export const trading = {
   'trading.swap.slippage': 'Slippage',
   'trading.swap.slippage.auto': 'Auto',
   'trading.swap.slippage.custom': 'Custom',
-  'trading.swap.route': 'Route',
   'trading.swap.quoting': 'Getting a price',
   'trading.swap.quoteFresh': 'Price refreshes in',
   'trading.swap.quoteStale': 'Price expired',
   'trading.swap.requote': 'Refresh price',
-  'trading.swap.noQuote': 'No price yet',
-  'trading.swap.noQuote.body': 'Pick two tokens and an amount.',
   'trading.swap.noRoute': 'No route for this pair',
   'trading.swap.cta': 'Review swap',
   'trading.swap.cta.sameToken': 'Pick two different tokens',
@@ -195,7 +185,6 @@ export const trading = {
     'Would exceed the daily agent cap; manual swaps are not capped',
   'trading.swap.sent': 'Swap sent',
   'trading.swap.sent.body': 'Waiting for the chain to confirm.',
-  'trading.swap.confirmed': 'Swap confirmed',
   'trading.swap.failed': 'Swap failed',
   'trading.swap.error': 'Could not send the swap',
 
@@ -212,21 +201,19 @@ export const trading = {
   'trading.confirm.sending': 'Sending…',
   'trading.confirm.impactHigh': 'High price impact. You are moving the market.',
   'trading.confirm.stale': 'The price expired. Refresh before sending.',
+  'trading.confirm.refreshFailed': 'Could not refresh the price',
 
   // Token picker
   'trading.picker.title': 'Choose a token',
   'trading.picker.search': 'Search by name, symbol or address',
   'trading.picker.held': 'In your wallets',
   'trading.picker.results': 'Results',
-  'trading.picker.common': 'Common',
   'trading.picker.none': 'No token matches',
   'trading.picker.noneAnywhere': 'No contract at this address on Base or Robinhood Chain',
-  'trading.picker.searching': 'Searching',
   'trading.picker.verified': 'Verified',
   'trading.token.unknown': 'Unnamed token',
   'trading.picker.unverified': 'Unverified',
   'trading.picker.lookalike': 'Not a Robinhood Stock Token. Check the address.',
-  'trading.picker.close': 'Close',
 
   // Chart
   'trading.chart.title': 'Price',
@@ -291,6 +278,9 @@ export const trading = {
   'trading.sheet.export.copy': 'Copy',
   'trading.sheet.export.copied': 'Copied. It leaves the clipboard when you paste elsewhere.',
   'trading.sheet.export.hide': 'Hide',
+  'trading.sheet.manage.note': 'Keys stay on this Mac. Exporting one asks for your vault password.',
+  'trading.sheet.manage.locked': 'The vault is locked — unlock it to export or remove a wallet.',
+  'trading.sheet.manage.empty': 'No wallets yet. Create one, or import a key you already hold.',
   'trading.sheet.rename.title': 'Rename wallet',
   'trading.sheet.rename.cta': 'Rename',
   'trading.sheet.remove.title': 'Remove wallet',
@@ -361,7 +351,6 @@ export const trading = {
   'trading.settings.chains': 'Networks',
   'trading.settings.chains.blurb':
     'Public RPC endpoints by default. Paste your own to skip their rate limits.',
-  'trading.settings.rpc': 'RPC URL',
   'trading.settings.rpc.help': 'Leave empty for the default.',
   'trading.settings.chain.healthy': 'Reachable',
   'trading.settings.chain.down': 'Unreachable',
@@ -373,7 +362,6 @@ export const trading = {
   'trading.chat.title': 'Trading desk',
   'trading.chat.fresh': 'New desk chat',
   'trading.chat.opening': 'Opening the desk',
-  'trading.chat.toolOutput': 'Tool output',
   'trading.chat.empty.title': 'Tell the desk what to do',
   'trading.chat.empty.body':
     'Ask for a quote, a swap, or a mission that runs on its own clock. Anything that moves money above your limit waits for you here.',
@@ -381,7 +369,9 @@ export const trading = {
   'trading.noKey.chatBody':
     'Balances and history work without it. Quotes and swaps need a key from the Uniswap developer dashboard.',
 
-  'trading.strip.idle': 'Idle',
+  // Never rendered — the strip shows no word while idle — but statusWord()
+  // still has 'idle' in its type, so the lookup must resolve.
+  'trading.strip.idle': '',
   'trading.strip.live': 'Live',
   'trading.strip.running': 'Running',
   'trading.strip.awaiting': 'Awaiting',

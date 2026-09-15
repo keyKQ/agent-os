@@ -1,5 +1,5 @@
 import './desk.css'
-import { CandlestickChart, Lock, Wallet as WalletIcon } from 'lucide-react'
+import { CandlestickChart, Lock, Unplug, Wallet as WalletIcon } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { Button } from '~/components/ui/button'
@@ -17,6 +17,7 @@ import {
 import { useUi } from '~/stores/ui'
 import { sameAddress } from '../logic'
 import type { ProviderId } from '../types'
+import { useSwitchProvider } from '../useSwitchProvider'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
 import { Book } from './Book'
 import { bookConcession } from './desk-logic'
@@ -38,6 +39,9 @@ import { useTradingSession } from './useTradingSession'
  */
 export function useDeskFrame(input: {
   sessionKey: string
+  /** The mode the route derived; the strip's pill shows it even while the desk is off. */
+  mode: DeskMode
+  /** Trading mode with the gateway up: queries run, slots render. */
   active: boolean
   entering: boolean
   onSwitchMode: (next: DeskMode) => void
@@ -53,11 +57,13 @@ export function useDeskFrame(input: {
   frameRef: React.RefObject<HTMLDivElement | null>
   collapsed: boolean
 } {
-  const { sessionKey, active, entering, onSwitchMode, onSessionPending } = input
-  useTradingInvalidation()
-  const status = useTradingStatus()
-  const vault = useWalletStatus()
+  const { sessionKey, mode, active, entering, onSwitchMode, onSessionPending } = input
+  // An ordinary chat must not poll the trading engine or wake on its events.
+  useTradingInvalidation(active)
+  const status = useTradingStatus(active)
+  const vault = useWalletStatus(active)
   const openSettings = useUi((s) => s.openSettings)
+  const switchProvider = useSwitchProvider()
   const location = useLocation()
   const navigate = useNavigate()
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
@@ -113,8 +119,10 @@ export function useDeskFrame(input: {
     [wallets, chains, engineLimits],
   )
   const session = useTradingSession(sessionCtx, active)
-  const missions = useMissions(sessionKey, ready)
-  const globalPending = usePendingApprovals()
+  // The one `useMissions` for the desk: the strip reads it here and the
+  // chat's instruments get it through `desk`.
+  const missions = useMissions(sessionKey, active)
+  const globalPending = usePendingApprovals(active)
   const [streaming, setStreaming] = useState(false)
   const [sessionPending, setSessionPending] = useState(0)
   const reportPending = useCallback(
@@ -151,7 +159,7 @@ export function useDeskFrame(input: {
 
   if (!active) {
     return {
-      strip: <StatusStrip mode="chat" onSwitchMode={onSwitchMode} />,
+      strip: <StatusStrip mode={mode} onSwitchMode={onSwitchMode} />,
       banner: null,
       desk: null,
       book: null,
@@ -163,7 +171,28 @@ export function useDeskFrame(input: {
   }
 
   let banner: ReactNode = null
-  if (disabled) {
+  if (status.isError || vault.isError) {
+    // No answer is not "no vault": say so, and offer to ask again.
+    banner = (
+      <GateBanner
+        icon={<Unplug className="size-4" strokeWidth={1.75} aria-hidden />}
+        title={t('trading.offline.title')}
+        body={t('trading.offline.body')}
+        action={
+          <Button
+            variant="primary"
+            onClick={() => {
+              void status.refetch()
+              void vault.refetch()
+            }}
+            data-testid="desk-retry"
+          >
+            {t('trading.offline.retry')}
+          </Button>
+        }
+      />
+    )
+  } else if (disabled) {
     banner = (
       <GateBanner
         icon={<CandlestickChart className="size-4" strokeWidth={1.75} aria-hidden />}
@@ -224,6 +253,7 @@ export function useDeskFrame(input: {
     primary,
     limits: limits.data ?? null,
     gate: { needsKey, providerBlocked, provider },
+    missions,
     onFirstSend: session.ensureFiled,
     onStartFresh: session.startFresh,
     onOpenBookTab: openBookTab,
@@ -262,7 +292,8 @@ export function useDeskFrame(input: {
         width={concession.book}
         onResize={setBookWidth}
         onToggle={toggleBook}
-        onSwitchProvider={() => openSettings('trading')}
+        onSwitchProvider={switchProvider.switchTo}
+        onOpenSettings={() => openSettings('trading')}
         highlightOrder={null}
         entering={entering}
       />

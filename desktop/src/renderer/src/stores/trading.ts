@@ -23,7 +23,6 @@ import type {
   ProviderId,
   Quote,
   SearchToken,
-  Token,
   TradingStatus,
   Wallet,
   WalletStatus,
@@ -43,7 +42,10 @@ export const TRADING_KEYS = {
   wallets: ['trading', 'wallets'] as const,
   portfolio: (wallet?: string) => ['trading', 'portfolio', wallet ?? 'all'] as const,
   balances: (wallet?: string) => ['trading', 'balances', wallet ?? 'all'] as const,
-  orders: (status?: OrderStatus) => ['trading', 'orders', status ?? 'any'] as const,
+  // `limit` and `wallet` shape the answer, so two callers asking for
+  // different pages must not share one cache entry.
+  orders: (status?: OrderStatus, limit?: number, wallet?: string) =>
+    ['trading', 'orders', status ?? 'any', limit ?? 'default', wallet ?? 'all'] as const,
   history: (wallet?: string, chainId?: number) =>
     ['trading', 'history', wallet ?? 'all', chainId ?? 'all'] as const,
   limits: (wallet: string) => ['trading', 'limits', wallet] as const,
@@ -67,10 +69,11 @@ export function invalidateTrading(queryClient: QueryClient): void {
  * Bind once from a mounted page: every trading event refetches whatever is
  * on screen (debounced, so a burst of order updates is one round).
  */
-export function useTradingInvalidation(): void {
+export function useTradingInvalidation(enabled = true): void {
   const rpc = useRpc()
   const queryClient = useQueryClient()
   useEffect(() => {
+    if (!enabled) return
     let timer: ReturnType<typeof setTimeout> | null = null
     const invalidate = () => {
       if (timer) return
@@ -84,19 +87,19 @@ export function useTradingInvalidation(): void {
       offs.forEach((off) => off())
       if (timer) clearTimeout(timer)
     }
-  }, [rpc, queryClient])
+  }, [rpc, queryClient, enabled])
 }
 
 function useConnected(): boolean {
   return useConnection((s) => s.state === 'connected')
 }
 
-export function useTradingStatus() {
+export function useTradingStatus(enabled = true) {
   const rpc = useRpc()
   const connected = useConnected()
   return useQuery<TradingStatus>({
     queryKey: TRADING_KEYS.status,
-    enabled: connected,
+    enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
       return rpc.call<TradingStatus>('trading.status', {})
@@ -106,12 +109,12 @@ export function useTradingStatus() {
   })
 }
 
-export function useWalletStatus() {
+export function useWalletStatus(enabled = true) {
   const rpc = useRpc()
   const connected = useConnected()
   return useQuery<WalletStatus>({
     queryKey: TRADING_KEYS.walletStatus,
-    enabled: connected,
+    enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
       return rpc.call<WalletStatus>('wallet.status', {})
@@ -184,15 +187,24 @@ interface OrderList {
   pendingApprovals?: number
 }
 
-export function useOrders(status: OrderStatus | undefined, enabled = true, limit = 50) {
+export function useOrders(
+  status: OrderStatus | undefined,
+  enabled = true,
+  limit = 50,
+  wallet?: string,
+) {
   const rpc = useRpc()
   const connected = useConnected()
   const query = useQuery<OrderList>({
-    queryKey: TRADING_KEYS.orders(status),
+    queryKey: TRADING_KEYS.orders(status, limit, wallet),
     enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
-      return rpc.call<OrderList>('trading.orders.list', status ? { status, limit } : { limit })
+      return rpc.call<OrderList>('trading.orders.list', {
+        ...(status ? { status } : {}),
+        ...(wallet ? { wallet } : {}),
+        limit,
+      })
     },
     refetchInterval: 15_000,
     refetchOnWindowFocus: true,
@@ -203,8 +215,8 @@ export function useOrders(status: OrderStatus | undefined, enabled = true, limit
 }
 
 /** The number on the sidebar badge. Cheap: one small query, event-driven. */
-export function usePendingApprovals(): number {
-  const { pendingApprovals, orders } = useOrders('awaiting_approval', true, 20)
+export function usePendingApprovals(enabled = true): number {
+  const { pendingApprovals, orders } = useOrders('awaiting_approval', enabled, 20)
   return pendingApprovals || orders.length
 }
 
@@ -388,6 +400,17 @@ export function useWalletMutation<T = unknown>() {
   })
 }
 
+/** Make a provider the one that routes swaps (the toasts belong to the caller). */
+export function useSetProvider() {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (provider: ProviderId) =>
+      rpc.call<{ provider: ProviderId }>('trading.setProvider', { provider }),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+}
+
 /** Try a provider: the configured one, or a named one, with an optional typed key. */
 export function useProbe() {
   const rpc = useRpc()
@@ -451,12 +474,4 @@ export function useTokenSearch(first: number, query: string) {
     [stamps, first],
   )
   return { isFetching, tokens, debounced }
-}
-
-export function useResolveToken() {
-  const rpc = useRpc()
-  return useMutation({
-    mutationFn: ({ chainId, address }: { chainId: number; address: string }) =>
-      rpc.call<{ token: Token }>('trading.tokens.resolve', { chainId, address }),
-  })
 }

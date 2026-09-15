@@ -91,6 +91,31 @@ describe('ApprovalCard', () => {
     )
   })
 
+  it('sends the note once on Enter and ignores a second Enter while the decision is in flight', () => {
+    const onReject = vi.fn()
+    const card = (deciding: boolean) => (
+      <ApprovalCard
+        order={order()}
+        wallets={[WALLET]}
+        deciding={deciding}
+        onApprove={vi.fn()}
+        onReject={onReject}
+        focusOnMount={false}
+      />
+    )
+    const { rerender } = renderDesk(card(false))
+    fireEvent.click(screen.getByTestId('card-reject'))
+    const reason = screen.getByTestId('reject-reason')
+    fireEvent.change(reason, { target: { value: 'not now' } })
+    fireEvent.keyDown(reason, { key: 'Enter' })
+    expect(onReject).toHaveBeenCalledTimes(1)
+    // The owner marks the order as deciding; the same key again does nothing.
+    rerender(card(true))
+    fireEvent.keyDown(screen.getByTestId('reject-reason'), { key: 'Enter' })
+    fireEvent.click(screen.getByTestId('card-reject'))
+    expect(onReject).toHaveBeenCalledTimes(1)
+  })
+
   it('leaves a settled stamp with the outcome and the tx link', () => {
     renderDesk(
       <ApprovalCard

@@ -1,4 +1,5 @@
-import { act, renderHook } from '@testing-library/react'
+import { act, render, renderHook } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ENTRANCE_MS } from './mode-logic'
 import { useEntrance } from './useEntrance'
@@ -56,6 +57,30 @@ describe('useEntrance', () => {
     )
     r2.rerender({ mode: 'trading' })
     expect(r2.result.current.enter).toBeNull()
+  })
+
+  /* The bug this pins: the phase used to be chosen in a useEffect, which runs
+     after the browser paints. The desk's first frame therefore had no
+     `data-enter`, so the instruments painted at rest and were yanked back to
+     their from-state on the frame after — and ChatView got `entering` a
+     commit late, so the composer's centre-to-bottom spring was already
+     flying. Both are only visible coming from a fresh, undocked chat, which
+     is exactly where the switch was reported as janky. */
+  it('has the phase before the first paint of the switch, not a frame later', () => {
+    const paints: (string | null)[] = []
+    function Probe({ mode }: { mode: 'chat' | 'trading' }) {
+      const { enter } = useEntrance({ mode, still: false, requested: false })
+      // Layout effects run after the DOM is written and before paint, so this
+      // records exactly what the user's first frame of the desk shows.
+      useLayoutEffect(() => {
+        paints.push(enter)
+      })
+      return <div data-enter={enter ?? undefined} />
+    }
+    const { rerender } = render(<Probe mode="chat" />)
+    paints.length = 0
+    rerender(<Probe mode="trading" />)
+    expect(paints[0]).toBe('trading')
   })
 
   it('plays the short reverse when leaving', () => {
