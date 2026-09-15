@@ -30,6 +30,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Bundled `wallet-trading` skill: teaches the agent to trade on Base and
   Robinhood Chain from the vault (swap, DCA on cron, buy-the-dip, rebalance),
   what each order status means, and which guardrails it cannot bypass.
+- The gateway decides which connections are an agent's
+  (`gateway.agent_surface`): a shell spawned by an agent turn carries an
+  `AGENTOS_AGENT_TOKEN`, any connection opened while an agent shell runs
+  counts as the agent's, and the desktop identifies itself with an operator
+  secret (`AGENTOS_OPERATOR_SECRET_FILE`). An agent-bound connection is
+  `initiator: agent` whatever it declares; approving/rejecting orders, every
+  vault mutation (`wallet.setup/unlock/lock/create/import/export/rename/
+  remove/setPrimary/…`), `trading.lot.setCost` and `config.set/patch` of any
+  `trading.*` key are operator-only and answer an agent with
+  `trading.operator_required`.
+- Trading guardrails: the daily cap counts orders still in flight and
+  `trading.daily_cap_usd = 0` switches agent swaps off; agent orders above
+  `trading.agent_max_price_impact_pct` (default 5) wait for approval even
+  under the USD threshold, and an agent asking for more slippage than
+  `trading.agent_max_slippage_pct` (default 5) is refused with
+  `trading.slippage_too_high`. `trading.limits` / `trading.status` report
+  both ceilings.
+- Provider transactions are validated before signing: an approval must be a
+  plain `approve` on the sold token to a known spender for no more than the
+  order, a swap must come from the signing wallet on the order's chain with
+  exactly the order's native value. A manual order whose price moved more
+  than twice the slippage
+  between quote and send fails with `trading.price_moved`; an approval
+  transaction not mined in time fails with `trading.tx_pending`.
+- `submitted` orders are recovered after a gateway restart or a dead confirm
+  task; one with no receipt after 6 hours is marked `failed`
+  ("transaction never mined").
+- `~/.agentos/wallets` and any `unlock.key` are sandbox sensitive paths: the
+  agent's file tools cannot read them.
+- `agentos trade` with `--json` reports argument errors as
+  `{"error":{"code":"INVALID_ARGUMENT",…}}` on stderr with exit 2 (`--pct`
+  accepts fractions in `(0, 100]`); `trade quote` sends the initiator so
+  `guard.decision` is meaningful inside an agent turn; `trade limits` takes
+  the wallet as an optional argument; quotes carry `expiresAt`.
 - `agentos upgrade` snapshots `config.toml`, `auth.json`, `skills-lock.json`
   and every SQLite database under `~/.agentos/state/` before installing
   (`state/snapshots/pre-upgrade-<utc>/`, newest three kept, databases copied

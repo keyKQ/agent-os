@@ -30,7 +30,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through Uniswap; orders, approvals, history, PnL. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through Uniswap or KyberSwap; orders, approvals, history, PnL. |
 | `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -790,24 +790,33 @@ agentos wallet import --label cold --private-key-stdin < key.txt
 agentos wallet import --label cold --keystore wallet.json
 agentos wallet export <addr> --keystore --out backup.json
 agentos wallet export <addr> --private-key   # prints the raw key; always asks the vault password
-agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes
+agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes|-y
 agentos wallet balances [<addr>] [--chain base|robinhood] [--json]
 
 agentos trade status                        # provider, API key, chains, limits, vault state
 agentos trade provider                      # show the swap provider (uniswap | kyber)
 agentos trade provider kyber                # switch it (= config set trading.provider kyber)
-agentos trade probe [--provider uniswap|kyber] [--api-key <key>]   # reachable? key valid?
+agentos trade probe [--provider uniswap|kyber] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok)
 agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
-agentos trade quote --chain base --in ETH --out USDC --amount 0.01
-agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait
+agentos trade quote --chain base --in ETH --out USDC --amount 0.01 [--wallet <addr>] [--slippage <pct>]
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
 agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
-agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA"
-agentos trade orders [--status awaiting_approval] / order <id> [--wait] / approve <id> / reject <id>
-agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw]
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
+agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--limit N]
+agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
+agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N]
 agentos trade portfolio [--wallet <addr>]  # holdings, cost basis, realized + unrealized PnL
-agentos trade sync [--full]                 # re-read the chain into the ledger
-agentos trade limits <addr>                 # today's agent spend vs the daily cap
+agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it
+agentos trade limits [<addr>]               # guardrails + today's agent spend (default: the primary wallet)
 ```
+
+Every command takes `--json`. On success the JSON is on stdout; on failure
+stdout is empty and stderr carries `{"error": {"code": "…", "message": "…"}}`.
+Exit codes: 1 = gateway or provider error (`GATEWAY_UNAVAILABLE`,
+`trading.*`), 2 = bad input (`INVALID_ARGUMENT` — e.g. `--amount` and `--pct`
+together, `--pct` outside `(0, 100]` — `TOKEN_NOT_FOUND`, `TOKEN_UNVERIFIED`,
+`TOKEN_AMBIGUOUS`, `CONFIRMATION_REQUIRED`), 3 = conflict (`CONFLICT`,
+`VERSION_SKEW`).
 
 Wallets live in the engine's **vault** (`~/.agentos/wallets/`, keystore v3
 files encrypted with one vault password). Nothing here is tied to an OS
@@ -829,16 +838,43 @@ kyber` reports `blocked: true`, and the fix is to switch back to Uniswap or
 use a VPN. `--in`/`--out` take `ETH`, an
 address, or a symbol; a symbol must resolve to exactly one *verified* token
 or the command exits 2 (`TOKEN_AMBIGUOUS`, `TOKEN_UNVERIFIED`,
-`TOKEN_NOT_FOUND`). Amounts are human units.
+`TOKEN_NOT_FOUND`). Amounts are human units; `--pct` accepts fractions,
+and `--pct 100` on ETH keeps about 0.001 ETH back for gas. A quote does not
+check balance or gas — the swap does (`trading.insufficient_balance`) — and
+carries `expiresAt` (30 s for Uniswap, 8 s for Kyber).
 
-Guardrails apply to **agent-initiated** swaps (a swap run inside an agent
-turn, where `AGENTOS_SESSION_KEY` is set, or `--as-agent`): an order above
-`trading.approval_threshold_usd` (default 100) waits as `awaiting_approval`
-for 15 minutes — approve it in the app or with `agentos trade approve <id>`;
-an order that would push a wallet past `trading.daily_cap_usd` (default
-1,000 per calendar day) is rejected. Swaps typed by a person are neither
-queued nor capped. `--wait` blocks until each order settles (`confirmed`,
-`failed`, `rejected`, `expired`).
+Guardrails apply to **agent-initiated** swaps, and the **gateway** decides
+who is an agent: a shell spawned by an agent turn carries an agent token
+(`AGENTOS_AGENT_TOKEN`), any connection opened while an agent shell is
+running counts as the agent's, and the desktop app identifies itself with an
+operator secret. An agent-bound connection is an agent whatever it declares
+(`--as-agent` only forces the agent rules for a person). For the agent: an
+order above `trading.approval_threshold_usd` (default 100) or above
+`trading.agent_max_price_impact_pct` (default 5) waits as
+`awaiting_approval` for `trading.approval_ttl_seconds` (15 minutes); an
+order that would push a wallet past `trading.daily_cap_usd` (default 1,000
+per calendar day, orders in flight included; 0 switches agent swaps off) is
+rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
+refused with `trading.slippage_too_high`. `agentos trade approve` /
+`reject`, every vault command except `status`, `list` and `balances`, and
+`config set` on any `trading.` key fail from an agent's connection with
+`trading.operator_required`: those are the user's actions, in the app or
+their own terminal. Swaps typed by a person are neither queued nor capped;
+if the price moves more than twice the slippage between quote and send they
+fail with `trading.price_moved` instead. `--wait` blocks until each order
+settles (`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order
+survives a gateway restart and is marked `failed` after 6 hours without a
+receipt.
+
+`[trading]` config keys (each also an environment variable with the
+`AGENTOS_TRADING_` prefix): `enabled`, `provider` (`uniswap` | `kyber`),
+`uniswap_api_key`, `uniswap_api_key_env` (default `UNISWAP_API_KEY`),
+`kyber_client_id`, `rpc_urls` (chain id → JSON-RPC URL),
+`approval_threshold_usd`, `daily_cap_usd` (0 = agent swaps off),
+`approval_ttl_seconds`, `agent_max_price_impact_pct`,
+`agent_max_slippage_pct`, `default_slippage_pct` (unset = provider auto),
+`unlock_mode` (`auto` | `manual`), `sync_interval_seconds`,
+`price_ttl_seconds`.
 
 Read: [`features/trading.md`](features/trading.md)
 

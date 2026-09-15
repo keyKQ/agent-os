@@ -79,9 +79,11 @@ uniswap_api_key = ""                 # or set UNISWAP_API_KEY in the environment
 uniswap_api_key_env = "UNISWAP_API_KEY"
 kyber_client_id = "agentos"          # X-Client-Id sent to KyberSwap
 approval_threshold_usd = 100.0       # agent orders above this wait for approval
-daily_cap_usd = 1000.0               # per wallet, agent-initiated swaps only
+daily_cap_usd = 1000.0               # per wallet, agent-initiated swaps only; 0 = agent swaps off
 approval_ttl_seconds = 900           # unanswered approvals expire
-default_slippage_pct = 0.5           # omit to let Uniswap pick (auto slippage)
+agent_max_price_impact_pct = 5.0     # agent orders above this wait for approval even under the threshold
+agent_max_slippage_pct = 5.0         # an agent asking for more slippage is refused
+default_slippage_pct = 0.5           # omit to let the provider pick (auto slippage)
 unlock_mode = "auto"                 # or "manual"
 sync_interval_seconds = 30
 price_ttl_seconds = 20
@@ -116,36 +118,95 @@ Trading** pane has a *Test key* button (`trading.probe`).
 - Export (keystore or raw private key) and wallet removal always ask for
   the vault password, whatever the mode. Private keys never appear in logs,
   RPC responses (other than `wallet.export`), or the ledger.
-- Before broadcasting, the engine checks balances, simulates the
-  transaction with `eth_call`, validates the calldata Uniswap returned, and
-  refuses anything that is not from the signing wallet.
+- Before signing, the engine checks balances, simulates the transaction
+  with `eth_call`, and validates what the provider returned: an approval
+  must be a plain `approve(spender, amount)` on the token being sold, to a
+  spender the provider is known to use, for no more than the order (or the
+  conventional unlimited allowance); a swap must come from the signing
+  wallet, on the order's chain, carrying exactly the order's native value
+  (zero for an ERC-20 sale), and not be addressed to the wallet or the sold
+  token itself. Anything else is refused unsigned.
+- `~/.agentos/wallets/` (and any `unlock.key`) is a sandbox *sensitive
+  path*: the agent's file tools cannot read it. The agent trades through
+  the gateway, which is the only thing that needs the keys.
 - Token metadata from third-party APIs is data, not instructions: the skill
   tells the agent to ignore anything in a token name that reads like a
   command, and genuine Robinhood Stock Tokens are preferred over lookalikes
   that reuse the same ticker.
+
+## Who is the agent?
+
+Guardrails are only worth anything if the gateway, not the client, decides
+who is asking. `agentos.gateway.agent_surface` computes an *agent binding*
+for every admitted connection from three signals, strongest first:
+
+1. **The operator secret.** The desktop app spawns the gateway and hands it
+   a random secret (`AGENTOS_OPERATOR_SECRET_FILE`, a `0600` file the
+   gateway deletes after reading; `AGENTOS_OPERATOR_SECRET` as a fallback,
+   scrubbed from the environment). A connection presenting it at the
+   handshake is the operator's, never an agent's.
+2. **An agent token.** When an agent turn spawns a shell, the shell tool
+   mints a token and passes it to the child as `AGENTOS_AGENT_TOKEN`; the
+   CLI presents it back and the connection is bound to that session and
+   agent.
+3. **An exec window.** While any agent shell is running (background
+   processes included), a new connection that presents nothing is treated
+   as the agent's. Unsetting variables gains nothing; a person who opens
+   the CLI in that window gets the agent's rules, which fail safe (their
+   order waits for approval instead of executing).
+
+An agent-bound connection is `initiator: agent` whatever it declares, and
+its orders are filed under the session the binding names. These RPCs are
+**operator-only** and answer an agent with `trading.operator_required`:
+`wallet.setup`, `unlock`, `lock`, `setUnlockMode`, `changePassword`,
+`create`, `import`, `export`, `rename`, `remove`, `setPrimary`;
+`trading.orders.approve`, `trading.orders.reject`, `trading.lot.setCost`;
+and `config.set` / `config.patch` of any `trading.*` key. So
+`agentos trade approve`, `agentos wallet export` or
+`agentos config set trading.daily_cap_usd` simply fail inside an agent
+turn. This is not a full sandbox (a same-user process can still read
+files); it is the difference between a guardrail a prompt can talk its way
+around and one it cannot.
 
 ## Guardrails (code-enforced, agent-initiated swaps only)
 
 | Rule | Default | Outcome when hit |
 | --- | --- | --- |
 | Per-order threshold | 100 USD | order parks as `awaiting_approval`; desktop notifies you |
-| Daily cap per wallet | 1,000 USD (local calendar day) | order is `rejected` outright, not queued |
+| Daily cap per wallet | 1,000 USD (local calendar day) | order is `rejected` outright, not queued; `spentTodayUsd` counts confirmed spend plus orders still in flight, so a burst cannot race its own confirmations; **0 switches agent swaps off** (there is no "unlimited") |
+| Price-impact ceiling | 5 % (`agent_max_price_impact_pct`) | order parks as `awaiting_approval` even under the USD threshold |
+| Slippage ceiling | 5 % (`agent_max_slippage_pct`) | quote or swap refused with `trading.slippage_too_high`; nothing is queued |
 | Unpriced order | — | treated as above threshold (fails closed) |
 | Approval TTL | 15 min | `expired`; agent is told |
 
 Manual swaps from the app or CLI are your own decision: they never queue
-and do not count toward the agent's cap. Approving an order re-quotes it;
-if the market moved more than twice the slippage since you approved, it
-goes back to the queue with a note instead of executing.
+and do not count toward the agent's cap; if the price moved more than twice
+the slippage between the quote and the send they fail with
+`trading.price_moved` so you re-quote with open eyes. Approving an agent
+order re-quotes it; if the market moved that much since you approved, it
+goes back to `awaiting_approval` with reason `price moved since approval;
+please re-approve` instead of executing. `trading.limits` and
+`trading.status` report every limit (`approvalThresholdUsd`, `dailyCapUsd`,
+`approvalTtlSeconds`, `agentMaxPriceImpactPct`, `agentMaxSlippagePct`) and
+`spentTodayUsd`.
 
-Every quote result and order carries `provider` (`uniswap` / `kyber`) and
+Every quote result and order carries `provider` (`uniswap` / `kyber`),
+`expiresAt` (a Uniswap quote is fresh for 30 s, a Kyber route for 8 s) and
 `warnings` (Kyber fee-on-transfer notice, route output change).
 
 Order statuses: `quoted → awaiting_approval | submitted → confirmed |
-failed`, with `approved`, `rejected`, `expired` in between. Every change is
-broadcast on the gateway WebSocket (`trading.changed`,
-`trading.approval.requested`, `trading.order.finished`), so the desktop
-never polls for it.
+failed`, with `approved`, `rejected` and `expired` in between (`expired` is
+an approval nobody answered within the TTL). Rejection `reason`s: a text
+starting `daily cap` from the cap, `user` or `user: <text>` from the
+person; a failed order's reason is `<code>: <message>`. A `submitted` order
+is never orphaned: after a gateway restart, or if its confirm task died,
+the housekeeping loop picks it up and keeps waiting for the receipt
+(`recover_submitted`); after 6 hours without one it is marked `failed`
+("transaction never mined"). An approval transaction that is not mined
+within the wait window fails the order with `trading.tx_pending` (retry
+once it lands). Every change is broadcast on the gateway WebSocket
+(`trading.changed`, `trading.approval.requested`,
+`trading.order.finished`), so the desktop never polls for it.
 
 ## How the agent uses it
 
