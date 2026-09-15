@@ -16,13 +16,16 @@ from urllib.parse import parse_qs
 import httpx
 
 from agentos.trading.evm import (
+    SEL_APPROVE,
     SEL_BALANCE_OF,
     SEL_DECIMALS,
     SEL_NAME,
     SEL_SYMBOL,
     TRANSFER_TOPIC,
     pad_address,
+    pad_uint,
 )
+from agentos.trading.providers import PERMIT2
 
 WALLET = "0x1111111111111111111111111111111111111111"
 OTHER = "0x2222222222222222222222222222222222222222"
@@ -30,6 +33,11 @@ USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 WETH = "0x4200000000000000000000000000000000000006"
 AAPL = "0xaaaa000000000000000000000000000000000001"
 ROUTER = "0x0000000085e102724e78ecd2f45dc9ca239affad"
+
+
+def approve_calldata(spender: str, amount: int) -> str:
+    """``approve(spender, amount)`` as the Trading API's check_approval returns it."""
+    return SEL_APPROVE + pad_address(spender) + pad_uint(amount)
 
 
 def _enc_uint(value: int) -> str:
@@ -267,6 +275,7 @@ class FakeUniswap:
     amount_out: int = 500_000_000_000_000  # 0.0005 WETH for the default quote
     min_out: int | None = None
     approval_needed: bool = False
+    approval_spender: str = PERMIT2
     permit_data: dict[str, Any] | None = None
     price_impact: float = 0.12
     gas_fee_usd: str = "0.05"
@@ -287,10 +296,11 @@ class FakeUniswap:
         if path == "/check_approval":
             approval = None
             if self.approval_needed:
+                # What the Trading API really sends: approve(Permit2, amount).
                 approval = {
                     "to": body["token"],
                     "from": body["walletAddress"],
-                    "data": "0x095ea7b3" + "00" * 64,
+                    "data": approve_calldata(self.approval_spender, int(body["amount"])),
                     "value": "0",
                     "chainId": body["chainId"],
                     "gasLimit": "60000",

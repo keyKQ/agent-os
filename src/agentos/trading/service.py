@@ -88,6 +88,11 @@ Initiator = Literal["manual", "agent"]
 Broadcast = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 RECEIPT_TIMEOUT_S = 180.0
+# A submitted transaction with no receipt after this long is treated as
+# dropped. Until then ``tick`` keeps polling for it.
+SUBMITTED_GIVE_UP_S = 6 * 3600.0
+# One receipt poll per housekeeping pass for recovered orders.
+RECOVER_POLL_S = 5.0
 # Pause between wallets in a batch so a multi-wallet swap stays under the
 # Trading API's per-endpoint rate limit.
 BATCH_PAUSE_S = 0.35
@@ -241,6 +246,10 @@ class TradingService:
         self._task: asyncio.Task[None] | None = None
         self._confirm_tasks: set[asyncio.Task[Any]] = set()
         self._order_events: dict[str, asyncio.Event] = {}
+        # One lock per wallet around sign-and-send: two orders for the same
+        # wallet in flight at once would read the same pending nonce.
+        self._wallet_locks: dict[str, asyncio.Lock] = {}
+        self._settling: set[str] = set()
         self._sync_lock = asyncio.Lock()
         self.syncing = False
         self.last_sync_at: float | None = None
@@ -367,10 +376,33 @@ class TradingService:
             await asyncio.sleep(interval)
 
     async def tick(self) -> None:
-        """One pass of housekeeping: expire approvals, sync wallets."""
+        """One pass of housekeeping: expire approvals, settle strays, sync wallets."""
         await self.expire_orders()
         if self.vault.initialized:
+            await self.recover_submitted()
             await self.sync_all()
+
+    async def recover_submitted(self) -> None:
+        """Finish ``submitted`` orders nobody is watching.
+
+        A gateway restart drops every in-memory confirm task; a confirm task
+        that raised leaves its order ``submitted`` forever. Either way the
+        transaction is on-chain and the ledger owes it an answer.
+        """
+        watched = {t.get_name() for t in self._confirm_tasks}
+        for row in self.ledger.list_orders(status="submitted", limit=100):
+            order_id = str(row["order_id"])
+            tx_hash = row.get("tx_hash")
+            if not tx_hash or f"trading-confirm-{order_id}" in watched:
+                continue
+            try:
+                self.vault.get(str(row["wallet"]))
+            except Exception:
+                continue
+            try:
+                await self._confirm(order_id, str(tx_hash), None, timeout_s=RECOVER_POLL_S)
+            except Exception as exc:  # one stray must not stop the pass
+                log.warning("trading.recover_failed", order=order_id, error=str(exc))
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         try:
@@ -440,7 +472,61 @@ class TradingService:
             "approvalThresholdUsd": float(getattr(self.config, "approval_threshold_usd", 100.0)),
             "dailyCapUsd": float(getattr(self.config, "daily_cap_usd", 1000.0)),
             "approvalTtlSeconds": int(getattr(self.config, "approval_ttl_seconds", 900)),
+            "agentMaxPriceImpactPct": self._agent_max_price_impact(),
+            "agentMaxSlippagePct": self._agent_max_slippage(),
         }
+
+    def _agent_max_price_impact(self) -> float:
+        return float(
+            getattr(
+                self.config,
+                "agent_max_price_impact_pct",
+                guardrails.DEFAULT_AGENT_MAX_PRICE_IMPACT_PCT,
+            )
+        )
+
+    def _agent_max_slippage(self) -> float:
+        default = guardrails.DEFAULT_AGENT_MAX_SLIPPAGE_PCT
+        return float(getattr(self.config, "agent_max_slippage_pct", default))
+
+    def _spent_today(self, record: WalletRecord, *, exclude_order_id: str | None = None) -> float:
+        """Confirmed agent spend today plus what agent orders still in flight hold."""
+        return self.ledger.spent_today(record.key) + self.ledger.open_agent_value_usd(
+            record.key, exclude_order_id=exclude_order_id, now=self._now()
+        )
+
+    def _verdict(
+        self,
+        *,
+        initiator: str,
+        value: float | None,
+        record: WalletRecord,
+        quote: ProviderQuote,
+        order_id: str | None = None,
+    ) -> guardrails.GuardVerdict:
+        return guardrails.evaluate(
+            initiator=initiator,
+            value_usd=value,
+            threshold_usd=self.config.approval_threshold_usd,
+            daily_cap_usd=self.config.daily_cap_usd,
+            spent_today_usd=self._spent_today(record, exclude_order_id=order_id),
+            price_impact_pct=quote.price_impact_pct,
+            max_price_impact_pct=self._agent_max_price_impact(),
+        )
+
+    def _wallet_lock(self, key: str) -> asyncio.Lock:
+        lock = self._wallet_locks.get(key)
+        if lock is None:
+            lock = self._wallet_locks[key] = asyncio.Lock()
+        return lock
+
+    def _check_agent_slippage(self, initiator: str, slippage: float | None) -> None:
+        ceiling = self._agent_max_slippage()
+        if initiator == "agent" and slippage is not None and float(slippage) > ceiling:
+            raise TradingError(
+                "trading.slippage_too_high",
+                f"agent slippage {float(slippage):.2f}% is above the {ceiling:.2f}% ceiling",
+            )
 
     async def probe(
         self, api_key: str | None = None, *, provider_id: str | None = None
@@ -585,15 +671,28 @@ class TradingService:
         """
         out: list[dict[str, Any]] = []
         for row in rows:
-            if row.get("native") or str(row.get("symbol") or "").strip():
+            if row.get("native"):
+                out.append(row)
+                continue
+            address = str(row["address"])
+            has_symbol = bool(str(row.get("symbol") or "").strip())
+            # A verified list carries real decimals. A search hit outside it
+            # (DexScreener's pair search) guessed 18, which — silently — makes
+            # every USD figure for a 6-decimal token a trillion times off, and
+            # the daily cap with it. Read the contract once; the ledger keeps
+            # the answer so later hits skip the call.
+            known = self.ledger.get_token(chain.chain_id, normalize_address(address))
+            if has_symbol and (row.get("verified") or (known and known["symbol"])):
+                if known and not row.get("verified"):
+                    row["decimals"] = int(known["decimals"])
                 out.append(row)
                 continue
             evm = self.evm(chain)
-            address = str(row["address"])
             try:
                 symbol, name, decimals = await evm.erc20_metadata(address)
             except Exception:  # a search must not fail because a node did
-                out.append(row)
+                if has_symbol:
+                    out.append(row)
                 continue
             if symbol:
                 row["symbol"] = symbol
@@ -1155,7 +1254,8 @@ class TradingService:
         return {
             **self._limits_dict(),
             "wallet": record.address,
-            "spentTodayUsd": round(self.ledger.spent_today(record.key), 2),
+            # What the guard will see: confirmed spend plus orders in flight.
+            "spentTodayUsd": round(self._spent_today(record), 2),
             "day": local_day(self._now()),
         }
 
@@ -1248,6 +1348,7 @@ class TradingService:
         if amount_raw <= 0:
             raise TradingError("trading.invalid", "amountIn must be greater than zero")
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
+        self._check_agent_slippage(initiator, slippage)
         try:
             quote = await self.provider().quote(
                 chain=chain,
@@ -1263,13 +1364,7 @@ class TradingService:
         value = await self._value_usd(chain, meta_in, amount_raw)
         if value is None:
             value = await self._value_usd(chain, meta_out, quote.amount_out_raw)
-        verdict = guardrails.evaluate(
-            initiator=initiator,
-            value_usd=value,
-            threshold_usd=self.config.approval_threshold_usd,
-            daily_cap_usd=self.config.daily_cap_usd,
-            spent_today_usd=self.ledger.spent_today(record.key),
-        )
+        verdict = self._verdict(initiator=initiator, value=value, record=record, quote=quote)
         return self._quote_dict(chain, record, meta_in, meta_out, quote, value, verdict)
 
     def _quote_dict(
@@ -1400,6 +1495,7 @@ class TradingService:
         if amount_pct is not None and not (0 < float(amount_pct) <= 100):
             raise TradingError("trading.invalid", "amountPct must be between 0 and 100")
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
+        self._check_agent_slippage(initiator, slippage)
         results: list[dict[str, Any]] = []
         for index, record in enumerate(records):
             if index and BATCH_PAUSE_S > 0:
@@ -1551,12 +1647,15 @@ class TradingService:
             if quote.slippage_pct is not None
             else row.get("slippage_pct"),
         )
-        verdict = guardrails.evaluate(
+        # The row is still ``quoted`` here, so its own value is not yet in
+        # ``open_agent_value_usd``; the verdict adds it on top of everything
+        # else in flight for this wallet.
+        verdict = self._verdict(
             initiator=str(row["initiator"]),
-            value_usd=value,
-            threshold_usd=self.config.approval_threshold_usd,
-            daily_cap_usd=self.config.daily_cap_usd,
-            spent_today_usd=self.ledger.spent_today(record.key),
+            value=value,
+            record=record,
+            quote=quote,
+            order_id=str(row["order_id"]),
         )
         if verdict.decision == "blocked_daily_cap":
             self.ledger.update_order(row["order_id"], status="rejected", reason=verdict.reason)
@@ -1593,78 +1692,115 @@ class TradingService:
         for token in {NATIVE_ADDRESS, meta_in.address, meta_out.address}:
             await self.syncer.ensure_opening(record, chain, token, evm)
 
-        # 1. ERC-20 allowance for the provider's spender.
-        if quote is None or not quote.fresh:
-            quote = await provider.quote(
-                chain=chain,
-                swapper=record.address,
-                token_in=meta_in.address,
-                token_out=meta_out.address,
-                amount_raw=amount_raw,
-                slippage_pct=row.get("slippage_pct"),
-                decision_origin=origin,
-            )
-        if not meta_in.native:
-            approval_tx = await provider.approval_tx(quote, evm=evm, decision_origin=origin)
-            if approval_tx is not None:
-                tx_hash = await self._send(chain, record, key, approval_tx)
-                self.ledger.update_order(order_id, approval_tx_hash=tx_hash)
-                receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
-                if not receipt_succeeded(receipt):
-                    raise TradingError(
-                        "trading.tx_failed", f"approval transaction failed ({tx_hash})"
-                    )
-                await self._record_gas(chain, record, receipt, kind="approval", order_id=order_id)
-
-        # 2. Fresh quote (the approval may have taken a while).
-        if not quote.fresh:
-            quote = await provider.quote(
-                chain=chain,
-                swapper=record.address,
-                token_in=meta_in.address,
-                token_out=meta_out.address,
-                amount_raw=amount_raw,
-                slippage_pct=row.get("slippage_pct"),
-                decision_origin=origin,
-            )
-        if row["status"] == "approved" and row.get("expected_out_raw"):
-            expected = int(row["expected_out_raw"])
-            slip = float(row.get("slippage_pct") or quote.slippage_pct or 0.5)
-            floor = expected * (1 - 2 * slip / 100.0)
-            if quote.amount_out_raw < floor:
-                self.ledger.update_order(
-                    order_id,
-                    status="awaiting_approval",
-                    reason="price moved since approval; please re-approve",
-                    expected_out_raw=str(quote.amount_out_raw),
-                    min_out_raw=str(quote.min_out_raw),
-                    expires_at=self._now() + int(self.config.approval_ttl_seconds),
+        # Everything that signs for this wallet runs under its lock: a second
+        # order for the same wallet waits, so no two sends read one nonce.
+        async with self._wallet_lock(record.key):
+            # 1. ERC-20 allowance for the provider's spender.
+            if quote is None or not quote.fresh:
+                quote = await provider.quote(
+                    chain=chain,
+                    swapper=record.address,
+                    token_in=meta_in.address,
+                    token_out=meta_out.address,
+                    amount_raw=amount_raw,
+                    slippage_pct=row.get("slippage_pct"),
+                    decision_origin=origin,
                 )
-                await self._emit("trading.approval.requested", {"order": self.get_order(order_id)})
-                return
-        self.ledger.update_order(
-            order_id,
-            expected_out_raw=str(quote.amount_out_raw),
-            min_out_raw=str(quote.min_out_raw),
-            price_impact_pct=quote.price_impact_pct,
-            gas_usd=quote.gas_usd,
-        )
+            if not meta_in.native:
+                approval_tx = await provider.approval_tx(quote, evm=evm, decision_origin=origin)
+                if approval_tx is not None:
+                    self._check_approval_tx(
+                        approval_tx,
+                        token=meta_in.address,
+                        amount_raw=amount_raw,
+                        spenders=provider.trusted_spenders(chain, quote),
+                    )
+                    tx_hash = await self._send(chain, record, key, approval_tx)
+                    self.ledger.update_order(order_id, approval_tx_hash=tx_hash)
+                    receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+                    if receipt is None:
+                        raise TradingError(
+                            "trading.tx_pending",
+                            f"approval {tx_hash} was not mined within the wait window; "
+                            "retry once it lands",
+                        )
+                    if not receipt_succeeded(receipt):
+                        raise TradingError(
+                            "trading.tx_failed", f"approval transaction failed ({tx_hash})"
+                        )
+                    await self._record_gas(
+                        chain, record, receipt, kind="approval", order_id=order_id
+                    )
 
-        # 3. Calldata, sign, broadcast.
-        tx = await provider.build(
-            quote,
-            deadline=int(self._now()) + 600,
-            sign_permit=lambda permit: self._sign_permit(permit, key),
-            decision_origin=origin,
-        )
-        validate_transaction(tx)
-        if str(tx.get("from") or "").lower() != record.key:
-            raise TradingError("trading.tx_failed", "swap transaction is not from this wallet")
-        pre_in = await self._balance_raw(chain, record, meta_in)
-        pre_out = await self._balance_raw(chain, record, meta_out)
-        pre_native = await evm.get_balance(record.address)
-        tx_hash = await self._send(chain, record, key, tx)
-        self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+            # 2. Fresh quote (the approval may have taken a while).
+            if not quote.fresh:
+                quote = await provider.quote(
+                    chain=chain,
+                    swapper=record.address,
+                    token_in=meta_in.address,
+                    token_out=meta_out.address,
+                    amount_raw=amount_raw,
+                    slippage_pct=row.get("slippage_pct"),
+                    decision_origin=origin,
+                )
+            # The guardrail judged a price; if the market has moved past
+            # twice the slippage since, that judgement is stale. An agent
+            # order goes back to the human; a manual order is refused so the
+            # user re-quotes with open eyes.
+            if row.get("expected_out_raw"):
+                expected = int(row["expected_out_raw"])
+                slip = float(row.get("slippage_pct") or quote.slippage_pct or 0.5)
+                floor = expected * (1 - 2 * slip / 100.0)
+                if quote.amount_out_raw < floor:
+                    if row["initiator"] == "agent":
+                        self.ledger.update_order(
+                            order_id,
+                            status="awaiting_approval",
+                            reason="price moved since approval; please re-approve",
+                            expected_out_raw=str(quote.amount_out_raw),
+                            min_out_raw=str(quote.min_out_raw),
+                            expires_at=self._now() + int(self.config.approval_ttl_seconds),
+                        )
+                        await self._emit(
+                            "trading.approval.requested", {"order": self.get_order(order_id)}
+                        )
+                        return
+                    raise TradingError(
+                        "trading.price_moved",
+                        "price moved more than twice the slippage since the quote; quote again",
+                    )
+            value = row.get("value_usd")
+            if value is None:
+                # Parked without a price and approved later: price it now so
+                # the daily cap counts it rather than adding zero.
+                value = await self._value_usd(chain, meta_in, amount_raw)
+                if value is None:
+                    value = await self._value_usd(chain, meta_out, quote.amount_out_raw)
+            self.ledger.update_order(
+                order_id,
+                expected_out_raw=str(quote.amount_out_raw),
+                min_out_raw=str(quote.min_out_raw),
+                price_impact_pct=quote.price_impact_pct,
+                gas_usd=quote.gas_usd,
+                value_usd=value,
+            )
+
+            # 3. Calldata, sign, broadcast.
+            tx = await provider.build(
+                quote,
+                deadline=int(self._now()) + 600,
+                sign_permit=lambda permit: self._sign_permit(permit, key),
+                decision_origin=origin,
+            )
+            validate_transaction(tx)
+            self._check_swap_tx(
+                tx, chain=chain, record=record, meta_in=meta_in, amount_raw=amount_raw
+            )
+            pre_in = await self._balance_raw(chain, record, meta_in)
+            pre_out = await self._balance_raw(chain, record, meta_out)
+            pre_native = await evm.get_balance(record.address)
+            tx_hash = await self._send(chain, record, key, tx)
+            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         pre = {"in": pre_in, "out": pre_out, "native": pre_native}
         if wait:
@@ -1676,6 +1812,78 @@ class TradingService:
             )
             self._confirm_tasks.add(task)
             task.add_done_callback(self._confirm_tasks.discard)
+
+    @staticmethod
+    def _tx_value(tx: dict[str, Any]) -> int:
+        raw = tx.get("value")
+        return int(str(raw), 0) if raw not in (None, "") else 0
+
+    def _check_swap_tx(
+        self,
+        tx: dict[str, Any],
+        *,
+        chain: ChainSpec,
+        record: WalletRecord,
+        meta_in: TokenMeta,
+        amount_raw: int,
+    ) -> None:
+        """What a provider's swap transaction must satisfy before it is signed.
+
+        The provider is data, not authority: its calldata is opaque, but the
+        envelope is not. The sender is this wallet, the chain is the order's,
+        and the native value is exactly the order's amount (zero for an ERC-20
+        sale) — a transaction asking for more ETH than the order says spends
+        more than the user approved.
+        """
+        if str(tx.get("from") or "").lower() != record.key:
+            raise TradingError("trading.tx_failed", "swap transaction is not from this wallet")
+        tx_chain = tx.get("chainId")
+        if tx_chain not in (None, "") and int(str(tx_chain), 0) != chain.chain_id:
+            raise TradingError(
+                "trading.tx_failed",
+                f"swap transaction is for chain {tx_chain}, order is on {chain.chain_id}",
+            )
+        expected_value = amount_raw if meta_in.native else 0
+        value = self._tx_value(tx)
+        if value != expected_value:
+            raise TradingError(
+                "trading.tx_failed",
+                f"swap transaction carries {value} wei, order allows {expected_value}",
+            )
+        to = str(tx.get("to") or "").lower()
+        if to == record.key or to == meta_in.address.lower():
+            raise TradingError("trading.tx_failed", "swap transaction has an implausible 'to'")
+
+    @staticmethod
+    def _check_approval_tx(
+        tx: dict[str, Any], *, token: str, amount_raw: int, spenders: frozenset[str]
+    ) -> None:
+        """An approval is signed only when it says exactly what we meant.
+
+        ``approve(spender, amount)`` on the token being sold, to a spender the
+        provider is known to use, for no more than the order needs (or the
+        conventional unlimited allowance, which the provider's own flow may
+        ask for). Anything else — another token, another spender, native
+        value attached — is refused unsigned.
+        """
+        if str(tx.get("to") or "").lower() != token.lower():
+            raise TradingError("trading.tx_failed", "approval is not on the token being sold")
+        if TradingService._tx_value(tx) != 0:
+            raise TradingError("trading.tx_failed", "approval transaction carries native value")
+        data = str(tx.get("data") or "")
+        if not data.startswith("0x095ea7b3") or len(data) != 2 + 8 + 64 + 64:
+            raise TradingError(
+                "trading.tx_failed", "approval calldata is not approve(address,uint256)"
+            )
+        spender = "0x" + data[10 + 24 : 10 + 64]
+        amount = int(data[10 + 64 :], 16)
+        if spender.lower() not in {s.lower() for s in spenders}:
+            raise TradingError("trading.tx_failed", f"approval spender {spender} is not trusted")
+        unlimited = 2**256 - 1
+        if amount != unlimited and amount > amount_raw:
+            raise TradingError(
+                "trading.tx_failed", f"approval amount {amount} exceeds the order's {amount_raw}"
+            )
 
     async def _send(
         self, chain: ChainSpec, record: WalletRecord, key: bytes, tx: dict[str, Any]
@@ -1760,9 +1968,24 @@ class TradingService:
             )
         return gas_usd
 
-    async def _confirm(self, order_id: str, tx_hash: str, pre: dict[str, int]) -> None:
+    async def _confirm(
+        self,
+        order_id: str,
+        tx_hash: str,
+        pre: dict[str, int] | None,
+        *,
+        timeout_s: float = RECEIPT_TIMEOUT_S,
+    ) -> None:
+        """Settle a submitted order from its receipt.
+
+        ``pre`` is the balance snapshot taken before the send; ``None`` when
+        the order is being recovered after a restart, in which case the legs
+        come from the receipt's logs and the order's own amount. No receipt
+        within the window leaves the order ``submitted``: a transaction that
+        has not mined yet is not a failed one, and ``tick`` keeps looking.
+        """
         row = self.ledger.get_order(order_id)
-        if row is None:
+        if row is None or row["status"] != "submitted":
             return
         chain = CHAINS[int(row["chain_id"])]
         record = self.vault.get(str(row["wallet"]))
@@ -1770,16 +1993,51 @@ class TradingService:
         meta_out = await self.token_meta(chain, str(row["token_out"]))
         evm = self.evm(chain)
         try:
-            receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+            receipt = await evm.wait_for_receipt(tx_hash, timeout_s=timeout_s)
         except (EvmRpcError, EvmTransportError) as exc:
             receipt = None
             log.warning("trading.receipt_error", order=order_id, error=str(exc))
         if receipt is None:
-            self.ledger.update_order(
-                order_id, status="failed", reason="no receipt within the wait window"
-            )
-            await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+            age = self._now() - float(row["created_at"])
+            if age > SUBMITTED_GIVE_UP_S:
+                self.ledger.update_order(
+                    order_id,
+                    expect_status="submitted",
+                    status="failed",
+                    reason="transaction never mined (dropped or replaced)",
+                )
+                self._wake(order_id)
+                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+            else:
+                self.ledger.update_order(order_id, reason="waiting for the transaction to be mined")
             return
+        if pre is None:
+            pre = {"in": 0, "out": 0, "native": 0}
+        # Only one settlement of a given order may book entries: the original
+        # confirm task and a recovery pass can both hold a receipt for it.
+        if order_id in self._settling:
+            return
+        self._settling.add(order_id)
+        try:
+            await self._settle(
+                order_id, row, tx_hash, receipt, pre, chain, record, meta_in, meta_out
+            )
+        finally:
+            self._settling.discard(order_id)
+
+    async def _settle(
+        self,
+        order_id: str,
+        row: dict[str, Any],
+        tx_hash: str,
+        receipt: dict[str, Any],
+        pre: dict[str, int],
+        chain: ChainSpec,
+        record: WalletRecord,
+        meta_in: TokenMeta,
+        meta_out: TokenMeta,
+    ) -> None:
+        evm = self.evm(chain)
         gas_wei = receipt_gas_wei(receipt)
         eth_price = await self.prices.price(chain, NATIVE_ADDRESS)
         gas_usd = float(to_human(gas_wei, 18)) * eth_price if eth_price is not None else None
@@ -1831,9 +2089,9 @@ class TradingService:
                 received = arrived
                 post_out = pre["out"] + arrived
         if meta_in.native:
-            spent = (pre["native"] - post_native) - gas_wei
+            spent = (pre["native"] - post_native) - gas_wei if pre["native"] else 0
         if meta_out.native:
-            received = (post_native - pre["native"]) + gas_wei
+            received = (post_native - pre["native"]) + gas_wei if pre["native"] else 0
             # On an L2 the router may hand back WETH instead of unwrapping.
             weth = await self.weth_for(chain)
             if weth and received <= 0:
@@ -1872,10 +2130,11 @@ class TradingService:
             self.ledger.set_balance(chain.chain_id, record.key, meta_in.address, post_in)
         if not meta_out.native:
             self.ledger.set_balance(chain.chain_id, record.key, meta_out.address, post_out)
-        if row["initiator"] == "agent" and row.get("value_usd"):
-            self.ledger.add_daily_spend(record.key, float(row["value_usd"]), local_day(self._now()))
-        self.ledger.update_order(
+        # Compare-and-set on the final flip: if anything else already settled
+        # this order, the spend is not counted twice.
+        settled = self.ledger.update_order(
             order_id,
+            expect_status="submitted",
             status="confirmed",
             reason=None,
             spent_in_raw=str(spent),
@@ -1883,6 +2142,8 @@ class TradingService:
             gas_wei=str(gas_wei),
             delivered_token=delivered,
         )
+        if settled is not None and row["initiator"] == "agent" and row.get("value_usd"):
+            self.ledger.add_daily_spend(record.key, float(row["value_usd"]), local_day(self._now()))
         self._wake(order_id)
         await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
@@ -1901,9 +2162,19 @@ class TradingService:
         if row["status"] != "awaiting_approval":
             raise TradingError("trading.invalid", f"order {order_id} is {row['status']}")
         if row.get("expires_at") and float(row["expires_at"]) <= self._now():
-            self.ledger.update_order(order_id, status="expired", reason="expired")
+            self.ledger.update_order(
+                order_id, expect_status="awaiting_approval", status="expired", reason="expired"
+            )
             raise TradingError("trading.quote_expired", f"order {order_id} expired")
-        self.ledger.update_order(order_id, status="approved", reason=None)
+        # Compare-and-set: two approvals racing each other both passed the
+        # status read above; only the one that flips the row may execute.
+        claimed = self.ledger.update_order(
+            order_id, expect_status="awaiting_approval", status="approved", reason=None
+        )
+        if claimed is None:
+            raise TradingError(
+                "trading.invalid", f"order {order_id} is no longer awaiting approval"
+            )
         try:
             await self._execute(order_id, None, wait=wait)
         except Exception as exc:
@@ -1920,9 +2191,18 @@ class TradingService:
             raise TradingError("trading.invalid", f"no order {order_id}")
         if row["status"] != "awaiting_approval":
             raise TradingError("trading.invalid", f"order {order_id} is {row['status']}")
-        self.ledger.update_order(
-            order_id, status="rejected", reason=f"user: {reason}" if reason else "user"
-        )
+        if (
+            self.ledger.update_order(
+                order_id,
+                expect_status="awaiting_approval",
+                status="rejected",
+                reason=f"user: {reason}" if reason else "user",
+            )
+            is None
+        ):
+            raise TradingError(
+                "trading.invalid", f"order {order_id} is no longer awaiting approval"
+            )
         self._wake(order_id)
         await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
         await self._emit("trading.changed", {"reason": "approval", "orderId": order_id})

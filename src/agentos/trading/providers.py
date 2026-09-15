@@ -17,6 +17,7 @@ from typing import Any, Literal, Protocol
 from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec, is_native
 from agentos.trading.evm import EvmClient
 from agentos.trading.uniswap import (
+    PROXY_SPENDER,
     DecisionOrigin,
     Quote,
     UniswapAuthError,
@@ -119,6 +120,15 @@ class SwapProvider(Protocol):
         self, quote: ProviderQuote, *, evm: EvmClient, decision_origin: DecisionOrigin
     ) -> dict[str, Any] | None: ...
 
+    def trusted_spenders(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        """The only addresses an ERC-20 approval for this provider may name.
+
+        The service decodes every approval it is asked to sign and refuses a
+        spender outside this set: a provider response (or a tampered one)
+        cannot make the wallet approve an arbitrary contract.
+        """
+        ...
+
     async def build(
         self,
         quote: ProviderQuote,
@@ -127,6 +137,10 @@ class SwapProvider(Protocol):
         sign_permit: Callable[[dict[str, Any]], str] | None,
         decision_origin: DecisionOrigin,
     ) -> dict[str, Any]: ...
+
+
+# Canonical Permit2, the same address on every chain Uniswap deploys to.
+PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
 
 
 # ── Uniswap ────────────────────────────────────────────────────────────────
@@ -210,6 +224,11 @@ class UniswapProvider:
             )
         except UniswapError as exc:
             raise ProviderError(exc.code, str(exc), retryable=exc.retryable) from exc
+
+    def trusted_spenders(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        # The Trading API approves either Permit2 (classic routes with a
+        # permit signature) or its allowance-holder proxy; nothing else.
+        return frozenset({PERMIT2.lower(), PROXY_SPENDER.lower()})
 
     async def build(
         self,

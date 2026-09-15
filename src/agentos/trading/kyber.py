@@ -420,6 +420,10 @@ class KyberProvider:
             "chainId": quote.chain_id,
         }
 
+    def trusted_spenders(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        route: KyberRoute = quote.raw
+        return frozenset({str(route.router_address).lower()})
+
     async def build(
         self,
         quote: ProviderQuote,
@@ -451,7 +455,12 @@ class KyberProvider:
         )
         built_out = data.get("amountOut")
         if built_out:
-            quote.min_out_raw = int(str(built_out))
+            # The build's ``amountOut`` is the route's expected output; the
+            # floor the router enforces is that minus the slippage we asked
+            # for. Reporting the expected figure as ``minOut`` overstated it.
+            quote.amount_out_raw = int(str(built_out))
+            bps = slippage_to_bps(quote.slippage_pct)
+            quote.min_out_raw = quote.amount_out_raw * (10_000 - bps) // 10_000
         change = data.get("outputChange") or {}
         if isinstance(change, dict) and change.get("level") not in (None, 0, "0"):
             quote.warnings.append(

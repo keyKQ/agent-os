@@ -149,9 +149,25 @@ class TestGuardrails:
         assert self._eval(value_usd=100.0).decision == "allow"
         assert self._eval(value_usd=100.01).decision == "needs_approval"
 
-    def test_zero_cap_means_no_cap(self) -> None:
+    def test_zero_cap_switches_agent_swaps_off(self) -> None:
+        # 0 is "stop", not "unlimited": a user who types 0 means no agent trades.
+        verdict = self._eval(value_usd=1.0, daily_cap_usd=0.0, spent_today_usd=0.0)
+        assert verdict.decision == "blocked_daily_cap"
+        assert "switched off" in verdict.reason
+        assert self._eval(initiator="manual", daily_cap_usd=0.0).decision == "allow"
+
+    def test_price_impact_above_ceiling_needs_approval(self) -> None:
+        assert self._eval(value_usd=10.0, price_impact_pct=4.9).decision == "allow"
+        verdict = self._eval(value_usd=10.0, price_impact_pct=5.1)
+        assert verdict.decision == "needs_approval" and "impact" in verdict.reason
         assert (
-            self._eval(value_usd=50.0, daily_cap_usd=0.0, spent_today_usd=1e6).decision == "allow"
+            self._eval(value_usd=10.0, price_impact_pct=5.1, max_price_impact_pct=10).decision
+            == "allow"
+        )
+        # The cap and the USD threshold are judged first; impact never lowers them.
+        assert (
+            self._eval(value_usd=500.0, spent_today_usd=600.0, price_impact_pct=0.1).decision
+            == "blocked_daily_cap"
         )
 
     def test_dict_shape(self) -> None:

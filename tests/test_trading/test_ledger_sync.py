@@ -636,3 +636,96 @@ class TestLedgerMigration:
         assert len(openings) == 1 and openings[0]["ts"] == 2.0
         assert sum(p.amount_raw for p in reopened.positions(WALLET)) == 5
         reopened.close()
+
+
+class TestOrderRails:
+    def _order(self, ledger: Ledger, order_id: str, **extra: object) -> None:
+        row = {
+            "order_id": order_id,
+            "created_at": 1_000.0,
+            "updated_at": 1_000.0,
+            "chain_id": 8453,
+            "wallet": WALLET,
+            "token_in": USDC,
+            "token_out": WETH,
+            "amount_raw": "10",
+            "amount_human": "10",
+            "status": "awaiting_approval",
+            "initiator": "agent",
+            "value_usd": 50.0,
+        }
+        row.update(extra)
+        ledger.insert_order(row)
+
+    def test_update_order_compare_and_set(self, ledger: Ledger) -> None:
+        self._order(ledger, "o1")
+        first = ledger.update_order("o1", expect_status="awaiting_approval", status="approved")
+        second = ledger.update_order("o1", expect_status="awaiting_approval", status="approved")
+        assert first is not None and first["status"] == "approved"
+        assert second is None
+        # Without an expectation it is a plain update, as before.
+        assert ledger.update_order("o1", reason="x")["reason"] == "x"
+
+    def test_expire_orders_is_status_guarded(self, ledger: Ledger) -> None:
+        self._order(ledger, "late", expires_at=10.0)
+        self._order(ledger, "done", expires_at=10.0, status="approved")
+        expired = ledger.expire_orders(now=20.0)
+        assert [o["order_id"] for o in expired] == ["late"]
+        assert ledger.get_order("done")["status"] == "approved"
+
+    def test_open_agent_value_counts_in_flight_orders_only(self, ledger: Ledger) -> None:
+        self._order(ledger, "parked", value_usd=100.0)
+        self._order(ledger, "sent", status="submitted", value_usd=20.0)
+        self._order(ledger, "done", status="confirmed", value_usd=999.0)
+        self._order(ledger, "manual", status="submitted", initiator="manual", value_usd=999.0)
+        self._order(ledger, "fresh", status="quoted", value_usd=5.0, created_at=5_000.0)
+        self._order(ledger, "stale", status="quoted", value_usd=7.0, created_at=100.0)
+        assert ledger.open_agent_value_usd(WALLET, now=5_100.0) == pytest.approx(125.0)
+        assert ledger.open_agent_value_usd(
+            WALLET, exclude_order_id="parked", now=5_100.0
+        ) == pytest.approx(25.0)
+        assert ledger.open_agent_value_usd(OTHER, now=5_100.0) == 0.0
+
+    def test_remove_wallet_forgets_orders_and_spend(self, ledger: Ledger) -> None:
+        self._order(ledger, "o1", status="confirmed")
+        ledger.add_daily_spend(WALLET, 40.0, "2026-09-15")
+        ledger.remove_wallet(WALLET)
+        assert ledger.get_order("o1") is None
+        assert ledger.spent_today(WALLET, "2026-09-15") == 0.0
+        assert ledger.list_orders(wallet=WALLET) == []
+
+
+class TestSyncRails:
+    async def test_native_reconciliation_waits_for_open_orders(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        chain.set_native(WALLET, 10**18)
+        await syncer.sync(_wallet(), BASE)
+        # A swap in flight has already moved the ETH; sync must not book it.
+        ledger.insert_order(
+            {
+                "order_id": "inflight",
+                "created_at": 1.0,
+                "updated_at": 1.0,
+                "chain_id": 8453,
+                "wallet": WALLET,
+                "token_in": NATIVE_ADDRESS,
+                "token_out": USDC,
+                "amount_raw": str(5 * 10**17),
+                "amount_human": "0.5",
+                "status": "submitted",
+                "initiator": "agent",
+            }
+        )
+        chain.set_native(WALLET, 5 * 10**17)
+        chain.block += 1
+        before = len(ledger.list_entries(wallet=WALLET))
+        await syncer.sync(_wallet(), BASE)
+        assert len(ledger.list_entries(wallet=WALLET)) == before
+        assert ledger.get_balance(8453, WALLET, NATIVE_ADDRESS) == 10**18
+        # Once the order settles, the next pass books whatever is still unexplained.
+        ledger.update_order("inflight", status="confirmed")
+        chain.block += 1
+        await syncer.sync(_wallet(), BASE)
+        latest = ledger.list_entries(wallet=WALLET)[0]
+        assert latest["kind"] == "withdraw"

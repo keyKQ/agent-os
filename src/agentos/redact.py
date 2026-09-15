@@ -794,6 +794,8 @@ _CREDENTIAL_FILE_NAMES: frozenset[str] = frozenset(
         ".pypirc",
         "_netrc",
         "credentials",
+        # The trading vault's auto-unlock password file.
+        "unlock.key",
     }
 )
 

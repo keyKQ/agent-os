@@ -82,8 +82,7 @@ def _align_auto_router_profile_for_provider_patch(
     if "llm.provider" not in explicit_paths:
         return
     if any(
-        path == "agentos_router" or path.startswith("agentos_router.")
-        for path in explicit_paths
+        path == "agentos_router" or path.startswith("agentos_router.") for path in explicit_paths
     ):
         return
 
@@ -385,9 +384,8 @@ def _restart_reasons(
         reasons.append("channels")
     if old_sandbox_posture_fingerprint != _sandbox_posture_restart_fingerprint(new_config):
         reasons.append("sandbox")
-    if (
-        old_bind_fingerprint is not None
-        and old_bind_fingerprint != _bind_restart_fingerprint(new_config)
+    if old_bind_fingerprint is not None and old_bind_fingerprint != _bind_restart_fingerprint(
+        new_config
     ):
         reasons.append("gateway_bind")
     if old_boot_runtime_fingerprints is not None:
@@ -468,6 +466,25 @@ def _sync_provider_selector(ctx: RpcContext, config: Any) -> None:
 # host/port: bind posture is CLI-only (agentos gateway run --bind / --port).
 # auth credentials are provisioned through the guarded CLI flow, and
 # config_path is the boot-selected persistence target rather than user data.
+def _refuse_agent_trading_paths(ctx: RpcContext, paths: list[str]) -> None:
+    """The trading limits are the user's to set; an agent's connection may not.
+
+    Raising the cap or the approval threshold from inside a turn would make
+    every other trading guardrail decorative. The binding comes from
+    ``gateway.agent_surface``, not from anything the caller sent.
+    """
+    from agentos.gateway.agent_surface import agent_binding
+
+    if agent_binding(ctx) is None:
+        return
+    touched = [p for p in paths if p == "trading" or str(p).startswith("trading.")]
+    if touched:
+        raise ValueError(
+            "trading settings are the user's to change; an agent cannot set "
+            + ", ".join(sorted(touched))
+        )
+
+
 _BIND_READONLY_PATHS = frozenset({"host", "port"})
 _AUTH_CREDENTIAL_PATHS = frozenset({"auth.token", "auth.password"})
 _TARGET_READONLY_PATHS = frozenset({"config_path", "version"})
@@ -629,6 +646,7 @@ async def _handle_config_set(params: dict | None, ctx: RpcContext) -> dict[str, 
     path: str = params["path"]
     if path in _READONLY_PATHS:
         raise ValueError(f"Path is read-only: {path}")
+    _refuse_agent_trading_paths(ctx, [path])
 
     if ctx.config is None:
         raise ValueError("No config available")
@@ -701,6 +719,10 @@ async def _handle_config_patch(params: dict | None, ctx: RpcContext) -> dict[str
 
     if not patch_data and not dot_patches:
         raise ValueError("params.patch or params.patches is required")
+    _refuse_agent_trading_paths(
+        ctx,
+        [*dot_patches.keys(), *(patch_data.keys() if isinstance(patch_data, dict) else [])],
+    )
 
     if ctx.config is None:
         raise ValueError("No config available")
@@ -800,9 +822,7 @@ async def _handle_config_patch_safe(params: dict | None, ctx: RpcContext) -> dic
 
     unsafe_paths = sorted(set(dot_patches) - _SAFE_WRITE_PATCH_PATHS)
     if unsafe_paths:
-        raise ValueError(
-            f"Path is outside the writable configuration roots: {unsafe_paths[0]}"
-        )
+        raise ValueError(f"Path is outside the writable configuration roots: {unsafe_paths[0]}")
 
     return cast(dict[str, Any], await _handle_config_patch(params, ctx))
 

@@ -343,7 +343,13 @@ def test_quote_resolves_symbols_and_eth(client: _FakeClient) -> None:
     assert result.exit_code == 0, result.output
     assert client.calls_to("trading.tokens.search") == [{"chainId": 8453, "query": "usdc"}]
     assert client.calls_to("trading.quote") == [
-        {"chainId": 8453, "tokenIn": NATIVE_ADDRESS, "tokenOut": USDC, "amountIn": "0.01"}
+        {
+            "chainId": 8453,
+            "tokenIn": NATIVE_ADDRESS,
+            "tokenOut": USDC,
+            "amountIn": "0.01",
+            "initiator": "manual",
+        }
     ]
     assert "0.0025" in result.output
     assert "allow" in result.output
@@ -377,6 +383,7 @@ def test_quote_passes_wallet_and_slippage_and_address_untouched(client: _FakeCli
             "tokenIn": USDC,
             "tokenOut": WETH,
             "amountIn": "10",
+            "initiator": "manual",
             "wallet": WALLET,
             "slippagePct": 1.5,
         }
@@ -666,3 +673,29 @@ def test_every_command_supports_json(client: _FakeClient) -> None:
         result = runner.invoke(trade_cmd.app, [*args, "--json"])
         assert result.exit_code == 0, (args, result.output)
         json.loads(result.stdout)
+
+
+def test_argument_errors_are_json_when_asked(client: _FakeClient) -> None:
+    """An agent reading stderr for ``{"error": …}`` must never get a usage panel."""
+    result = runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "ETH", "--out", USDC, "--json"],
+    )
+    assert result.exit_code == 2 and result.stdout == ""
+    payload = json.loads(result.stderr.strip().splitlines()[-1])
+    assert payload["error"]["code"] == "INVALID_ARGUMENT"
+    assert "--amount or --pct" in payload["error"]["message"]
+    assert client.calls_to("trading.swap") == []
+    result = runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "ETH", "--out", USDC, "--pct", "0", "--json"],
+    )
+    assert result.exit_code == 2
+    assert json.loads(result.stderr.strip().splitlines()[-1])["error"]["code"] == "INVALID_ARGUMENT"
+    # Fractions of a percent are allowed.
+    result = runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "ETH", "--out", USDC, "--pct", "0.5", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.swap")[0]["amountPct"] == 0.5

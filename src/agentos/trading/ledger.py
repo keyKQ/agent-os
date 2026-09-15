@@ -358,7 +358,20 @@ class Ledger:
     def remove_wallet(self, address: str) -> None:
         key = address.lower()
         with self._lock:
-            for table in ("wallets", "entries", "lots", "realized", "sync_state", "balances"):
+            # Every wallet-keyed table: a re-import of the same address must
+            # not inherit stale orders (which sync would re-book) or spend.
+            for table in (
+                "wallets",
+                "entries",
+                "lots",
+                "realized",
+                "sync_state",
+                "balances",
+                "orders",
+                "daily_spend",
+                "rebuild_state",
+                "rebuild_logs",
+            ):
                 column = "address" if table == "wallets" else "wallet"
                 self._conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (key,))  # noqa: S608
             self._commit()
@@ -868,16 +881,56 @@ class Ledger:
             )
             self._commit()
 
-    def update_order(self, order_id: str, **fields: Any) -> dict[str, Any] | None:
+    def update_order(
+        self, order_id: str, *, expect_status: str | None = None, **fields: Any
+    ) -> dict[str, Any] | None:
+        """Update an order; with ``expect_status`` it is a compare-and-set.
+
+        Two approvals of the same order used to both pass the status check
+        and both send a transaction. With ``expect_status`` the UPDATE only
+        lands when the row is still in that status; the loser gets ``None``
+        and must not proceed.
+        """
         fields["updated_at"] = time.time()
         sets = ", ".join(f"{k} = ?" for k in fields)
+        where = "order_id = ?"
+        params: list[Any] = [*fields.values(), order_id]
+        if expect_status is not None:
+            where += " AND status = ?"
+            params.append(expect_status)
         with self._lock:
-            self._conn.execute(
-                f"UPDATE orders SET {sets} WHERE order_id = ?",  # noqa: S608
-                [*fields.values(), order_id],
+            cursor = self._conn.execute(
+                f"UPDATE orders SET {sets} WHERE {where}",  # noqa: S608
+                params,
             )
             self._commit()
+            if expect_status is not None and cursor.rowcount == 0:
+                return None
         return self.get_order(order_id)
+
+    def open_agent_value_usd(
+        self, wallet: str, *, exclude_order_id: str | None = None, now: float | None = None
+    ) -> float:
+        """USD already committed by agent orders that are not settled yet.
+
+        Counted toward the daily cap alongside confirmed spend, so a burst of
+        orders fired before the first one confirms cannot each see an empty
+        day. An order leaves this sum when it confirms (and joins the
+        confirmed spend) or when it is rejected, expires or fails. A
+        ``quoted`` row counts for an hour: that is an order between its quote
+        and its verdict, racing this one; older than that it is a crash
+        leftover, not money in flight.
+        """
+        ts = time.time() if now is None else now
+        placeholders = ", ".join("?" for _ in ORDER_OPEN_STATUSES)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(value_usd), 0) AS usd FROM orders "
+                "WHERE wallet = ? AND initiator = 'agent' AND order_id != ? AND "
+                f"(status IN ({placeholders}) OR (status = 'quoted' AND created_at > ?))",
+                (wallet.lower(), exclude_order_id or "", *sorted(ORDER_OPEN_STATUSES), ts - 3600),
+            ).fetchone()
+        return float(row["usd"]) if row and row["usd"] is not None else 0.0
 
     def get_order(self, order_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -925,14 +978,19 @@ class Ledger:
                     (now,),
                 )
             )
+            expired: list[dict[str, Any]] = []
             for row in rows:
-                self._conn.execute(
+                # Status-guarded: an approval that landed between the SELECT
+                # and this UPDATE must not be flipped back to expired.
+                cursor = self._conn.execute(
                     "UPDATE orders SET status = 'expired', reason = 'expired', updated_at = ? "
-                    "WHERE order_id = ?",
+                    "WHERE order_id = ? AND status = 'awaiting_approval'",
                     (now, row["order_id"]),
                 )
+                if cursor.rowcount:
+                    expired.append({**row, "status": "expired", "reason": "expired"})
             self._commit()
-        return [{**r, "status": "expired", "reason": "expired"} for r in rows]
+        return expired
 
     # ── daily spend ────────────────────────────────────────────────────
 

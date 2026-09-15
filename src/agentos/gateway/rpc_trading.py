@@ -9,8 +9,11 @@ Control-plane only.
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Awaitable, Callable
 from typing import Any
 
+from agentos.gateway.agent_surface import agent_binding
 from agentos.gateway.rpc import RpcContext, RpcHandlerError, get_dispatcher
 from agentos.trading import get_trading_service
 from agentos.trading.chains import ChainSpec, resolve_chain
@@ -26,6 +29,48 @@ _d = get_dispatcher()
 
 _VALID_EXPORT_FORMATS = {"keystore", "privateKey"}
 _VALID_INITIATORS = {"manual", "agent"}
+
+
+def _require_operator(ctx: RpcContext, action: str) -> None:
+    """Refuse an agent's connection: this is the user's action, not the agent's.
+
+    The binding is computed at admission by ``gateway.agent_surface``; a
+    client cannot talk its way out of it with a parameter.
+    """
+    binding = agent_binding(ctx)
+    if binding is not None:
+        raise RpcHandlerError(
+            "trading.operator_required",
+            f"{action} is the user's action; an agent cannot do it. "
+            "Ask the user to do it in the app.",
+            details=binding.to_dict(),
+        )
+
+
+def _operator_only(fn: Callable[[dict | None, RpcContext], Awaitable[dict[str, Any]]]) -> Any:
+    @functools.wraps(fn)
+    async def wrapper(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+        _require_operator(ctx, fn.__name__.strip("_").replace("_", "."))
+        return await fn(params, ctx)
+
+    return wrapper
+
+
+def _initiator(ctx: RpcContext, p: dict[str, Any]) -> tuple[str, str | None]:
+    """Who is asking, decided server-side.
+
+    An agent-bound connection is an agent whatever it declares, and its
+    orders are filed under the chat the binding names. Only an unbound
+    connection may call itself ``manual``.
+    """
+    declared = _str(p, "initiator") or "manual"
+    if declared not in _VALID_INITIATORS:
+        raise ValueError("params.initiator must be 'manual' or 'agent'")
+    session_key = _str(p, "sessionKey")
+    binding = agent_binding(ctx)
+    if binding is not None:
+        return "agent", binding.session_key or session_key
+    return declared, session_key
 
 
 async def _broadcast(event: str, payload: dict[str, Any]) -> None:
@@ -113,6 +158,7 @@ async def _wallet_status(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.setup")
+@_operator_only
 async def _wallet_setup(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     password = _str(p, "password", required=True) or ""
@@ -129,6 +175,7 @@ async def _wallet_setup(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
 
 
 @_d.method("wallet.unlock")
+@_operator_only
 async def _wallet_unlock(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     password = _str(p, "password", required=True) or ""
@@ -142,6 +189,7 @@ async def _wallet_unlock(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.lock")
+@_operator_only
 async def _wallet_lock(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     service = _service(ctx)
     service.vault.lock()
@@ -150,6 +198,7 @@ async def _wallet_lock(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
 
 
 @_d.method("wallet.setUnlockMode")
+@_operator_only
 async def _wallet_set_unlock_mode(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     mode = _str(p, "mode", required=True) or ""
@@ -166,6 +215,7 @@ async def _wallet_set_unlock_mode(params: dict | None, ctx: RpcContext) -> dict[
 
 
 @_d.method("wallet.changePassword")
+@_operator_only
 async def _wallet_change_password(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     password = _str(p, "password", required=True) or ""
@@ -191,6 +241,7 @@ async def _wallet_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
 
 
 @_d.method("wallet.create")
+@_operator_only
 async def _wallet_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     label = _str(p, "label") or ""
@@ -202,6 +253,7 @@ async def _wallet_create(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.import")
+@_operator_only
 async def _wallet_import(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     label = _str(p, "label") or ""
@@ -224,6 +276,7 @@ async def _wallet_import(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.export")
+@_operator_only
 async def _wallet_export(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     address = _str(p, "address", required=True) or ""
@@ -240,6 +293,7 @@ async def _wallet_export(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.rename")
+@_operator_only
 async def _wallet_rename(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     address = _str(p, "address", required=True) or ""
@@ -256,6 +310,7 @@ async def _wallet_rename(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.remove")
+@_operator_only
 async def _wallet_remove(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     address = _str(p, "address", required=True) or ""
@@ -269,6 +324,7 @@ async def _wallet_remove(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 
 @_d.method("wallet.setPrimary")
+@_operator_only
 async def _wallet_set_primary(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     address = _str(p, "address", required=True) or ""
@@ -378,9 +434,7 @@ async def _trading_quote(params: dict | None, ctx: RpcContext) -> dict[str, Any]
     p = _params(params)
     chain = _chain(p)
     assert chain is not None
-    initiator = _str(p, "initiator") or "manual"
-    if initiator not in _VALID_INITIATORS:
-        raise ValueError("params.initiator must be 'manual' or 'agent'")
+    initiator, _session = _initiator(ctx, p)
     service = _service(ctx)
     service.ensure_unlocked()
     try:
@@ -402,9 +456,7 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     chain = _chain(p)
     assert chain is not None
-    initiator = _str(p, "initiator") or "manual"
-    if initiator not in _VALID_INITIATORS:
-        raise ValueError("params.initiator must be 'manual' or 'agent'")
+    initiator, session_key = _initiator(ctx, p)
     wallets = p.get("wallets", p.get("wallet"))
     if wallets is not None and not isinstance(wallets, str | list):
         raise ValueError("params.wallets must be an address list, 'all' or omitted")
@@ -422,7 +474,7 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
             amount_pct=_number(p, "amountPct"),
             slippage_pct=_number(p, "slippagePct"),
             initiator=initiator,  # type: ignore[arg-type]
-            session_key=_str(p, "sessionKey"),
+            session_key=session_key,
             note=_str(p, "note"),
             wait=bool(p.get("wait")),
         )
@@ -480,6 +532,7 @@ async def _trading_orders_wait(params: dict | None, ctx: RpcContext) -> dict[str
 
 
 @_d.method("trading.orders.approve")
+@_operator_only
 async def _trading_orders_approve(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     order_id = _str(p, "orderId", required=True) or ""
@@ -491,6 +544,7 @@ async def _trading_orders_approve(params: dict | None, ctx: RpcContext) -> dict[
 
 
 @_d.method("trading.orders.reject")
+@_operator_only
 async def _trading_orders_reject(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     order_id = _str(p, "orderId", required=True) or ""
@@ -567,6 +621,7 @@ async def _trading_limits(params: dict | None, ctx: RpcContext) -> dict[str, Any
 
 
 @_d.method("trading.lot.setCost")
+@_operator_only
 async def _trading_lot_set_cost(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
     entry_id = _int(p, "entryId", 0)

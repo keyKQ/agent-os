@@ -752,9 +752,21 @@ class WalletSyncer:
 
     # ── native / balances / snapshots ──────────────────────────────────
 
+    def _has_open_orders(self, wallet: WalletRecord, chain: ChainSpec) -> bool:
+        return any(
+            int(o["chain_id"]) == chain.chain_id
+            for o in self.ledger.list_orders(status="submitted,approved", wallet=wallet.key)
+        )
+
     async def _reconcile_native(
         self, wallet: WalletRecord, chain: ChainSpec, evm: EvmClient
     ) -> bool:
+        # A swap in flight moves the native balance before its confirm books
+        # it. Booking that delta here as a withdrawal (or a deposit) would
+        # count the swap twice; the order's own settlement refreshes the
+        # cache, so skip the wallet until it has settled.
+        if self._has_open_orders(wallet, chain):
+            return False
         balance = await evm.get_balance(wallet.address)
         cached = self.ledger.get_balance(chain.chain_id, wallet.key, NATIVE_ADDRESS)
         changed = False

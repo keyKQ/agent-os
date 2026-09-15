@@ -91,7 +91,14 @@ class FakeKyber:
                 )
             if endpoint == "route/build":
                 body = json.loads(request.content)
-                out = self.build_amount_out or int(body["routeSummary"]["amountOut"]) * 995 // 1000
+                # Kyber's build returns the route's expected output (already
+                # reflecting any outputChange), never a slippage-adjusted floor.
+                out = (
+                    self.build_amount_out
+                    or int(body["routeSummary"]["amountOut"])
+                    * (985 if self.output_change_level else 1000)
+                    // 1000
+                )
                 return httpx.Response(
                     200,
                     json={
@@ -347,7 +354,12 @@ class TestKyberProvider:
         )
         assert tx["to"] == KYBER_ROUTER and tx["value"] == str(10**15) and tx["from"] == WALLET
         assert tx["gasLimit"] == str(int(220000 * 1.2))
-        assert quote.min_out_raw == kyber.amount_out * 995 // 1000
+        # The floor is the built output minus the slippage asked for (0.5%),
+        # never the built output itself.
+        built_out = kyber.amount_out * 985 // 1000
+        assert quote.amount_out_raw == built_out
+        assert quote.min_out_raw == built_out * 995 // 1000
+        assert quote.min_out_raw < quote.amount_out_raw
         assert any("changed" in w for w in quote.warnings)
         # A stale route is re-fetched before building.
         quote.fetched_at -= 60

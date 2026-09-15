@@ -178,3 +178,31 @@ class TestWallets:
             vault.import_private_key("x", "zz" * 32)
         with pytest.raises(ValueError):
             vault.import_keystore("x", "not json", PASSWORD)
+
+
+class TestKeystoreImportBounds:
+    def test_hostile_kdf_parameters_are_refused_before_decrypting(self, vault: Vault) -> None:
+        vault.setup(PASSWORD, "auto")
+        hostile = {
+            "version": 3,
+            "address": "0" * 40,
+            "crypto": {
+                "cipher": "aes-128-ctr",
+                "ciphertext": "00",
+                "cipherparams": {"iv": "00" * 16},
+                "kdf": "scrypt",
+                "kdfparams": {"n": 2**30, "r": 8, "p": 1, "dklen": 32, "salt": "00" * 32},
+                "mac": "00" * 32,
+            },
+        }
+        with pytest.raises(ValueError, match="too expensive"):
+            vault.import_keystore("evil", json.dumps(hostile), "pw")
+        hostile["crypto"]["kdf"] = "pbkdf2"
+        hostile["crypto"]["kdfparams"] = {"c": 2**28, "dklen": 32, "prf": "hmac-sha256"}
+        with pytest.raises(ValueError, match="too expensive"):
+            vault.import_keystore("evil", json.dumps(hostile), "pw")
+        hostile["crypto"]["kdf"] = "argon2"
+        with pytest.raises(ValueError, match="not supported"):
+            vault.import_keystore("evil", json.dumps(hostile), "pw")
+        with pytest.raises(ValueError, match="no crypto"):
+            vault.import_keystore("evil", json.dumps({"version": 3}), "pw")

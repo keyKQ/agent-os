@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import structlog
 
+from agentos.gateway.agent_surface import AGENT_TOKEN_ENV, get_agent_surface
 from agentos.gateway.approval_queue import get_approval_queue
 from agentos.redact import redact_terminal_output
 from agentos.sandbox.backend.bubblewrap import BubblewrapBackend, build_bwrap_argv
@@ -181,6 +182,15 @@ def _add_session_env(env: dict[str, str]) -> None:
         env["AGENTOS_SESSION_KEY"] = ctx.session_key
     if ctx.agent_id and not env.get("AGENTOS_AGENT"):
         env["AGENTOS_AGENT"] = ctx.agent_id
+    # The gateway-minted token is what makes the marking binding: the CLI
+    # presents it at the handshake and the gateway, not the client, decides
+    # the connection is an agent's. Never overridable by the caller.
+    env[AGENT_TOKEN_ENV] = get_agent_surface().mint_token(ctx.session_key, ctx.agent_id)
+
+
+def _window_session_key() -> str | None:
+    ctx = current_tool_context.get()
+    return ctx.session_key if ctx is not None else None
 
 
 def _context_elevated_mode() -> str | None:
@@ -636,6 +646,12 @@ def _append_bg_output(session: _BgSession, output: str) -> None:
         )
 
 
+def _open_bg_window(session: _BgSession) -> None:
+    """A background process keeps the agent's exec window open until it ends."""
+    handle = get_agent_surface().begin_window(session.session_key)
+    session.cleanup_callbacks.append(lambda: get_agent_surface().end_window(handle))
+
+
 def _finalize_bg_session(session: _BgSession) -> None:
     session.returncode = session.process.returncode
     if session.ended_at is None:
@@ -764,8 +780,6 @@ async def exec_command(
     env: dict[str, str] | None = None,
     approval_id: str | None = None,
 ) -> str:
-    import os
-
     result = check_safe_bin(command)
     cwd = _effective_workdir(workdir)
 
@@ -821,6 +835,15 @@ async def exec_command(
                 )
             return json.dumps(approval_response)
 
+    # While the child runs, any new gateway connection that cannot prove it
+    # is the operator's counts as this agent's (gateway.agent_surface).
+    with get_agent_surface().exec_window(_window_session_key()):
+        return await _run_exec_subprocess(command, cwd, env, timeout)
+
+
+async def _run_exec_subprocess(
+    command: str, cwd: str | None, env: dict[str, str] | None, timeout: float | int | None
+) -> str:
     # AgentOS's own provider credentials do not cross into a child process;
     # see tools/env_passthrough.py for why the rest of the environment does.
     merged_env = build_subprocess_env(extra=env)
@@ -1035,6 +1058,7 @@ async def background_process(
             local_urls=_local_server_urls_from_command(command),
             cleanup_callbacks=spawned.cleanup_callbacks,
         )
+        _open_bg_window(session)
         _bg_sessions[session_id] = session
         effective_timeout = _resolve_background_timeout(timeout)
 
@@ -1058,6 +1082,8 @@ async def background_process(
 
     session_id = str(uuid.uuid4())[:8]
 
+    bg_env = build_subprocess_env()
+    _add_session_env(bg_env)
     if os.name == "posix":
         proc = await asyncio.create_subprocess_shell(
             command,
@@ -1065,7 +1091,7 @@ async def background_process(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
-            env=build_subprocess_env(),
+            env=bg_env,
             start_new_session=True,
         )
     else:
@@ -1075,7 +1101,7 @@ async def background_process(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
-            env=build_subprocess_env(),
+            env=bg_env,
         )
 
     ctx = current_tool_context.get()
@@ -1087,6 +1113,7 @@ async def background_process(
         agent_id=ctx.agent_id if ctx is not None else None,
         local_urls=_local_server_urls_from_command(command),
     )
+    _open_bg_window(session)
     _bg_sessions[session_id] = session
     effective_timeout = _resolve_background_timeout(timeout)
 

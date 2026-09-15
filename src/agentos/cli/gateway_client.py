@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -130,8 +131,18 @@ class GatewayClient:
             "maxProtocol": 3,
             "clientKind": "control",
         }
+        auth: dict[str, str] = {}
         if token:
-            params["auth"] = {"token": token}
+            auth["token"] = token
+        # Inside an agent's shell the gateway planted a token; presenting it
+        # is what binds this connection to that chat (gateway.agent_surface).
+        # An agent cannot gain anything by dropping it: while its shell runs,
+        # the gateway treats unmarked new connections as the agent's anyway.
+        agent_token = os.environ.get("AGENTOS_AGENT_TOKEN", "").strip()
+        if agent_token:
+            auth["agentToken"] = agent_token
+        if auth:
+            params["auth"] = auth
         await self._ws.send(
             json.dumps(
                 {
@@ -414,9 +425,7 @@ class GatewayClient:
             await self._call("projects.delete", {"projectId": project_id}),
         )
 
-    async def move_session_to_project(
-        self, key: str, project_id: str | None
-    ) -> dict[str, Any]:
+    async def move_session_to_project(self, key: str, project_id: str | None) -> dict[str, Any]:
         """Move a session into a project; ``None`` detaches it."""
         return await self.patch_session(key, projectId=project_id)
 

@@ -1,7 +1,9 @@
 """Code-enforced limits on agent-initiated swaps.
 
 Pure functions: the service feeds them the numbers, they answer with a
-decision. Nothing here can be influenced by prompt text — that is the point.
+decision. Nothing here reads prompt text, and — since the gateway now decides
+who is an agent (``gateway.agent_surface``) — nothing the prompt writes can
+change which branch runs.
 """
 
 from __future__ import annotations
@@ -11,6 +13,12 @@ from typing import Literal
 
 Decision = Literal["allow", "needs_approval", "blocked_daily_cap"]
 Initiator = Literal["manual", "agent"]
+
+# Agent orders above this price impact wait for a human even when they are
+# under the USD threshold: a thin pool is where a sandwich lives.
+DEFAULT_AGENT_MAX_PRICE_IMPACT_PCT = 5.0
+# An agent may not set slippage above this; the order is refused, not queued.
+DEFAULT_AGENT_MAX_SLIPPAGE_PCT = 5.0
 
 
 @dataclass(frozen=True)
@@ -40,14 +48,21 @@ def evaluate(
     threshold_usd: float,
     daily_cap_usd: float,
     spent_today_usd: float,
+    price_impact_pct: float | None = None,
+    max_price_impact_pct: float = DEFAULT_AGENT_MAX_PRICE_IMPACT_PCT,
 ) -> GuardVerdict:
     """Decide what happens to a swap worth ``value_usd``.
 
     * Manual swaps are the user's own decision: always allowed.
+    * A daily cap of zero means the agent may not swap at all. "No cap" is
+      not a number this function knows; a user who types 0 means stop.
     * An agent swap whose value cannot be priced fails closed into approval.
     * An agent swap that would push the wallet over its daily cap is refused
       outright (not queued: a queue would let the agent keep piling up asks).
-    * Above the per-order threshold the swap waits for a human.
+      ``spent_today_usd`` includes orders still in flight, so a burst cannot
+      slip under the cap by racing its own confirmations.
+    * Above the per-order threshold, or above the price-impact ceiling, the
+      swap waits for a human.
     """
     spent = max(0.0, float(spent_today_usd))
     cap = float(daily_cap_usd)
@@ -65,10 +80,12 @@ def evaluate(
 
     if initiator == "manual":
         return verdict("allow", "manual")
+    if cap <= 0:
+        return verdict("blocked_daily_cap", "daily cap is 0 USD: agent swaps are switched off")
     if value_usd is None:
         return verdict("needs_approval", "value unknown (no price)")
     value = float(value_usd)
-    if cap > 0 and spent + value > cap:
+    if spent + value > cap:
         return verdict(
             "blocked_daily_cap",
             f"daily cap {cap:.2f} USD would be exceeded ({spent:.2f} spent + {value:.2f})",
@@ -77,5 +94,11 @@ def evaluate(
         return verdict(
             "needs_approval",
             f"order {value:.2f} USD is above the {threshold:.2f} USD threshold",
+        )
+    if price_impact_pct is not None and float(price_impact_pct) > float(max_price_impact_pct):
+        return verdict(
+            "needs_approval",
+            f"price impact {float(price_impact_pct):.2f}% is above "
+            f"{float(max_price_impact_pct):.2f}%",
         )
     return verdict("allow", "within limits")

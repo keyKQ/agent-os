@@ -123,6 +123,16 @@ def _exit_token_error(exc: TokenResolutionError, *, json_output: bool) -> None:
     raise typer.Exit(2)
 
 
+def _bad_argument(message: str, *, json_output: bool) -> None:
+    """An argument error an agent can parse: JSON on stderr, exit 2.
+
+    ``typer.BadParameter`` prints a usage panel, which is right for a person
+    and useless for ``--json`` callers reading stderr for ``{"error": …}``.
+    """
+    emit_error(message, json_output=json_output, code="INVALID_ARGUMENT")
+    raise typer.Exit(2)
+
+
 def _dict(value: Any) -> dict[str, Any]:
     """Narrow an RPC payload (or one of its fields) to a dict for rendering."""
 
@@ -409,6 +419,10 @@ def trade_quote(
     """Get a swap quote without executing anything."""
 
     chain_id = chain_id_from_arg(chain)
+    # The gateway decides who is asking from the connection itself; this is
+    # the fallback declaration so a quote inside an agent turn carries the
+    # agent's guard verdict (threshold, cap) instead of a manual "allow".
+    initiator = initiator_for(False)
 
     async def _run(client):
         params: dict[str, Any] = {
@@ -416,6 +430,7 @@ def trade_quote(
             "tokenIn": await resolve_token(client, chain_id, token_in),
             "tokenOut": await resolve_token(client, chain_id, token_out),
             "amountIn": amount,
+            "initiator": initiator,
         }
         if wallet:
             params["wallet"] = wallet
@@ -465,7 +480,9 @@ def trade_swap(
     token_in: str = typer.Option(..., "--in", help="Token to sell: symbol, address, or ETH"),
     token_out: str = typer.Option(..., "--out", help="Token to buy: symbol, address, or ETH"),
     amount: str | None = typer.Option(None, "--amount", help="Amount of --in, human units"),
-    pct: float | None = typer.Option(None, "--pct", help="Percent of the --in balance (1-100)"),
+    pct: float | None = typer.Option(
+        None, "--pct", help="Percent of the --in balance (above 0, up to 100; fractions allowed)"
+    ),
     wallets: list[str] | None = typer.Option(
         None, "--wallet", help="Wallet address (repeatable; default primary)"
     ),
@@ -484,11 +501,11 @@ def trade_swap(
     """Swap tokens from one, several, or all wallets."""
 
     if (amount is None) == (pct is None):
-        raise typer.BadParameter("Use exactly one of --amount or --pct")
+        _bad_argument("Use exactly one of --amount or --pct", json_output=json_output)
     if pct is not None and not 0 < pct <= 100:
-        raise typer.BadParameter("--pct must be between 1 and 100")
+        _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
     if all_wallets and wallets:
-        raise typer.BadParameter("Use either --wallet or --all-wallets, not both")
+        _bad_argument("Use either --wallet or --all-wallets, not both", json_output=json_output)
     chain_id = chain_id_from_arg(chain)
     initiator = initiator_for(as_agent)
     session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
@@ -646,7 +663,7 @@ def trade_reject(
 def trade_history(
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
     chain: str | None = typer.Option(None, "--chain", help="base or robinhood"),
-    kind: str | None = typer.Option(None, "--kind", help="swap, deposit, withdraw, approval"),
+    kind: str | None = typer.Option(None, "--kind", help="swap, deposit, withdraw, gas, approval"),
     limit: int = typer.Option(100, "--limit", help="Max rows", min=1, max=1000),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
@@ -803,7 +820,7 @@ def trade_limits(
             status = await client.call("wallet.status", {})
             target = (status or {}).get("primary") if isinstance(status, dict) else None
             if not target:
-                raise typer.BadParameter("No primary wallet; pass a wallet address")
+                _bad_argument("No primary wallet; pass a wallet address", json_output=json_output)
         return await client.call("trading.limits", {"wallet": target})
 
     result = run_gateway_sync(_run, json_output=json_output)

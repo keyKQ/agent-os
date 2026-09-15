@@ -99,3 +99,52 @@ class TestGatewayConnectionsCarryTheToken:
             asyncio.run(gateway_runtime.run_gateway_chat(model=None, session_id=None, deps=deps))
 
         _assert_authenticated(connections)
+
+
+class TestAgentToken:
+    """Inside an agent's shell the CLI presents the gateway-minted token."""
+
+    @pytest.mark.asyncio
+    async def test_handshake_carries_the_agent_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import json as _json
+
+        sent: list[dict[str, Any]] = []
+
+        class _Ws:
+            def __init__(self) -> None:
+                self.frames = iter(
+                    [
+                        _json.dumps({"type": "event", "event": "connect.challenge"}),
+                        _json.dumps({"type": "hello-ok", "server": {"version": "x"}}),
+                    ]
+                )
+
+            async def recv(self) -> str:
+                return next(self.frames)
+
+            async def send(self, text: str) -> None:
+                sent.append(_json.loads(text))
+
+            async def close(self) -> None:
+                pass
+
+        class _Websockets:
+            @staticmethod
+            async def connect(url: str) -> _Ws:
+                return _Ws()
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "websockets", _Websockets)
+        monkeypatch.setenv("AGENTOS_AGENT_TOKEN", "minted-by-gateway")
+        client = gateway_client.GatewayClient()
+        await client.connect("ws://127.0.0.1:1/ws", token=_TOKEN)
+        await client.close()
+        assert sent[0]["params"]["auth"] == {"token": _TOKEN, "agentToken": "minted-by-gateway"}
+
+        sent.clear()
+        monkeypatch.delenv("AGENTOS_AGENT_TOKEN")
+        client = gateway_client.GatewayClient()
+        await client.connect("ws://127.0.0.1:1/ws", token=None)
+        await client.close()
+        assert "auth" not in sent[0]["params"]

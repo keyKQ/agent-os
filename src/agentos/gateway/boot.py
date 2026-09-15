@@ -2127,6 +2127,12 @@ async def start_gateway_server(
     # Gateway-specific: set env var for other components to discover
     os.environ["AGENTOS_GATEWAY_PORT"] = str(config.port)
 
+    # The desktop hands the gateway an operator secret at spawn; read it now
+    # and scrub it so no child process inherits it (see gateway.agent_surface).
+    from agentos.gateway.agent_surface import get_agent_surface
+
+    get_agent_surface().load_operator_secret_from_env()
+
     # Gateway-specific: ensure auth token exists
     if config.auth.mode == "token" and not config.auth.token:
         token = secrets.token_urlsafe(32)

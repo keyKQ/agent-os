@@ -427,6 +427,7 @@ class Vault:
             keystore = json.loads(keystore_json)
         except ValueError as exc:
             raise ValueError("keystore must be JSON") from exc
+        _check_keystore_kdf(keystore)
         with self._lock:
             key = self._decrypt(keystore, keystore_password)
             return self._add(key, label, imported=True)
@@ -509,6 +510,42 @@ class Vault:
                 key = self._decrypt(keystore, self._require_unlocked())
                 self._keys[record.key] = key
             return key
+
+
+# Upper bounds on a caller-supplied keystore's KDF work factors. A hostile
+# keystore with scrypt ``n`` in the billions would pin the gateway for hours
+# inside ``Account.decrypt`` before the password is even checked.
+_MAX_SCRYPT_N = 2**20
+_MAX_SCRYPT_R = 32
+_MAX_SCRYPT_P = 16
+_MAX_PBKDF2_C = 2**24
+
+
+def _check_keystore_kdf(keystore: Any) -> None:
+    crypto = None
+    if isinstance(keystore, dict):
+        crypto = keystore.get("crypto") or keystore.get("Crypto")
+    if not isinstance(crypto, dict):
+        raise ValueError("keystore has no crypto section")
+    kdf = str(crypto.get("kdf") or "").lower()
+    params = crypto.get("kdfparams") or {}
+    if not isinstance(params, dict):
+        raise ValueError("keystore kdfparams must be an object")
+
+    def _int(name: str) -> int:
+        try:
+            return int(params.get(name) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"keystore kdfparams.{name} must be an integer") from exc
+
+    if kdf == "scrypt":
+        if _int("n") > _MAX_SCRYPT_N or _int("r") > _MAX_SCRYPT_R or _int("p") > _MAX_SCRYPT_P:
+            raise ValueError("keystore scrypt parameters are too expensive to decrypt")
+    elif kdf == "pbkdf2":
+        if _int("c") > _MAX_PBKDF2_C:
+            raise ValueError("keystore pbkdf2 iteration count is too expensive to decrypt")
+    else:
+        raise ValueError(f"keystore kdf {kdf or 'missing'!r} is not supported")
 
 
 def _require_password(password: str) -> str:

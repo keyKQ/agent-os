@@ -301,6 +301,131 @@ class TestTradingRpc:
         stack["config"].trading.uniswap_api_key = no_key["uniswap_api_key"]
 
 
+def _agent_ctx(stack: dict[str, Any], session_key: str = "agent:trading:webchat:t") -> RpcContext:
+    """A context the gateway admitted as an agent's (token or exec window)."""
+    from agentos.gateway.access import ConnectionSurface
+    from agentos.gateway.agent_surface import AgentSurface
+    from agentos.gateway.auth import AccessContext
+
+    surface = AgentSurface()
+    token = surface.mint_token(session_key, "trading")
+    access = surface.attach(
+        AccessContext(surface=ConnectionSurface.CONTROL, admitted=True, credential_verified=True),
+        {"agentToken": token},
+    )
+    return RpcContext(conn_id="agent-conn", access=access, config=stack["config"])
+
+
+class TestAgentSurfaceRpc:
+    """What an agent-bound connection may and may not do, whatever it declares."""
+
+    async def _funded(self, ctx: RpcContext, stack: dict[str, Any]) -> str:
+        await call("wallet.setup", {"password": PASSWORD}, ctx)
+        address = (await call("wallet.create", {"label": "Main"}, ctx)).payload["wallet"]["address"]
+        stack["base"].set_native(address, 10**18)
+        stack["base"].set_erc20(USDC, address, 1000 * 10**6)
+        return address
+
+    async def test_agent_declaring_manual_is_still_an_agent(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        quote = await call(
+            "trading.quote",
+            {
+                "chainId": 8453,
+                "tokenIn": "USDC",
+                "tokenOut": "WETH",
+                "amountIn": "250",
+                "initiator": "manual",
+            },
+            agent,
+        )
+        assert quote.ok, quote.error
+        assert quote.payload["guard"]["decision"] == "needs_approval"
+        swap = await call(
+            "trading.swap",
+            {
+                "chainId": 8453,
+                "tokenIn": "USDC",
+                "tokenOut": "WETH",
+                "amountIn": "250",
+                "initiator": "manual",
+                "sessionKey": "agent:main:spoofed",
+            },
+            agent,
+        )
+        assert swap.ok, swap.error
+        order = swap.payload["orders"][0]
+        assert order["initiator"] == "agent" and order["status"] == "awaiting_approval"
+        # Filed under the chat the binding names, not the one the client typed.
+        assert order["sessionKey"] == "agent:trading:webchat:t"
+
+    async def test_agent_cannot_approve_reject_or_touch_the_vault(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        address = await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        swap = await call(
+            "trading.swap",
+            {"chainId": 8453, "tokenIn": "USDC", "tokenOut": "WETH", "amountIn": "250"},
+            agent,
+        )
+        order_id = swap.payload["orders"][0]["orderId"]
+        for method, params in [
+            ("trading.orders.approve", {"orderId": order_id}),
+            ("trading.orders.reject", {"orderId": order_id}),
+            ("wallet.export", {"address": address, "password": PASSWORD, "format": "privateKey"}),
+            ("wallet.create", {"label": "Extra"}),
+            ("wallet.remove", {"address": address, "password": PASSWORD}),
+            ("wallet.setPrimary", {"address": address}),
+            ("wallet.rename", {"address": address, "label": "x"}),
+            ("wallet.lock", {}),
+            ("wallet.unlock", {"password": PASSWORD}),
+            ("wallet.setup", {"password": PASSWORD}),
+            ("trading.lot.setCost", {"entryId": 1, "costUsdPerToken": 1}),
+        ]:
+            res = await call(method, params, agent)
+            assert res.ok is False, method
+            assert res.error.code == "trading.operator_required", (method, res.error)
+        # Still parked: nothing above changed the order.
+        got = await call("trading.orders.get", {"orderId": order_id}, agent)
+        assert got.payload["order"]["status"] == "awaiting_approval"
+        # The operator's own connection is unaffected.
+        approved = await call("trading.orders.reject", {"orderId": order_id}, ctx)
+        assert approved.ok and approved.payload["order"]["status"] == "rejected"
+
+    async def test_agent_reads_are_fine(self, ctx: RpcContext, stack: dict[str, Any]) -> None:
+        address = await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        for method, params in [
+            ("wallet.list", {}),
+            ("wallet.status", {}),
+            ("wallet.balances", {"address": address, "chainId": 8453}),
+            ("trading.status", {}),
+            ("trading.orders.list", {}),
+            ("trading.limits", {}),
+            ("trading.portfolio", {}),
+        ]:
+            res = await call(method, params, agent)
+            assert res.ok, (method, res.error)
+
+    async def test_agent_cannot_raise_the_limits(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        agent = _agent_ctx(stack)
+        res = await call("config.set", {"path": "trading.daily_cap_usd", "value": 1e9}, agent)
+        assert res.ok is False and "user's to change" in res.error.message
+        res = await call(
+            "config.patch", {"patches": {"trading.approval_threshold_usd": 1e9}}, agent
+        )
+        assert res.ok is False
+        res = await call("config.patch", {"patch": {"trading": {"daily_cap_usd": 1e9}}}, agent)
+        assert res.ok is False
+        assert stack["config"].trading.daily_cap_usd == 1000.0
+
+
 class TestConfig:
     def test_defaults_and_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg = TradingConfig()

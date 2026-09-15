@@ -2060,8 +2060,13 @@ class TradingConfig(BaseSettings):
     # before the public default.
     rpc_urls: dict[str, str] = Field(default_factory=dict)
     approval_threshold_usd: float = Field(default=100.0, ge=0)
+    # 0 switches agent swaps off entirely; there is no "unlimited" value.
     daily_cap_usd: float = Field(default=1000.0, ge=0)
     approval_ttl_seconds: int = Field(default=900, ge=30)
+    # Agent orders above this price impact wait for approval even under the
+    # USD threshold; an agent asking for more slippage than this is refused.
+    agent_max_price_impact_pct: float = Field(default=5.0, ge=0, le=100)
+    agent_max_slippage_pct: float = Field(default=5.0, ge=0, le=50)
     # None = let the Uniswap API pick (``autoSlippage: DEFAULT``).
     default_slippage_pct: float | None = Field(default=None, ge=0, le=50)
     unlock_mode: Literal["auto", "manual"] = "auto"
