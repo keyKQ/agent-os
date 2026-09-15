@@ -26,14 +26,14 @@ from pathlib import Path
 import typer
 
 from agentos import __version__
-from agentos.cli import upgrade_snapshot
-from agentos.cli.install_method import (
+from agentos.cli.ui import console, markup_escape
+from agentos.compat import upgrade_snapshot
+from agentos.compat.install_method import (
     build_upgrade_plan,
     hardened_path_env,
     installed_from_directory,
     release_spec,
 )
-from agentos.cli.ui import console, markup_escape
 
 # Default upgrade-subprocess timeout (seconds). Overridable via --timeout.
 _DEFAULT_TIMEOUT_S = 600.0

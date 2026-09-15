@@ -162,7 +162,7 @@ def current_status() -> dict[str, Any]:
 def start_upgrade(*, source: str) -> dict[str, Any]:
     """Spawn the detached upgrade runner; returns the new job status."""
 
-    from agentos.cli.install_method import hardened_path_env
+    from agentos.compat.install_method import hardened_path_env
 
     log = log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +300,7 @@ async def _handle_updates_verify_data(params: dict | None, ctx: RpcContext) -> d
     pre-upgrade snapshot (if any) a client can offer to restore.
     """
 
-    from agentos.cli import upgrade_snapshot
+    from agentos.compat import upgrade_snapshot
 
     check = await asyncio.to_thread(upgrade_snapshot.verify_state)
     latest = await asyncio.to_thread(upgrade_snapshot.latest_snapshot)

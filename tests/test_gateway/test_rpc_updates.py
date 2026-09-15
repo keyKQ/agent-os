@@ -292,7 +292,7 @@ async def test_status_marks_a_vanished_runner_as_failed(monkeypatch: pytest.Monk
 
 @pytest.mark.asyncio
 async def test_verify_data_reports_databases_and_latest_snapshot(tmp_path: Path) -> None:
-    from agentos.cli import upgrade_snapshot
+    from agentos.compat import upgrade_snapshot
 
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)

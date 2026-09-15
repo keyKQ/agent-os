@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from agentos.cli import upgrade_snapshot
+from agentos.compat import upgrade_snapshot
 
 
 @pytest.fixture
