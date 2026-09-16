@@ -86,6 +86,9 @@ class PriceInfo:
     #: Venue as DexScreener names it, e.g. "Uniswap v4".
     market: str | None = None
     fetched_at: float = field(default_factory=time.time)
+    #: The price source did not answer (network, 5xx, bad body). Distinct
+    #: from "answered and found no pair": only the latter means "worthless".
+    unavailable: bool = False
 
 
 # The gas token has no DexScreener pair of its own; use CoinGecko's own art.
@@ -255,12 +258,16 @@ class PriceService:
             elif lookup != NATIVE_ADDRESS:
                 missing.append(lookup)
         fetched: dict[str, PriceInfo] = {}
+        unanswered: set[str] = set()
         unique = sorted(set(missing))
         for start in range(0, len(unique), DEXSCREENER_BATCH):
             chunk = unique[start : start + DEXSCREENER_BATCH]
             body = await self._get(
                 f"{DEXSCREENER_BASE}/tokens/v1/{chain.dexscreener_slug}/{','.join(chunk)}"
             )
+            if body is None:
+                unanswered.update(chunk)
+                continue
             for lookup, info in self._best_pairs(chain, body).items():
                 info.fetched_at = now
                 fetched[lookup] = info
@@ -268,7 +275,11 @@ class PriceService:
             if requested in out:
                 continue
             found = fetched.get(lookup)
-            resolved = found if found is not None else PriceInfo(price_usd=None, fetched_at=now)
+            resolved = (
+                found
+                if found is not None
+                else PriceInfo(price_usd=None, fetched_at=now, unavailable=lookup in unanswered)
+            )
             self._prices[(chain.chain_id, lookup)] = resolved
             out[requested] = resolved
         return out

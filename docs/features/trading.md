@@ -18,15 +18,37 @@ gateway RPC surface (`wallet.*`, `trading.*`).
 - **Wallets** — create new keys or import a private key / keystore JSON;
   export either form after re-entering the vault password; label, rename,
   remove; one wallet is *primary* and is the default for every command.
-- **Balances and portfolio** — native ETH and every ERC-20 the ledger knows
-  about, priced through DexScreener (CoinGecko as fallback), with cost
+- **Balances and portfolio** — native ETH and every ERC-20 the wallet
+  holds, priced through DexScreener (CoinGecko as fallback), with cost
   basis, realized (FIFO) and unrealized PnL, 24h change, gas spent, and
-  allocation. Per wallet and across all wallets.
+  allocation. Per wallet and across all wallets. Every number is read from
+  the RPC; on Base, Blockscout is only asked *which* tokens a wallet holds,
+  so a token received before the wallet was imported shows up without a
+  full resync (Robinhood Chain's Blockscout refuses non-browser clients, so
+  there the sweep and the token registry are the only sources). Clients
+  read the ledger, never the chain: the sync
+  loop (every `sync_interval_seconds`), every settled swap and an explicit
+  `--refresh` (throttled) are what read the chain. A `balanceOf` the node
+  fails to answer leaves the stored amount alone and marks that wallet/chain
+  read `partial` (`failed` when the node was unreachable), which
+  `wallet.balances` reports per chain and the CLI prints under the table.
+- **Junk stays out of sight** — anyone can airdrop a token to any address.
+  A token is hidden automatically when nobody lists it (not in the chain's
+  CoinGecko registry), nobody trades it (no DexScreener pool with at least
+  $1,000 behind it; an unreachable price source is not a verdict) and the
+  wallet never acted on it (never sold, sent, swapped or quoted it). Hidden
+  tokens keep their ledger rows — the balance is real — but are left out of
+  balances, portfolio, history, the totals, the agent's view and the sync's
+  every-30-seconds scan (they are re-read hourly and re-judged daily, so a
+  real launch that gains a pool resurfaces on its own). The desktop shows
+  "N junk tokens hidden" with a Show toggle and a per-token hide/keep; the
+  CLI has `--hidden` and `agentos trade hide`/`unhide`. A user's choice is
+  final, and quoting or swapping a hidden token shows it again.
 - **History** — deposits, withdrawals, swaps (yours, the agent's, or
   external), approvals and gas, rebuilt from the chain itself: ERC-20
-  `Transfer` logs plus native balance reconciliation. Robinhood Chain has no
-  public indexer, so nothing here depends on one. A full resync drops and
-  rebuilds the ledger.
+  `Transfer` logs plus native balance reconciliation. No indexer is needed
+  for this; where one exists it only widens the set of tokens the sweep
+  reads. A full resync drops and rebuilds the ledger.
 - **Swaps** — quote, approve (a plain ERC-20 approval to the provider's
   spender: Uniswap's proxy or Kyber's router, no Permit2 signatures), sign
   and broadcast, then confirm from the receipt.
@@ -227,8 +249,8 @@ Amounts are always human units (`0.5`, `1000`), never wei. See
 ## Ledger and PnL
 
 `~/.agentos/state/trading.sqlite` holds tokens, entries (history), FIFO
-lots, realized PnL, orders, daily spend, sync cursors, balance cache and
-price snapshots. Cost basis for a deposit is the token's USD price at that
+lots, realized PnL, orders, daily spend, sync cursors, balance cache, the
+outcome of each wallet/chain read (`chain_reads`) and price snapshots. Cost basis for a deposit is the token's USD price at that
 block (CoinGecko range; spot price with `cost_basis_source = "approx"` when
 history is unavailable). A holding's cost can be corrected by hand with
 `trading.lot.setCost`. Selling consumes the oldest lots first; the

@@ -93,6 +93,10 @@ class FakeChain:
     block_timestamps: dict[int, int] = field(default_factory=dict)
     fee_history: bool = True
     revert_calls: bool = False
+    # Tokens whose ``balanceOf`` the node refuses (per-item batch failure).
+    fail_balance_of: set[str] = field(default_factory=set)
+    # JSON-RPC methods that fail outright (a node outage for that method).
+    fail_methods: set[str] = field(default_factory=set)
     _seq: int = 0
 
     def set_native(self, address: str, wei: int) -> None:
@@ -146,6 +150,8 @@ class FakeChain:
         return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
     def _dispatch(self, method: str, params: list[Any]) -> Any:
+        if method in self.fail_methods:
+            raise _RpcFailError("node unavailable", -32603)
         if method == "eth_chainId":
             return hex(self.chain_id)
         if method == "eth_blockNumber":
@@ -196,6 +202,8 @@ class FakeChain:
         data = str(tx.get("data") or "")
         selector = data[:10]
         if selector == SEL_BALANCE_OF:
+            if to in {t.lower() for t in self.fail_balance_of}:
+                raise _RpcFailError("execution timeout", -32000)
             owner = "0x" + data[10:74][-40:]
             return _enc_uint(self.get_erc20(to, owner))
         meta = self.tokens.get(to)
@@ -436,8 +444,46 @@ class FakePrices:
         }
 
 
+@dataclass
+class FakeIndexer:
+    """A Blockscout ``/api/v2/addresses/{addr}/token-balances`` endpoint."""
+
+    # wallet (lower) -> [(token address, raw balance, token type)]
+    holdings: dict[str, list[tuple[str, int, str]]] = field(default_factory=dict)
+    status: int = 200
+    requests: list[httpx.Request] = field(default_factory=list)
+
+    def hold(self, wallet: str, token: str, raw: int, kind: str = "ERC-20") -> None:
+        self.holdings.setdefault(wallet.lower(), []).append((token, raw, kind))
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if self.status != 200:
+            return httpx.Response(self.status, text="nope")
+        parts = request.url.path.split("/")
+        if len(parts) < 6 or parts[-1] != "token-balances":
+            return httpx.Response(404, json={"message": "Not found"})
+        rows = self.holdings.get(parts[-2].lower())
+        if rows is None:
+            return httpx.Response(404, json={"message": "Not found"})
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "token": {"address": token, "type": kind, "symbol": "X", "decimals": "18"},
+                    "value": str(raw),
+                }
+                for token, raw, kind in rows
+            ],
+        )
+
+
 def make_transport(
-    *, chains: dict[str, FakeChain], uniswap: FakeUniswap, prices: FakePrices
+    *,
+    chains: dict[str, FakeChain],
+    uniswap: FakeUniswap,
+    prices: FakePrices,
+    indexer: FakeIndexer | None = None,
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
@@ -445,6 +491,8 @@ def make_transport(
             return chains[host].handle(request)
         if host == "trade-api.gateway.uniswap.org":
             return uniswap.handle(request)
+        if host.endswith("blockscout.com"):
+            return indexer.handle(request) if indexer else httpx.Response(404)
         return prices.handle(request)
 
     return httpx.MockTransport(handler)

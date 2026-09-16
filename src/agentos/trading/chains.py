@@ -33,6 +33,9 @@ class ChainSpec:
     # Largest eth_getLogs span the public RPC tolerates per call.
     max_log_span: int = 2000
     aliases: tuple[str, ...] = field(default_factory=tuple)
+    # A Blockscout instance indexing this chain, used only to *discover* which
+    # ERC-20s a wallet holds; every balance is then read from the RPC.
+    blockscout_url: str | None = None
 
     def tx_url(self, tx_hash: str) -> str:
         return f"{self.explorer_url}/tx/{tx_hash}"
@@ -69,6 +72,7 @@ BASE = ChainSpec(
     block_time_s=2.0,
     max_log_span=2000,
     aliases=("base-mainnet", "8453"),
+    blockscout_url="https://base.blockscout.com",
 )
 
 ROBINHOOD = ChainSpec(
@@ -89,6 +93,11 @@ ROBINHOOD = ChainSpec(
     block_time_s=0.1,
     max_log_span=2000,
     aliases=("robinhood-chain", "hood", "4663"),
+    # robinhoodchain.blockscout.com answers every non-browser request with a
+    # Cloudflare challenge (403, checked 2026-09-15, any User-Agent), so there
+    # is no discovery here: the sweep and the token registry are what find
+    # a wallet's tokens on this chain.
+    blockscout_url=None,
 )
 
 CHAINS: dict[int, ChainSpec] = {BASE.chain_id: BASE, ROBINHOOD.chain_id: ROBINHOOD}

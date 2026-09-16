@@ -791,7 +791,7 @@ agentos wallet import --label cold --keystore wallet.json
 agentos wallet export <addr> --keystore --out backup.json
 agentos wallet export <addr> --private-key   # prints the raw key; always asks the vault password
 agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes|-y
-agentos wallet balances [<addr>] [--chain base|robinhood] [--json]
+agentos wallet balances [<addr>] [--chain base|robinhood] [--refresh] [--hidden] [--json]   # ledger view; --refresh re-reads the chain first (throttled to once per 10 s per wallet); --hidden lists junk tokens too
 
 agentos trade status                        # provider, API key, chains, limits, vault state
 agentos trade provider                      # show the swap provider (uniswap | kyber)
@@ -804,8 +804,9 @@ agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
 agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--limit N]
 agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
-agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N]
-agentos trade portfolio [--wallet <addr>]  # holdings, cost basis, realized + unrealized PnL
+agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
+agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
+agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
 agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it
 agentos trade limits [<addr>]               # guardrails + today's agent spend (default: the primary wallet)
 ```
@@ -856,7 +857,7 @@ order that would push a wallet past `trading.daily_cap_usd` (default 1,000
 per calendar day, orders in flight included; 0 switches agent swaps off) is
 rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
 refused with `trading.slippage_too_high`. `agentos trade approve` /
-`reject`, every vault command except `status`, `list` and `balances`, and
+`reject`, `hide` / `unhide`, every vault command except `status`, `list` and `balances`, and
 `config set` on any `trading.` key fail from an agent's connection with
 `trading.operator_required`: those are the user's actions, in the app or
 their own terminal. Swaps typed by a person are neither queued nor capped;

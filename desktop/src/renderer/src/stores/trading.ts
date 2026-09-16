@@ -12,6 +12,7 @@ import { QUOTE_REFRESH_MS } from '~/views/trading/logic'
 import { CHAINS } from '~/views/trading/types'
 import type {
   Balance,
+  ChainRead,
   Chart,
   ChartRange,
   Entry,
@@ -23,6 +24,7 @@ import type {
   ProviderId,
   Quote,
   SearchToken,
+  Token,
   TradingStatus,
   Wallet,
   WalletStatus,
@@ -40,7 +42,8 @@ export const TRADING_KEYS = {
   status: ['trading', 'status'] as const,
   walletStatus: ['trading', 'wallet-status'] as const,
   wallets: ['trading', 'wallets'] as const,
-  portfolio: (wallet?: string) => ['trading', 'portfolio', wallet ?? 'all'] as const,
+  portfolio: (wallet?: string, includeHidden = false) =>
+    ['trading', 'portfolio', wallet ?? 'all', includeHidden ? 'with-hidden' : 'shown'] as const,
   balances: (wallet?: string) => ['trading', 'balances', wallet ?? 'all'] as const,
   // `limit` and `wallet` shape the answer, so two callers asking for
   // different pages must not share one cache entry.
@@ -144,15 +147,23 @@ export function useWallets(enabled = true) {
   return { ...query, wallets, primary: query.data?.primary ?? null }
 }
 
-export function usePortfolio(wallet: string | undefined, enabled = true) {
+/**
+ * Holdings and totals. Junk tokens the engine hid are left out (and never
+ * counted); `includeHidden` brings them back flagged `hidden`, for the
+ * "show hidden" toggle.
+ */
+export function usePortfolio(wallet: string | undefined, enabled = true, includeHidden = false) {
   const rpc = useRpc()
   const connected = useConnected()
   return useQuery<Portfolio>({
-    queryKey: TRADING_KEYS.portfolio(wallet),
+    queryKey: TRADING_KEYS.portfolio(wallet, includeHidden),
     enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
-      return rpc.call<Portfolio>('trading.portfolio', wallet ? { wallet } : {})
+      return rpc.call<Portfolio>('trading.portfolio', {
+        ...(wallet ? { wallet } : {}),
+        ...(includeHidden ? { includeHidden: true } : {}),
+      })
     },
     refetchInterval: 20_000,
     refetchOnWindowFocus: true,
@@ -162,9 +173,17 @@ export function usePortfolio(wallet: string | undefined, enabled = true) {
 
 interface BalanceList {
   balances?: Balance[]
-  updatedAt?: number
+  /** Per wallet/chain freshness; see `ChainRead`. */
+  chains?: ChainRead[]
+  updatedAt?: number | null
 }
 
+/**
+ * The ledger's view of a wallet's balances. This never makes the engine read
+ * the chain: the engine's sync loop does, every settled swap does, and it
+ * announces `trading.changed` when the ledger moves, which refetches this.
+ * The interval is only a backstop for a missed event.
+ */
 export function useBalances(wallet: string | undefined, enabled = true) {
   const rpc = useRpc()
   const connected = useConnected()
@@ -175,11 +194,12 @@ export function useBalances(wallet: string | undefined, enabled = true) {
       await rpc.waitForConnection()
       return rpc.call<BalanceList>('wallet.balances', wallet ? { address: wallet } : {})
     },
-    refetchInterval: 20_000,
+    refetchInterval: 60_000,
     placeholderData: (prev) => prev,
   })
   const balances = useMemo(() => query.data?.balances ?? [], [query.data])
-  return { ...query, balances }
+  const chainReads = useMemo(() => query.data?.chains ?? [], [query.data])
+  return { ...query, balances, chainReads }
 }
 
 interface OrderList {
@@ -364,6 +384,20 @@ export function useOrderDecision() {
         approve ? 'trading.orders.approve' : 'trading.orders.reject',
         approve ? { orderId } : { orderId, reason: 'user' },
       ),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+}
+
+/**
+ * Hide a junk token, or show one the engine hid. The user's call is final:
+ * the engine's classifier never reverses it.
+ */
+export function useTokenVisibility() {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { chainId: number; address: string; hidden: boolean }) =>
+      rpc.call<{ token: Token & { hidden: boolean } }>('trading.tokens.hide', params),
     onSettled: () => invalidateTrading(queryClient),
   })
 }

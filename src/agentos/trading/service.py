@@ -37,6 +37,7 @@ from agentos.trading.chains import (
     redact_rpc_url,
     rpc_url_for,
 )
+from agentos.trading.discovery import BlockscoutDiscovery
 from agentos.trading.evm import (
     EvmClient,
     EvmRpcError,
@@ -72,6 +73,7 @@ from agentos.trading.providers import (
     UniswapProvider,
     provider_label,
 )
+from agentos.trading.spam import TokenCurator
 from agentos.trading.sync import WalletSyncer
 from agentos.trading.uniswap import (
     DecisionOrigin,
@@ -96,6 +98,12 @@ RECOVER_POLL_S = 5.0
 # Pause between wallets in a batch so a multi-wallet swap stays under the
 # Trading API's per-endpoint rate limit.
 BATCH_PAUSE_S = 0.35
+# ``wallet.balances`` with ``refresh`` forces a chain read at most this often
+# per wallet; between forced reads the sync loop keeps the ledger current.
+MANUAL_SYNC_MIN_S = 10.0
+# Hidden (junk) tokens leave the sync's fast lane; their balances and
+# openings are still brought up to date this often.
+HIDDEN_RESCAN_S = 3600.0
 # WETH9 ``withdraw(uint256)``.
 SEL_WETH_WITHDRAW = "0x2e1a7d4d"
 
@@ -253,14 +261,21 @@ class TradingService:
         self._sync_lock = asyncio.Lock()
         self.syncing = False
         self.last_sync_at: float | None = None
+        self.discovery = BlockscoutDiscovery(http=self._http, now=now)
+        self.curator = TokenCurator(self.ledger, self.prices, now=now)
+        self._hidden_sync_at = 0.0
         self.syncer = WalletSyncer(
             self.ledger,
             self.prices,
             evm_for=self.evm,
             token_meta=self.token_meta,
             watch_tokens=self.watch_tokens,
+            discover_tokens=self.discovery.holdings,
             now=now,
         )
+        # When each wallet last had a chain read forced through wallet.balances,
+        # so a client polling with refresh=true cannot turn into a load test.
+        self._manual_sync_at: dict[str, float] = {}
 
     # ── infrastructure ─────────────────────────────────────────────────
 
@@ -552,6 +567,17 @@ class TradingService:
     # ── tokens ─────────────────────────────────────────────────────────
 
     async def token_meta(self, chain: ChainSpec, address: str) -> TokenMeta:
+        """Metadata for a token, remembering it — and judging it, if not judged yet.
+
+        Every token the engine meets passes through here (sweep, balances,
+        quotes), so this is where a junk airdrop gets hidden: see ``spam.py``.
+        """
+        meta = await self._token_meta(chain, address)
+        if not meta.native:
+            await self.curator.review(chain, meta.address)
+        return meta
+
+    async def _token_meta(self, chain: ChainSpec, address: str) -> TokenMeta:
         if is_native(address):
             meta = native_token(chain)
             self._remember_token(meta)
@@ -619,7 +645,7 @@ class TradingService:
         if is_native(text) or text.lower() == chain.native_symbol.lower():
             return await self.token_meta(chain, NATIVE_ADDRESS)
         if text.startswith("0x"):
-            return await self.token_meta(chain, text)
+            return self._touch(await self.token_meta(chain, text))
         hits = await self.prices.find_by_symbol(chain, text)
         if not hits:
             raise TradingError("trading.invalid", f"Unknown token symbol {text!r} on {chain.name}")
@@ -631,7 +657,36 @@ class TradingService:
                 f"Symbol {text!r} is ambiguous on {chain.name}; pass the address",
                 details={"candidates": [h.to_dict() for h in hits[:5]]},
             )
-        return await self.token_meta(chain, chosen.address)
+        return self._touch(await self.token_meta(chain, chosen.address))
+
+    def _touch(self, meta: TokenMeta) -> TokenMeta:
+        """Someone named this token on purpose: it is shown, and stays shown."""
+        if not meta.native:
+            self.ledger.touch_token(meta.chain_id, meta.address)
+        return meta
+
+    async def set_token_hidden(
+        self, chain: ChainSpec, address: str, hidden: bool
+    ) -> dict[str, Any]:
+        """The user's own hide/show. Final: the classifier never reverses it."""
+        meta = await self._token_meta(chain, address)
+        if meta.native:
+            raise TradingError("trading.invalid", f"{chain.native_symbol} cannot be hidden")
+        self.ledger.set_token_hidden(
+            chain.chain_id, meta.address, hidden, by="user", classified_at=self._now()
+        )
+        await self._emit("trading.changed", {"reason": "token", "chainId": chain.chain_id})
+        return self._token_row(chain.chain_id, meta.address)
+
+    def _token_row(self, chain_id: int, address: str) -> dict[str, Any]:
+        """A token dict with its visibility, for the hide/show RPC."""
+        info = self._token_dict(chain_id, address) or {}
+        row = self.ledger.get_token(chain_id, address)
+        return {
+            **info,
+            "hidden": bool(row and row["hidden"]),
+            "hiddenBy": row.get("hidden_by") if row else None,
+        }
 
     async def search_tokens(self, chain: ChainSpec, query: str) -> list[dict[str, Any]]:
         rows = await self._fill_from_chain(chain, await self.prices.search(chain, query))
@@ -876,7 +931,17 @@ class TradingService:
         await self._stamp_created_block(record)
         self._mirror_wallet(record)
         await self._emit("trading.changed", {"reason": "wallet", "wallet": record.address})
+        self._sync_new_wallet(record)
         return record.to_dict(primary=(self.vault.primary_address() == record.address))
+
+    def _sync_new_wallet(self, record: WalletRecord) -> None:
+        """A wallet that just appeared should not wait a whole tick to show a balance."""
+        if not self._background:
+            return
+        try:
+            self.request_sync(wallet=record.address)
+        except RuntimeError:  # no running loop (tests, CLI helpers)
+            pass
 
     async def _stamp_created_block(self, record: WalletRecord) -> None:
         for chain in self.chains():
@@ -904,6 +969,7 @@ class TradingService:
             raise TradingError("trading.invalid", "privateKey or keystoreJson is required")
         self._mirror_wallet(record)
         await self._emit("trading.changed", {"reason": "wallet", "wallet": record.address})
+        self._sync_new_wallet(record)
         return record.to_dict(primary=(self.vault.primary_address() == record.address))
 
     async def remove_wallet(self, address: str, password: str) -> None:
@@ -935,25 +1001,34 @@ class TradingService:
     # ── balances / portfolio ───────────────────────────────────────────
 
     async def balances(
-        self, wallet: str | None = None, chain_id: int | None = None, *, refresh: bool = True
+        self,
+        wallet: str | None = None,
+        chain_id: int | None = None,
+        *,
+        refresh: bool = False,
+        include_hidden: bool = False,
     ) -> list[dict[str, Any]]:
+        """Token balances from the ledger, priced now.
+
+        The ledger is the only thing this reads: the chain is read by the sync
+        loop, after every swap, and on ``refresh=True`` — which runs the same
+        sync (logs, balances, openings) rather than a side path, and at most
+        once per wallet per ``MANUAL_SYNC_MIN_S`` so a polling client cannot
+        turn into a load test. A client that needs to know how fresh a chain's
+        rows are reads :meth:`chain_reads`.
+
+        Hidden (junk) tokens are left out unless ``include_hidden``; then
+        they come back flagged ``hidden`` and are priced like the rest. Use
+        :meth:`hidden_balance_count` for the number left out.
+        """
         records = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
         chains = [c for c in self.chains() if chain_id is None or c.chain_id == chain_id]
+        if refresh:
+            await self._refresh_wallets(records, chains)
         rows: list[dict[str, Any]] = []
         for chain in chains:
             wanted: dict[str, dict[str, Any]] = {}
             for record in records:
-                if refresh:
-                    evm = self.evm(chain)
-                    try:
-                        await self.syncer.ensure_opening(record, chain, NATIVE_ADDRESS, evm)
-                        native = await evm.get_balance(record.address)
-                        self.ledger.set_balance(chain.chain_id, record.key, NATIVE_ADDRESS, native)
-                        await self.syncer._refresh_balances(record, chain, evm)
-                    except (EvmRpcError, EvmTransportError) as exc:
-                        log.warning(
-                            "trading.balance_refresh_failed", chain=chain.key, error=str(exc)
-                        )
                 for row in self.ledger.balances(record.key, chain.chain_id):
                     raw = int(row["raw"])
                     if raw <= 0 and row["token"] != NATIVE_ADDRESS:
@@ -963,12 +1038,19 @@ class TradingService:
                         "wallet": checksum_address(row["wallet"]),
                         "token": row["token"],
                         "raw": raw,
+                        "updatedAt": int(float(row["updated_at"]) * 1000),
                     }
             if not wanted:
                 continue
-            addresses = sorted({w["token"] for w in wanted.values()})
-            for address in addresses:
+            # Judge before filtering: a first sight of a token is judged here.
+            for address in sorted({w["token"] for w in wanted.values()}):
                 await self.token_meta(chain, address)
+            hidden = self.ledger.hidden_tokens(chain.chain_id)
+            if not include_hidden:
+                wanted = {k: w for k, w in wanted.items() if w["token"] not in hidden}
+                if not wanted:
+                    continue
+            addresses = sorted({w["token"] for w in wanted.values()})
             prices = await self.prices.prices(chain, addresses)
             for item in wanted.values():
                 token_info = self._token_dict(chain.chain_id, item["token"]) or {}
@@ -986,12 +1068,70 @@ class TradingService:
                         "priceUsd": price,
                         "valueUsd": amount * price if price is not None else None,
                         "change24hPct": price_info.change_24h_pct if price_info else None,
+                        "updatedAt": item["updatedAt"],
+                        "hidden": item["token"] in hidden,
                     }
                 )
         rows.sort(key=lambda r: -(r["valueUsd"] or 0.0))
         return rows
 
-    async def portfolio(self, wallet: str | None = None) -> dict[str, Any]:
+    def hidden_balance_count(self, wallet: str | None = None, chain_id: int | None = None) -> int:
+        """How many held (non-zero) tokens are hidden for these wallets/chains."""
+        records = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
+        chains = [c for c in self.chains() if chain_id is None or c.chain_id == chain_id]
+        count = 0
+        for chain in chains:
+            hidden = self.ledger.hidden_tokens(chain.chain_id)
+            if not hidden:
+                continue
+            for record in records:
+                for row in self.ledger.balances(record.key, chain.chain_id):
+                    if row["token"] in hidden and int(row["raw"]) > 0:
+                        count += 1
+        return count
+
+    async def _refresh_wallets(self, records: list[WalletRecord], chains: list[ChainSpec]) -> bool:
+        """Force a chain read for these wallets, throttled per wallet. True if one ran."""
+        now = self._now()
+        due = [
+            r for r in records if now - self._manual_sync_at.get(r.key, 0.0) >= MANUAL_SYNC_MIN_S
+        ]
+        if not due:
+            return False
+        for record in due:
+            self._manual_sync_at[record.key] = now
+        await self.sync_all(wallets=due, chains=chains)
+        return True
+
+    def chain_reads(
+        self, wallet: str | None = None, chain_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """How the last chain read of each wallet/chain went (see ``chain_reads``)."""
+        records = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
+        out: list[dict[str, Any]] = []
+        for record in records:
+            for row in self.ledger.chain_reads(record.key, chain_id):
+                out.append(
+                    {
+                        "chainId": int(row["chain_id"]),
+                        "wallet": checksum_address(str(row["wallet"])),
+                        "status": str(row["status"]),
+                        "reason": row.get("reason"),
+                        "readAt": int(float(row["read_at"]) * 1000),
+                    }
+                )
+        return out
+
+    async def portfolio(
+        self, wallet: str | None = None, *, include_hidden: bool = False
+    ) -> dict[str, Any]:
+        """Holdings with cost basis and PnL.
+
+        Hidden (junk) tokens never count towards the totals. They are left out
+        of ``holdings`` too unless ``include_hidden``, in which case they come
+        back flagged ``hidden`` with a value; ``hiddenCount`` is how many were
+        held either way.
+        """
         records = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
         keys = {r.key for r in records}
         positions = [p for p in self.ledger.positions(None if wallet is None else records[0].key)]
@@ -1008,18 +1148,29 @@ class TradingService:
         for chain_id, _wallet, token in holdings_keys:
             by_chain.setdefault(chain_id, set()).add(token)
         price_map: dict[tuple[int, str], PriceInfo] = {}
+        hidden_by_chain: dict[int, set[str]] = {}
         for chain_id, tokens in by_chain.items():
             chain = CHAINS[chain_id]
             for token in tokens:
                 await self.token_meta(chain, token)
-            for token, info in (await self.prices.prices(chain, sorted(tokens))).items():
+            hidden_by_chain[chain_id] = self.ledger.hidden_tokens(chain_id)
+            priced = (
+                sorted(tokens) if include_hidden else sorted(tokens - hidden_by_chain[chain_id])
+            )
+            for token, info in (await self.prices.prices(chain, priced)).items():
                 price_map[(chain_id, token)] = info
         pos_by_key = {(p.chain_id, p.wallet, p.token): p for p in positions}
         holdings: list[dict[str, Any]] = []
+        hidden_count = 0
         per_wallet: dict[str, dict[str, float]] = {
             r.key: {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0} for r in records
         }
         for chain_id, wallet_key, token in sorted(holdings_keys):
+            is_hidden = token in hidden_by_chain.get(chain_id, set())
+            if is_hidden:
+                hidden_count += 1
+                if not include_hidden:
+                    continue
             decimals = self._decimals(chain_id, token)
             balance_raw = self.ledger.get_balance(chain_id, wallet_key, token)
             position = pos_by_key.get((chain_id, wallet_key, token))
@@ -1065,8 +1216,12 @@ class TradingService:
                     "change24hPct": change_pct,
                     "change24hUsd": change_usd,
                     "allocationPct": 0.0,
+                    "hidden": is_hidden,
                 }
             )
+            if is_hidden:
+                # Shown on request, never counted: junk has no place in a total.
+                continue
             bucket = per_wallet.setdefault(
                 wallet_key, {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0}
             )
@@ -1074,10 +1229,12 @@ class TradingService:
             bucket["cost"] += cost
             bucket["realized"] += pnl.realized_usd
             bucket["change"] += change_usd or 0.0
-        total_value = sum(h["valueUsd"] or 0.0 for h in holdings)
+        total_value = sum(h["valueUsd"] or 0.0 for h in holdings if not h["hidden"])
         for h in holdings:
             h["allocationPct"] = (
-                (h["valueUsd"] or 0.0) / total_value * 100.0 if total_value > 0 else 0.0
+                (h["valueUsd"] or 0.0) / total_value * 100.0
+                if total_value > 0 and not h["hidden"]
+                else 0.0
             )
         holdings.sort(key=lambda h: -(h["valueUsd"] or 0.0))
         gas_total = self.ledger.gas_total(None if wallet is None else records[0].key)
@@ -1110,6 +1267,7 @@ class TradingService:
         return {
             "totals": totals,
             "holdings": holdings,
+            "hiddenCount": hidden_count,
             "wallets": wallets_out,
             "updatedAt": int(self._now() * 1000),
             "syncing": self.syncing,
@@ -1180,14 +1338,29 @@ class TradingService:
         kind: str | None = None,
         limit: int = 100,
         before: float | None = None,
+        include_hidden: bool = False,
     ) -> dict[str, Any]:
+        """The ledger, newest first. Entries that only moved junk are left out by default."""
         key = self.vault.resolve(wallet).key if wallet else None
         rows = self.ledger.list_entries(
             wallet=key, chain_id=chain_id, kind=kind, limit=limit, before=before
         )
-        entries = [self._entry_dict(r) for r in rows]
         next_before = float(rows[-1]["ts"]) if len(rows) >= max(1, min(limit, 1000)) else None
+        if not include_hidden:
+            hidden = self.ledger.hidden_tokens()
+            rows = [r for r in rows if not self._entry_is_junk(r, hidden)]
+        entries = [self._entry_dict(r) for r in rows]
         return {"entries": entries, "nextBefore": next_before}
+
+    @staticmethod
+    def _entry_is_junk(row: dict[str, Any], hidden: set[str]) -> bool:
+        """An entry is junk when every ERC-20 it touched is hidden."""
+        tokens = [
+            str(t).lower()
+            for t in (row.get("token_in"), row.get("token_out"))
+            if t and not is_native(str(t))
+        ]
+        return bool(tokens) and all(t in hidden for t in tokens)
 
     async def chart(self, chain: ChainSpec, token: str, range_key: str) -> dict[str, Any]:
         """One close-price line for a token, drawn from the cheapest source.
@@ -1288,18 +1461,38 @@ class TradingService:
 
     # ── sync ───────────────────────────────────────────────────────────
 
-    async def sync_all(self, *, wallet: str | None = None, full: bool = False) -> int:
+    async def sync_all(
+        self,
+        *,
+        wallet: str | None = None,
+        full: bool = False,
+        wallets: list[WalletRecord] | None = None,
+        chains: list[ChainSpec] | None = None,
+    ) -> int:
+        """Sync every wallet × chain (or the given subset). 0 when a sync is already running.
+
+        Returns how many wallet/chain pairs changed; each one has already
+        been announced as ``trading.changed`` so clients re-read the ledger
+        the moment it moves, not on their next poll.
+        """
         if self._sync_lock.locked():
             return 0
         async with self._sync_lock:
             self.syncing = True
             changed = 0
             try:
-                records = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
-                for record in records:
-                    for chain in self.chains():
+                if wallets is None:
+                    wallets = self.vault.list() if wallet is None else [self.vault.resolve(wallet)]
+                # Hidden tokens ride along once an hour; the fast lane skips them.
+                include_hidden = self._now() - self._hidden_sync_at >= HIDDEN_RESCAN_S
+                if include_hidden and wallet is None and not chains:
+                    self._hidden_sync_at = self._now()
+                for record in wallets:
+                    for chain in chains or self.chains():
                         try:
-                            if await self.syncer.sync(record, chain, full=full):
+                            if await self.syncer.sync(
+                                record, chain, full=full, include_hidden=include_hidden
+                            ):
                                 changed += 1
                                 await self._emit(
                                     "trading.changed", {"reason": "sync", "wallet": record.address}
@@ -1311,6 +1504,7 @@ class TradingService:
                                 wallet=record.address,
                                 error=str(exc),
                             )
+                            self.syncer.record_failure(chain, record.key, str(exc))
                 self.last_sync_at = self._now()
             finally:
                 self.syncing = False

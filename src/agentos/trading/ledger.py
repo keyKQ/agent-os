@@ -24,7 +24,7 @@ from typing import Any
 from agentos.paths import state_dir
 from agentos.trading.pnl import Lot
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 OPENING_NOTE = "opening balance"
 
@@ -63,6 +63,16 @@ CREATE TABLE IF NOT EXISTS tokens (
     is_native INTEGER NOT NULL DEFAULT 0,
     verified INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL,
+    -- Junk that landed in a wallet uninvited. Hidden tokens keep their
+    -- ledger rows (the balance is real) but stay out of balances, portfolio,
+    -- history and the sync's fast lane. hidden_by is 'auto' or 'user'; a
+    -- user's choice is never overwritten by the classifier.
+    hidden INTEGER NOT NULL DEFAULT 0,
+    hidden_by TEXT,
+    -- The wallet acted on this token on purpose (quote, swap, explicit
+    -- resolve): it is never auto-hidden again.
+    touched INTEGER NOT NULL DEFAULT 0,
+    classified_at REAL,
     PRIMARY KEY (chain_id, address)
 );
 
@@ -186,6 +196,19 @@ CREATE TABLE IF NOT EXISTS balances (
     PRIMARY KEY (chain_id, wallet, token)
 );
 
+-- How the last chain read of each wallet/chain went. A balance row is only
+-- as fresh as this says: 'ok' means every token was re-read, 'partial' that
+-- some reads failed and their rows are last-good, 'failed' that the node
+-- could not be reached at all and every row on the chain is last-good.
+CREATE TABLE IF NOT EXISTS chain_reads (
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    read_at REAL NOT NULL,
+    PRIMARY KEY (chain_id, wallet)
+);
+
 -- A full rebuild sweeps into these shadow tables and swaps in only when the
 -- sweep is complete, so the live ledger keeps serving meanwhile and an
 -- interrupted rebuild resumes from scanned_down_to instead of starting over.
@@ -274,11 +297,28 @@ class Ledger:
                 self._conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
                 )
-            elif int(row["version"]) < 2:
-                self._dedupe_openings()
-                self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
+            else:
+                version = int(row["version"])
+                if version < 2:
+                    self._dedupe_openings()
+                if version < 3:
+                    self._add_token_columns()
+                if version < SCHEMA_VERSION:
+                    self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
             self._commit()
+
+    def _add_token_columns(self) -> None:
+        """Version 3: the hidden/touched columns on ``tokens``."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(tokens)")}
+        for column, ddl in (
+            ("hidden", "INTEGER NOT NULL DEFAULT 0"),
+            ("hidden_by", "TEXT"),
+            ("touched", "INTEGER NOT NULL DEFAULT 0"),
+            ("classified_at", "REAL"),
+        ):
+            if column not in have:
+                self._conn.execute(f"ALTER TABLE tokens ADD COLUMN {column} {ddl}")  # noqa: S608
 
     def _dedupe_openings(self) -> None:
         """Version 1 could book the same opening twice; keep the newest per position."""
@@ -367,6 +407,7 @@ class Ledger:
                 "realized",
                 "sync_state",
                 "balances",
+                "chain_reads",
                 "orders",
                 "daily_spend",
                 "rebuild_state",
@@ -430,6 +471,74 @@ class Ledger:
             if chain_id is None:
                 return _rows(self._conn.execute("SELECT * FROM tokens"))
             return _rows(self._conn.execute("SELECT * FROM tokens WHERE chain_id = ?", (chain_id,)))
+
+    # ── hidden tokens ──────────────────────────────────────────────────
+
+    def hidden_tokens(self, chain_id: int | None = None) -> set[str]:
+        """Addresses of every hidden token (on one chain, or all)."""
+        with self._lock:
+            if chain_id is None:
+                rows = self._conn.execute("SELECT address FROM tokens WHERE hidden = 1")
+            else:
+                rows = self._conn.execute(
+                    "SELECT address FROM tokens WHERE hidden = 1 AND chain_id = ?", (chain_id,)
+                )
+            return {str(r["address"]) for r in rows.fetchall()}
+
+    def set_token_hidden(
+        self, chain_id: int, address: str, hidden: bool, *, by: str, classified_at: float
+    ) -> None:
+        """Hide or show a token. ``by`` is ``'auto'`` (classifier) or ``'user'``.
+
+        The classifier never overrides a user's choice; a user always can.
+        """
+        with self._lock:
+            if by == "auto":
+                self._conn.execute(
+                    "UPDATE tokens SET hidden = ?, hidden_by = ?, classified_at = ? "
+                    "WHERE chain_id = ? AND address = ? AND COALESCE(hidden_by, '') != 'user'",
+                    (
+                        1 if hidden else 0,
+                        "auto" if hidden else None,
+                        classified_at,
+                        chain_id,
+                        address.lower(),
+                    ),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE tokens SET hidden = ?, hidden_by = 'user', classified_at = ? "
+                    "WHERE chain_id = ? AND address = ?",
+                    (1 if hidden else 0, classified_at, chain_id, address.lower()),
+                )
+            self._commit()
+
+    def touch_token(self, chain_id: int, address: str) -> None:
+        """The wallet acted on this token on purpose: it is shown, and stays shown."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE tokens SET touched = 1, hidden = 0, hidden_by = NULL "
+                "WHERE chain_id = ? AND address = ?",
+                (chain_id, address.lower()),
+            )
+            self._commit()
+
+    def token_was_spent(self, chain_id: int, address: str) -> bool:
+        """Did any wallet ever send, sell or order this token? Junk only ever arrives."""
+        key = address.lower()
+        with self._lock:
+            entry = self._conn.execute(
+                "SELECT 1 FROM entries WHERE chain_id = ? AND token_in = ? LIMIT 1",
+                (chain_id, key),
+            ).fetchone()
+            if entry is not None:
+                return True
+            order = self._conn.execute(
+                "SELECT 1 FROM orders WHERE chain_id = ? AND (token_in = ? OR token_out = ?) "
+                "LIMIT 1",
+                (chain_id, key, key),
+            ).fetchone()
+            return order is not None
 
     # ── entries ────────────────────────────────────────────────────────
 
@@ -1071,6 +1180,37 @@ class Ledger:
             return _rows(
                 self._conn.execute(
                     f"SELECT * FROM balances WHERE {' AND '.join(clauses)}",  # noqa: S608
+                    params,
+                )
+            )
+
+    def set_chain_read(
+        self, chain_id: int, wallet: str, status: str, reason: str | None = None
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO chain_reads (chain_id, wallet, status, reason, read_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(chain_id, wallet) DO UPDATE SET "
+                "status = excluded.status, reason = excluded.reason, read_at = excluded.read_at",
+                (chain_id, wallet.lower(), status, reason, time.time()),
+            )
+            self._commit()
+
+    def chain_reads(
+        self, wallet: str | None = None, chain_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        clauses = ["1=1"]
+        params: list[Any] = []
+        if wallet:
+            clauses.append("wallet = ?")
+            params.append(wallet.lower())
+        if chain_id is not None:
+            clauses.append("chain_id = ?")
+            params.append(chain_id)
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    f"SELECT * FROM chain_reads WHERE {' AND '.join(clauses)}",  # noqa: S608
                     params,
                 )
             )

@@ -281,6 +281,17 @@ def test_balances_filters_by_address_and_chain(client: _FakeClient) -> None:
     assert "$12.50" in result.output
 
 
+def test_balances_hidden_note_and_flag(client: _FakeClient) -> None:
+    client.payloads["wallet.balances"]["hiddenCount"] = 3
+    quiet = runner.invoke(wallet_cmd.app, ["balances"])
+    assert quiet.exit_code == 0, quiet.output
+    assert "3 junk tokens hidden" in quiet.output
+    loud = runner.invoke(wallet_cmd.app, ["balances", "--hidden"])
+    assert loud.exit_code == 0, loud.output
+    assert "junk tokens hidden" not in loud.output
+    assert client.calls[-1] == ("wallet.balances", {"includeHidden": True})
+
+
 def test_balances_rejects_unknown_chain(client: _FakeClient) -> None:
     result = runner.invoke(wallet_cmd.app, ["balances", "--chain", "solana"])
     assert result.exit_code != 0

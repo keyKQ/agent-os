@@ -429,6 +429,106 @@ class TestWalletSyncer:
 class TestLedgerRules:
     """The rules that keep the ledger honest across sweeps and rebuilds."""
 
+    async def test_failed_balance_read_keeps_last_good_and_opening(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        """A balanceOf the node does not answer must not become 0 in the ledger.
+
+        Before this rule, a flaky RPC wrote 0, and the opening reconciliation
+        then read "the wallet holds nothing" and deleted the position's lots.
+        """
+        wallet = _wallet(created_block=None)
+        syncer.initial_lookback = 500
+        chain.set_erc20(USDC, WALLET, 5)
+        await syncer.sync(wallet, BASE)
+        assert ledger.get_balance(8453, WALLET, USDC) == 5
+        opening = ledger.opening_entry(8453, WALLET, USDC)
+        assert opening is not None and opening["amount_out_raw"] == "5"
+        assert ledger.chain_reads(WALLET, 8453)[0]["status"] == "ok"
+
+        chain.fail_balance_of.add(USDC)
+        await syncer.sync(wallet, BASE)
+        # The row is last-good, the opening still stands, and the read says so.
+        assert ledger.get_balance(8453, WALLET, USDC) == 5
+        assert ledger.opening_entry(8453, WALLET, USDC) == opening
+        assert [p.amount_raw for p in ledger.positions(WALLET) if p.token == USDC] == [5]
+        read = ledger.chain_reads(WALLET, 8453)[0]
+        assert read["status"] == "partial" and "1 token" in read["reason"]
+
+        chain.fail_balance_of.clear()
+        await syncer.sync(wallet, BASE)
+        assert ledger.chain_reads(WALLET, 8453)[0]["status"] == "ok"
+
+    async def test_rebuild_skips_unreadable_token(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        wallet = _wallet(created_block=None)
+        syncer.full_lookback = 500
+        chain.set_erc20(USDC, WALLET, 7)
+        chain.set_erc20(WETH, WALLET, 3)
+        chain.fail_balance_of.add(WETH)
+        await syncer.sync(wallet, BASE, full=True)
+        # USDC got its opening; WETH got neither an opening nor a phantom 0.
+        assert ledger.opening_entry(8453, WALLET, USDC) is not None
+        assert ledger.opening_entry(8453, WALLET, WETH) is None
+        assert ledger.get_balance(8453, WALLET, WETH) is None
+        assert ledger.chain_reads(WALLET, 8453)[0]["status"] == "partial"
+
+    async def test_discovery_widens_the_scan_set(
+        self, ledger: Ledger, chain: FakeChain, prices_fake: FakePrices
+    ) -> None:
+        """A token the sweep never saw, but an indexer knows, is read and booked."""
+        hidden = "0x9999000000000000000000000000000000000001"
+        chain.tokens[hidden] = ("HID", "Hidden", 18)
+        chain.set_erc20(hidden, WALLET, 11)
+        asked: list[tuple[int, str]] = []
+
+        async def discover(spec, address: str) -> list[str]:
+            asked.append((spec.chain_id, address))
+            return [hidden.upper()]  # any case; the syncer lower-cases
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "mainnet.base.org":
+                return chain.handle(request)
+            return prices_fake.handle(request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            prices = PriceService(http=http, ttl_s=0)
+            evm = EvmClient("https://mainnet.base.org", http=http)
+
+            async def token_meta(spec, address: str) -> TokenMeta:
+                if address == NATIVE_ADDRESS:
+                    return native_token(spec)
+                return TokenMeta(spec.chain_id, address, "HID", "Hidden", 18)
+
+            syncer = WalletSyncer(
+                ledger,
+                prices,
+                evm_for=lambda spec: evm,
+                token_meta=token_meta,
+                discover_tokens=discover,
+            )
+            wallet = _wallet(created_block=None)
+            syncer.initial_lookback = 100
+            await syncer.sync(wallet, BASE)
+        assert asked and asked[0] == (8453, wallet.address)
+        assert ledger.get_balance(8453, WALLET, hidden) == 11
+        opening = ledger.opening_entry(8453, WALLET, hidden)
+        assert opening is not None and opening["amount_out_raw"] == "11"
+
+    async def test_discovery_failure_is_advisory(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        async def broken(spec, address: str) -> list[str]:
+            raise RuntimeError("indexer down")
+
+        syncer._discover_tokens = broken
+        wallet = _wallet(created_block=None)
+        chain.set_erc20(USDC, WALLET, 2)
+        await syncer.sync(wallet, BASE)
+        assert ledger.get_balance(8453, WALLET, USDC) == 2
+        assert ledger.chain_reads(WALLET, 8453)[0]["status"] == "ok"
+
     async def test_opening_is_never_double_counted(
         self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
     ) -> None:
@@ -607,6 +707,49 @@ class TestLedgerRules:
 
 
 class TestLedgerMigration:
+    def test_version_two_gains_the_hidden_columns(self, tmp_path) -> None:
+        path = tmp_path / "trading.sqlite"
+        first = Ledger(path)
+        first.upsert_token(8453, USDC, symbol="USDC", name="USD Coin", decimals=6)
+        for column in ("hidden", "hidden_by", "touched", "classified_at"):
+            first._conn.execute(f"ALTER TABLE tokens DROP COLUMN {column}")  # noqa: S608
+        first._conn.execute("UPDATE schema_version SET version = 2")
+        first.close()
+        reopened = Ledger(path)
+        row = reopened.get_token(8453, USDC)
+        assert row and row["hidden"] == 0 and row["touched"] == 0
+        assert reopened._conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        reopened.close()
+
+    def test_hidden_helpers(self, ledger: Ledger) -> None:
+        ledger.upsert_token(8453, USDC, symbol="USDC", name="USD Coin", decimals=6)
+        ledger.upsert_token(8453, WETH, symbol="WETH", name="Wrapped Ether", decimals=18)
+        ledger.set_token_hidden(8453, USDC, True, by="auto", classified_at=1.0)
+        ledger.set_token_hidden(8453, WETH, True, by="user", classified_at=1.0)
+        assert ledger.hidden_tokens(8453) == {USDC, WETH} and ledger.hidden_tokens(4663) == set()
+        # The classifier cannot reverse the user; the user can reverse anything.
+        ledger.set_token_hidden(8453, WETH, False, by="auto", classified_at=2.0)
+        assert WETH in ledger.hidden_tokens(8453)
+        ledger.set_token_hidden(8453, USDC, False, by="user", classified_at=2.0)
+        assert ledger.get_token(8453, USDC)["hidden_by"] == "user"  # type: ignore[index]
+        # A deliberate act shows a token and marks it touched.
+        ledger.touch_token(8453, WETH)
+        row = ledger.get_token(8453, WETH)
+        assert row and row["hidden"] == 0 and row["touched"] == 1 and row["hidden_by"] is None
+        # "Spent" means an outgoing entry or any order naming the token.
+        assert ledger.token_was_spent(8453, USDC) is False
+        ledger.insert_entry(
+            ts=1.0,
+            chain_id=8453,
+            wallet=WALLET,
+            kind="withdraw",
+            tx_hash="0x" + "2" * 64,
+            log_index=0,
+            token_in=USDC,
+            amount_in_raw=1,
+        )
+        assert ledger.token_was_spent(8453, USDC) is True
+
     def test_version_one_duplicate_openings_are_collapsed(self, tmp_path) -> None:
         path = tmp_path / "trading.sqlite"
         first = Ledger(path)

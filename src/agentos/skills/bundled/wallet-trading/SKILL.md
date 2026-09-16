@@ -126,9 +126,10 @@ agentos trade status --json                      # provider, API key, vault, lim
 agentos trade provider [uniswap|kyber] --json    # show / switch the swap provider
 agentos trade probe [--provider kyber] --json    # reachable? blocked: true = geo-restricted (exit 1 when not ok)
 agentos wallet list --json                       # ★ primary = default wallet
-agentos wallet balances [ADDR] [--chain base|robinhood] --json
-agentos trade portfolio [--wallet ADDR] --json   # holdings, cost basis, realized/unrealized PnL
-agentos trade history [--wallet ADDR] [--chain C] [--kind swap|deposit|withdraw|gas|approval] [--limit N] --json
+agentos wallet balances [ADDR] [--chain base|robinhood] [--refresh] [--hidden] --json   # ledger view; --refresh re-reads the chain (≤ once/10 s per wallet); chains[].status != "ok" = last-good amounts; junk airdrops are hidden (hiddenCount) unless --hidden
+agentos trade portfolio [--wallet ADDR] [--hidden] --json   # holdings, cost basis, realized/unrealized PnL; junk never counts, --hidden lists it
+agentos trade history [--wallet ADDR] [--chain C] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden] --json
+agentos trade hide --chain C ADDR / unhide --chain C ADDR   # operator-only: the user's own say on a token; quoting a hidden token also shows it again
 agentos trade limits [ADDR] --json               # guardrails + today's spend (default: primary wallet)
 agentos trade sync [--wallet ADDR] [--full] --json   # re-read the chain into the ledger (--full rebuilds it)
 

@@ -18,7 +18,13 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useTradingUi, type BookTab } from '~/stores/trading-ui'
-import { useHistory, useOrderDecision, useOrders, usePortfolio } from '~/stores/trading'
+import {
+  useHistory,
+  useOrderDecision,
+  useOrders,
+  usePortfolio,
+  useTokenVisibility,
+} from '~/stores/trading'
 import { History } from '../History'
 import { Holdings } from '../Holdings'
 import {
@@ -95,7 +101,9 @@ export function Book({
       ? 'all'
       : walletSel
   const walletAddress = selected === 'all' ? undefined : selected
-  const portfolio = usePortfolio(walletAddress, !collapsed)
+  const [showHidden, setShowHidden] = useState(false)
+  const portfolio = usePortfolio(walletAddress, !collapsed, showHidden)
+  const tokenVisibility = useTokenVisibility()
   const orders = useOrders(undefined, !collapsed && tab === 'orders')
   const history = useHistory(walletAddress, undefined, !collapsed && tab === 'history')
   const totals = portfolio.data?.totals ?? EMPTY_TOTALS
@@ -362,6 +370,13 @@ export function Book({
               selected={picked}
               onSelect={setPicked}
               showChain
+              hiddenCount={portfolio.data?.hiddenCount ?? 0}
+              showHidden={showHidden}
+              hiddenLoading={showHidden && portfolio.isPlaceholderData}
+              onToggleHidden={() => setShowHidden((v) => !v)}
+              onSetHidden={(h, hidden) =>
+                tokenVisibility.mutate({ chainId: h.chainId, address: h.token.address, hidden })
+              }
               onSwap={(h) => {
                 setPrefill({
                   chainId: h.chainId,

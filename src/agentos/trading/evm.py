@@ -301,7 +301,13 @@ class EvmClient:
             await self.eth_call(token, encode_call(SEL_BALANCE_OF, pad_address(owner)))
         )
 
-    async def erc20_balances(self, owner: str, tokens: Iterable[str]) -> dict[str, int]:
+    async def erc20_balances(self, owner: str, tokens: Iterable[str]) -> dict[str, int | None]:
+        """``balanceOf`` for every token in one batch.
+
+        A token whose read failed maps to ``None``, never to ``0``: a balance
+        the node could not answer is unknown, and a caller that wrote it down
+        as zero would erase a real holding from the ledger.
+        """
         token_list = [t.lower() for t in tokens]
         if not token_list:
             return {}
@@ -312,10 +318,13 @@ class EvmClient:
             )
             for token in token_list
         ]
-        out: dict[str, int] = {}
+        out: dict[str, int | None] = {}
         results = await self._batch_lenient(calls)
         for token, result in zip(token_list, results, strict=True):
-            out[token] = decode_uint(result) if isinstance(result, str) else 0
+            try:
+                out[token] = decode_uint(result) if isinstance(result, str) else None
+            except ValueError:
+                out[token] = None
         return out
 
     async def _batch_lenient(self, calls: Sequence[tuple[str, Sequence[Any]]]) -> list[Any]:

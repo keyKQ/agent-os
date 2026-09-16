@@ -14,6 +14,7 @@ import {
   useOrders,
   usePortfolio,
   useSync,
+  useTokenVisibility,
   useTradingInvalidation,
   useTradingStatus,
   useWalletMutation,
@@ -248,7 +249,9 @@ function Desk({
       : chosen
 
   const walletAddress = selected === 'all' ? undefined : selected
-  const portfolio = usePortfolio(walletAddress)
+  const [showHidden, setShowHidden] = useState(false)
+  const portfolio = usePortfolio(walletAddress, true, showHidden)
+  const tokenVisibility = useTokenVisibility()
   const orders = useOrders(undefined)
   const history = useHistory(walletAddress, chain ?? undefined, tab === 'history')
   const limitsWallet: Wallet | null =
@@ -467,6 +470,17 @@ function Desk({
                     selected={picked}
                     onSelect={setPicked}
                     showChain={chain === null}
+                    hiddenCount={portfolio.data?.hiddenCount ?? 0}
+                    showHidden={showHidden}
+                    hiddenLoading={showHidden && portfolio.isPlaceholderData}
+                    onToggleHidden={() => setShowHidden((v) => !v)}
+                    onSetHidden={(h, hidden) =>
+                      tokenVisibility.mutate({
+                        chainId: h.chainId,
+                        address: h.token.address,
+                        hidden,
+                      })
+                    }
                     onSwap={(h) =>
                       setPrefill({
                         chainId: h.chainId,

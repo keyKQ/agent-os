@@ -39,6 +39,20 @@ export interface Balance {
   priceUsd: number | null
   valueUsd: number | null
   change24hPct: number | null
+  /** When the engine last read this row from the chain (ms). */
+  updatedAt?: number
+}
+
+/**
+ * How the engine's last chain read of one wallet/chain went. Anything but
+ * `ok` means the amounts on that chain are the last good values, not fresh.
+ */
+export interface ChainRead {
+  chainId: number
+  wallet: string
+  status: 'ok' | 'partial' | 'failed'
+  reason: string | null
+  readAt: number
 }
 
 export type OrderStatus =
@@ -122,6 +136,8 @@ export interface Holding {
   realizedUsd: number
   change24hPct: number | null
   allocationPct: number
+  /** Junk the engine (or the user) hid; only present when asked for. Never counted. */
+  hidden?: boolean
 }
 
 export interface Totals {
@@ -137,6 +153,8 @@ export interface Totals {
 export interface Portfolio {
   totals: Totals
   holdings: Holding[]
+  /** Held junk tokens left out of `holdings` and the totals. */
+  hiddenCount?: number
   wallets: { wallet: Wallet; totals: Totals }[]
   updatedAt: number
   syncing: boolean

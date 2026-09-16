@@ -850,6 +850,30 @@
 .trd-table td.trd-cell--muted {
   color: var(--muted-foreground);
 }
+/* A junk token shown on request: present, but unmistakably not counted. */
+.trd-table tbody tr[data-hidden='true'] td {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+}
+.trd-table tbody tr[data-hidden='true'] .trd-value::before {
+  display: none;
+}
+/* The tag leads the name line, so a marked row is exactly as tall as any
+   other and the symbol line keeps its badges. */
+.trd-asset__tag {
+  margin-right: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+.trd-asset__tag::after {
+  content: '·';
+  margin-left: 6px;
+  color: var(--dim);
+  letter-spacing: 0;
+}
 .trd-table td[data-tone='up'] {
   color: var(--trd-up);
 }
@@ -2546,42 +2570,84 @@ tr:focus-within .trd-row__actions {
   }
 }
 
-/* What the table is not showing, said as a footer of the table rather than a
-   button dangling off its bottom edge. */
-.trd-dustbar {
+/* What the table is not showing: one bar above it, a label set like the
+   column headers, and one filter chip per kind. A pressed chip means those
+   rows are in the table right below, marked. It sits above the sticky header
+   so it scrolls away with the top of the table, like a toolbar would. */
+.trd-hiddenbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 12px 7px 14px;
-  border-top: 1px solid var(--hairline);
+  gap: 12px;
+  min-height: 30px;
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--hairline);
   background: color-mix(in srgb, var(--foreground) 2.5%, transparent);
 }
-.trd-dustbar__text {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
+.trd-hiddenbar__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   color: var(--dim);
 }
-.trd-dust {
+.trd-hiddenbar__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+.trd-chip {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  height: 22px;
-  padding: 0 9px;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px 0 7px;
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   font-size: 11px;
   font-weight: 500;
   color: var(--muted-foreground);
+  background: transparent;
   transition:
     color 120ms ease-out,
-    background-color 120ms ease-out;
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
 }
-.trd-dust:hover {
+.trd-chip__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-chip:hover {
   color: var(--foreground);
   background: color-mix(in srgb, var(--foreground) 7%, transparent);
 }
-.trd-dust:focus-visible {
+.trd-chip[aria-pressed='true'] {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.trd-chip[aria-pressed='true'] .trd-chip__count {
+  color: var(--primary);
+}
+.trd-chip:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
+}
+/* Pressed, rows not here yet: the chip breathes so the click is seen to have
+   landed. Pricing 70 junk tokens on request takes a moment. */
+.trd-chip[aria-busy='true'] {
+  animation: trd-chip-breathe 900ms ease-in-out infinite;
+}
+@keyframes trd-chip-breathe {
+  50% {
+    background: color-mix(in srgb, var(--primary) 28%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .trd-chip[aria-busy='true'] {
+    animation: none;
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
 }

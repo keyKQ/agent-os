@@ -21,6 +21,7 @@ from tests.test_trading.fakes import (
     WALLET,
     WETH,
     FakeChain,
+    FakeIndexer,
     FakePrices,
     FakeUniswap,
     fake_sign_tx,
@@ -127,11 +128,17 @@ def fake_prices() -> FakePrices:
 
 
 @pytest.fixture
+def fake_indexer() -> FakeIndexer:
+    return FakeIndexer()
+
+
+@pytest.fixture
 def transport(
     base_chain: FakeChain,
     robinhood_chain: FakeChain,
     fake_uniswap: FakeUniswap,
     fake_prices: FakePrices,
+    fake_indexer: FakeIndexer,
 ) -> httpx.MockTransport:
     return make_transport(
         chains={
@@ -140,6 +147,7 @@ def transport(
         },
         uniswap=fake_uniswap,
         prices=fake_prices,
+        indexer=fake_indexer,
     )
 
 

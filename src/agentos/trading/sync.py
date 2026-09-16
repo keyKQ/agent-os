@@ -20,6 +20,14 @@ Three rules keep the ledger honest:
   tables (``rebuild_logs``/``rebuild_state``) while the live ledger keeps
   serving; the swap-in happens in one transaction; an interrupted sweep
   resumes from where it stopped.
+* **A failed read is not a zero.** A ``balanceOf`` the node did not answer
+  leaves the stored balance as it was and marks the wallet/chain read
+  ``partial`` (``chain_reads``), so a flaky RPC can neither empty a holding
+  nor rewrite its opening.
+
+Which ERC-20s get read is the union of what the ledger has met and what an
+indexer (``discovery.py``) says the wallet holds; the indexer only ever adds
+addresses to the scan set, every number still comes from the RPC.
 """
 
 from __future__ import annotations
@@ -44,6 +52,13 @@ log = structlog.get_logger(__name__)
 TokenMetaFn = Callable[[ChainSpec, str], Awaitable[TokenMeta]]
 EvmFn = Callable[[ChainSpec], EvmClient]
 WatchFn = Callable[[ChainSpec], Awaitable[list[str]]]
+# (chain, wallet address) -> ERC-20 addresses an indexer says the wallet holds.
+DiscoverFn = Callable[[ChainSpec, str], Awaitable[list[str]]]
+
+# ``chain_reads.status`` vocabulary.
+READ_OK = "ok"
+READ_PARTIAL = "partial"
+READ_FAILED = "failed"
 
 # An imported wallet's first sweep: about a day on Base, an hour on Robinhood.
 DEFAULT_INITIAL_LOOKBACK = 50_000
@@ -55,6 +70,16 @@ REBUILD_WINDOW_SPANS = 10
 NATIVE_DUST_WEI = 10**13
 
 Priced = tuple[float | None, str]
+
+
+@dataclass
+class BalanceRead:
+    """What one ERC-20 balance refresh did to the ledger."""
+
+    # Some stored ``raw`` moved.
+    changed: bool = False
+    # Tokens the node did not answer for; their rows were left as they were.
+    failed: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -78,6 +103,7 @@ class WalletSyncer:
         evm_for: EvmFn,
         token_meta: TokenMetaFn,
         watch_tokens: WatchFn | None = None,
+        discover_tokens: DiscoverFn | None = None,
         now: Callable[[], float] = time.time,
         initial_lookback: int = DEFAULT_INITIAL_LOOKBACK,
         full_lookback: int = DEFAULT_FULL_LOOKBACK,
@@ -87,16 +113,35 @@ class WalletSyncer:
         self._evm_for = evm_for
         self._token_meta = token_meta
         self._watch_tokens = watch_tokens
+        self._discover_tokens = discover_tokens
         self._now = now
         self.initial_lookback = initial_lookback
         self.full_lookback = full_lookback
         self._block_ts: dict[tuple[int, int], int] = {}
         # Progress of the rebuild in flight (for trading.status), else None.
         self.rebuild_progress: dict[str, Any] | None = None
+        # Whether the pass in flight reads hidden (junk) tokens too.
+        self.include_hidden = False
 
     # ── public ─────────────────────────────────────────────────────────
 
-    async def sync(self, wallet: WalletRecord, chain: ChainSpec, *, full: bool = False) -> bool:
+    async def sync(
+        self,
+        wallet: WalletRecord,
+        chain: ChainSpec,
+        *,
+        full: bool = False,
+        include_hidden: bool = False,
+    ) -> bool:
+        """One incremental pass for a wallet/chain; True if the ledger moved.
+
+        Hidden (junk) tokens stay out of the balance read, the opening
+        reconciliation and the price snapshot unless ``include_hidden`` — the
+        service passes it once an hour, so junk still cannot drift for long.
+        Their transfers are always recorded: the sweep does not know what is
+        junk, and must not.
+        """
+        self.include_hidden = include_hidden
         address = wallet.key
         # A rebuild that was interrupted (gateway restart) finishes first: its
         # shadow sweep is already partly done, and the live ledger it will
@@ -121,11 +166,28 @@ class WalletSyncer:
             logs = await evm.transfer_logs(address, from_block=start, to_block=latest)
             changed = await self._record_transfers(wallet, chain, logs) or changed
         changed = await self._reconcile_native(wallet, chain, evm) or changed
-        await self._refresh_balances(wallet, chain, evm)
+        read = await self._refresh_balances(wallet, chain, evm)
+        changed = read.changed or changed
         changed = await self._reconcile_openings(wallet, chain) or changed
         await self._snapshot_prices(wallet, chain)
         self.ledger.set_sync_state(chain.chain_id, address, last_block=latest, oldest_block=oldest)
+        self._record_read(chain, address, read)
         return changed
+
+    def _record_read(self, chain: ChainSpec, wallet: str, read: BalanceRead) -> None:
+        if read.failed:
+            self.ledger.set_chain_read(
+                chain.chain_id,
+                wallet,
+                READ_PARTIAL,
+                f"{len(read.failed)} token balance(s) could not be read",
+            )
+        else:
+            self.ledger.set_chain_read(chain.chain_id, wallet, READ_OK)
+
+    def record_failure(self, chain: ChainSpec, wallet: str, reason: str) -> None:
+        """The node could not be reached at all: every row on the chain is last-good."""
+        self.ledger.set_chain_read(chain.chain_id, wallet, READ_FAILED, reason[:200])
 
     async def rebuild(self, wallet: WalletRecord, chain: ChainSpec) -> bool:
         """Rebuild one wallet/chain from the chain: sweep into the shadow, then swap in."""
@@ -245,7 +307,13 @@ class WalletSyncer:
                     tokens.add(token)
         if self._watch_tokens is not None:
             tokens.update(t.lower() for t in await self._watch_tokens(chain) if t)
-        erc20_now = await evm.erc20_balances(wallet.address, sorted(tokens)) if tokens else {}
+        tokens.update(await self._discovered(chain, wallet))
+        tokens.discard(NATIVE_ADDRESS)
+        read_now = await evm.erc20_balances(wallet.address, sorted(tokens)) if tokens else {}
+        # A token the node did not answer for gets no opening and keeps the
+        # balance row it had: unknown is not zero.
+        unread = sorted(t for t, raw in read_now.items() if raw is None)
+        erc20_now: dict[str, int] = {t: raw for t, raw in read_now.items() if raw is not None}
         net: dict[str, int] = defaultdict(int)
         for g in groups:
             for token, amount in g.ins.items():
@@ -339,6 +407,7 @@ class WalletSyncer:
                 chain.chain_id, address, last_block=latest, oldest_block=oldest
             )
             self.ledger.clear_rebuild(chain.chain_id, address)
+        self._record_read(chain, address, BalanceRead(changed=True, failed=unread))
         await self._snapshot_prices(wallet, chain)
 
     # ── transfers ──────────────────────────────────────────────────────
@@ -798,7 +867,7 @@ class WalletSyncer:
         return changed
 
     async def tokens_of_interest(self, wallet: str, chain: ChainSpec) -> list[str]:
-        """ERC-20s worth reading for a wallet: held, seen, or well-known on the chain."""
+        """ERC-20s worth reading for a wallet: held, seen, well-known, or indexed."""
         tokens: set[str] = set()
         for pos in self.ledger.positions(wallet):
             if pos.chain_id == chain.chain_id and pos.token != NATIVE_ADDRESS:
@@ -810,7 +879,23 @@ class WalletSyncer:
             for token in await self._watch_tokens(chain):
                 if token and token != NATIVE_ADDRESS:
                     tokens.add(token.lower())
+        tokens.update(await self._discovered(chain, wallet))
+        tokens.discard(NATIVE_ADDRESS)
+        if not self.include_hidden:
+            tokens -= self.ledger.hidden_tokens(chain.chain_id)
         return sorted(tokens)
+
+    async def _discovered(self, chain: ChainSpec, wallet: str | WalletRecord) -> set[str]:
+        """What an indexer says the wallet holds; empty when there is no answer."""
+        if self._discover_tokens is None:
+            return set()
+        address = wallet.address if isinstance(wallet, WalletRecord) else wallet
+        try:
+            found = await self._discover_tokens(chain, address)
+        except Exception as exc:  # discovery is advisory; the sweep must not fail on it
+            log.debug("trading.discovery_error", chain=chain.key, error=str(exc))
+            return set()
+        return {t.lower() for t in found if t}
 
     async def ensure_opening(
         self, wallet: WalletRecord, chain: ChainSpec, token: str, evm: EvmClient
@@ -831,13 +916,30 @@ class WalletSyncer:
 
     async def _refresh_balances(
         self, wallet: WalletRecord, chain: ChainSpec, evm: EvmClient
-    ) -> None:
+    ) -> BalanceRead:
+        """Re-read every ERC-20 of interest; a failed read leaves its row alone."""
+        read = BalanceRead()
         tokens = await self.tokens_of_interest(wallet.key, chain)
         if not tokens:
-            return
+            return read
         balances = await evm.erc20_balances(wallet.address, tokens)
         for token, raw in balances.items():
+            if raw is None:
+                read.failed.append(token)
+                continue
+            before = self.ledger.get_balance(chain.chain_id, wallet.key, token)
+            if before != raw:
+                read.changed = True
             self.ledger.set_balance(chain.chain_id, wallet.key, token, raw)
+        if read.failed:
+            log.warning(
+                "trading.balance_read_incomplete",
+                chain=chain.key,
+                wallet=wallet.address,
+                failed=len(read.failed),
+                scanned=len(tokens),
+            )
+        return read
 
     async def _snapshot_prices(self, wallet: WalletRecord, chain: ChainSpec) -> None:
         tokens = [

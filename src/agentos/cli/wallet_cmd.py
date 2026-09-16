@@ -441,6 +441,10 @@ def wallet_primary(
 def wallet_balances(
     address: str | None = typer.Argument(None, help="Wallet address (default: every wallet)"),
     chain: str | None = typer.Option(None, "--chain", help="base or robinhood"),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="Re-read the chain first instead of showing the last sync"
+    ),
+    hidden: bool = typer.Option(False, "--hidden", help="Include hidden (junk) tokens"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Show token balances with USD values."""
@@ -450,6 +454,10 @@ def wallet_balances(
         params["address"] = address
     if chain:
         params["chainId"] = chain_id_from_arg(chain)
+    if refresh:
+        params["refresh"] = True
+    if hidden:
+        params["includeHidden"] = True
 
     async def _run(client):
         return await client.call("wallet.balances", params)
@@ -469,12 +477,28 @@ def wallet_balances(
     for row in rows:
         if not isinstance(row, dict):
             continue
+        symbol = markup_escape(token_symbol(row.get("token")))
         table.add_row(
             chain_label(row.get("chainId")),
-            markup_escape(token_symbol(row.get("token"))),
+            f"[dim]{symbol} (hidden)[/dim]" if row.get("hidden") else symbol,
             amount_text(row.get("amount")),
             money(row.get("priceUsd")),
             money(row.get("valueUsd")),
             percent(row.get("change24hPct")),
         )
     console.print(table)
+    hidden_count = int((result.get("hiddenCount") or 0) if isinstance(result, dict) else 0)
+    if hidden_count and not hidden:
+        noun = "token" if hidden_count == 1 else "tokens"
+        console.print(
+            f"[dim]{hidden_count} junk {noun} hidden; add --hidden to list them, "
+            "or `agentos trade unhide` to keep one.[/dim]"
+        )
+    reads = result.get("chains", []) if isinstance(result, dict) else []
+    stale = [r for r in reads if isinstance(r, dict) and r.get("status") != "ok"]
+    for read in stale:
+        note = f" ({read['reason']})" if read.get("reason") else ""
+        console.print(
+            f"[yellow]{chain_label(read.get('chainId'))}: last chain read "
+            f"{read.get('status')}{note}; amounts shown are the last good values.[/yellow]"
+        )

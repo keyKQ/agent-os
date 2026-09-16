@@ -41,6 +41,11 @@ export function Holdings({
   onSelect,
   onSwap,
   showChain,
+  hiddenCount = 0,
+  showHidden = false,
+  hiddenLoading = false,
+  onToggleHidden,
+  onSetHidden,
 }: {
   holdings: Holding[]
   loading: boolean
@@ -48,14 +53,28 @@ export function Holdings({
   onSelect: (holding: Holding | null) => void
   onSwap: (holding: Holding) => void
   showChain: boolean
+  /** Junk tokens the engine keeps out of `holdings` (and the totals). */
+  hiddenCount?: number
+  /** Whether `holdings` currently includes those, flagged `hidden`. */
+  showHidden?: boolean
+  /** The junk rows are on their way (they are priced on request, which takes a moment). */
+  hiddenLoading?: boolean
+  onToggleHidden?: () => void
+  /** The user's own hide/show of one token; final as far as the engine is concerned. */
+  onSetHidden?: (holding: Holding, hidden: boolean) => void
 }) {
   const [sort, setSort] = useState<{ key: HoldingSort; dir: 'asc' | 'desc' }>({
     key: 'value',
     dir: 'desc',
   })
   const [showDust, setShowDust] = useState(false)
-  const { kept, dust } = splitDust(holdings)
-  const rows = sortHoldings(showDust ? holdings : kept, sort.key, sort.dir)
+  // Junk is not dust: it has no value to be under, so it is never in `dust`.
+  const { kept, dust } = splitDust(holdings.filter((h) => !h.hidden))
+  const junk = holdings.filter((h) => h.hidden)
+  // Each holding exactly once, whatever is folded open: a row that appeared
+  // twice would give React two children with one key, and React then leaves
+  // stale rows behind on the next toggle.
+  const rows = sortHoldings([...kept, ...(showDust ? dust : []), ...junk], sort.key, sort.dir)
 
   function toggle(key: HoldingSort) {
     setSort((s) =>
@@ -63,18 +82,56 @@ export function Holdings({
     )
   }
 
+  // One bar, above the table, for everything it is not showing: each kind is
+  // a filter chip with its count. Pressed = shown, and the rows appear right
+  // under the hand that pressed it. Nothing here is a setting.
+  const junkFilter = hiddenCount > 0 && onToggleHidden
+  const filters =
+    dust.length || junkFilter ? (
+      <div className="trd-hiddenbar" data-testid="hidden-bar">
+        <span className="trd-hiddenbar__label">{t('trading.holdings.hidden.label')}</span>
+        <div className="trd-hiddenbar__chips">
+          {dust.length ? (
+            <FilterChip
+              count={dust.length}
+              label={t('trading.holdings.hidden.dust')}
+              help={`${t('trading.holdings.hidden.dust.help')} ${formatUsd(DUST_USD)}`}
+              pressed={showDust}
+              onToggle={() => setShowDust((v) => !v)}
+              testId="dust-toggle"
+            />
+          ) : null}
+          {junkFilter ? (
+            <FilterChip
+              count={hiddenCount}
+              label={t('trading.holdings.hidden.junk')}
+              help={t('trading.holdings.hidden.junk.help')}
+              pressed={showHidden}
+              busy={hiddenLoading}
+              onToggle={onToggleHidden}
+              testId="junk-toggle"
+            />
+          ) : null}
+        </div>
+      </div>
+    ) : null
+
   if (!loading && holdings.length === 0) {
     return (
-      <Empty
-        icon={<Coins className="size-8" strokeWidth={1.25} aria-hidden />}
-        title={t('trading.holdings.empty')}
-        body={t('trading.holdings.empty.body')}
-      />
+      <>
+        {filters}
+        <Empty
+          icon={<Coins className="size-8" strokeWidth={1.25} aria-hidden />}
+          title={t('trading.holdings.empty')}
+          body={t('trading.holdings.empty.body')}
+        />
+      </>
     )
   }
 
   return (
     <div className="trd-tablewrap">
+      {filters}
       <table className="trd-table" aria-label={t('trading.holdings.title')}>
         <thead>
           <tr>
@@ -151,10 +208,15 @@ export function Holdings({
                     key={key}
                     aria-selected={isSelected}
                     data-testid="holding-row"
+                    data-hidden={h.hidden ? 'true' : undefined}
                     onClick={() => onSelect(isSelected ? null : h)}
                   >
                     <td className="trd-col--asset">
-                      <AssetCell token={h.token} showChain={showChain} />
+                      <AssetCell
+                        token={h.token}
+                        showChain={showChain}
+                        tag={h.hidden ? t('trading.holdings.hidden.junk') : undefined}
+                      />
                     </td>
                     <td className="trd-col--amount" title={formatAmount(h.amount, 18)}>
                       <Tick value={h.amount}>{formatAmountCompact(h.amount)}</Tick>
@@ -200,6 +262,41 @@ export function Holdings({
                         {isWrappedEth(h.token) && h.wallet ? (
                           <UnwrapNote chainId={h.chainId} wallet={h.wallet} compact />
                         ) : null}
+                        {onSetHidden && !h.token.native ? (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`${
+                              h.hidden
+                                ? t('trading.holdings.showToken')
+                                : t('trading.holdings.hideToken')
+                            } ${h.token.symbol}`}
+                            title={
+                              h.hidden
+                                ? t('trading.holdings.showToken')
+                                : t('trading.holdings.hideToken')
+                            }
+                            data-testid={h.hidden ? 'show-token' : 'hide-token'}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onSetHidden(h, !h.hidden)
+                            }}
+                          >
+                            {h.hidden ? (
+                              <Eye
+                                className="size-3.5 text-muted-foreground"
+                                strokeWidth={1.75}
+                                aria-hidden
+                              />
+                            ) : (
+                              <EyeOff
+                                className="size-3.5 text-muted-foreground"
+                                strokeWidth={1.75}
+                                aria-hidden
+                              />
+                            )}
+                          </Button>
+                        ) : null}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -239,30 +336,50 @@ export function Holdings({
               })}
         </tbody>
       </table>
-      {dust.length ? (
-        <div className="trd-dustbar">
-          <span className="trd-dustbar__text">
-            {dust.length}{' '}
-            {dust.length === 1 ? t('trading.holdings.dust.one') : t('trading.holdings.dust.many')}{' '}
-            {formatUsd(DUST_USD)} {t('trading.holdings.dust.hidden')}
-          </span>
-          <button
-            type="button"
-            className="trd-dust app-no-drag"
-            onClick={() => setShowDust((v) => !v)}
-            aria-pressed={showDust}
-            data-testid="dust-toggle"
-          >
-            {showDust ? (
-              <EyeOff className="size-3" strokeWidth={2} aria-hidden />
-            ) : (
-              <Eye className="size-3" strokeWidth={2} aria-hidden />
-            )}
-            {showDust ? t('trading.holdings.dust.hide') : t('trading.holdings.dust.show')}
-          </button>
-        </div>
-      ) : null}
     </div>
+  )
+}
+
+/**
+ * A count + a noun, pressable. Reads as a filter on the table above it:
+ * off = these rows are folded away, on = they are in the table, marked.
+ */
+function FilterChip({
+  count,
+  label,
+  help,
+  pressed,
+  busy = false,
+  onToggle,
+  testId,
+}: {
+  count: number
+  label: string
+  help: string
+  pressed: boolean
+  busy?: boolean
+  onToggle: () => void
+  testId: string
+}) {
+  return (
+    <button
+      type="button"
+      className="trd-chip app-no-drag"
+      aria-pressed={pressed}
+      aria-busy={busy || undefined}
+      aria-label={`${count} ${label}: ${pressed ? t('trading.holdings.hidden.on') : t('trading.holdings.hidden.off')}`}
+      title={help}
+      onClick={onToggle}
+      data-testid={testId}
+    >
+      {pressed ? (
+        <Eye className="size-3" strokeWidth={2} aria-hidden />
+      ) : (
+        <EyeOff className="size-3" strokeWidth={2} aria-hidden />
+      )}
+      <span className="trd-chip__count">{count}</span>
+      <span className="trd-chip__label">{label}</span>
+    </button>
   )
 }
 

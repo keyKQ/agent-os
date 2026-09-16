@@ -92,10 +92,13 @@ export function AssetCell({
   token,
   showChain,
   sub,
+  tag,
 }: {
   token: Token
   showChain?: boolean
   sub?: string
+  /** A one-word state ahead of the name, e.g. "junk" for a row shown on request. */
+  tag?: string
 }) {
   // Not everything is indexed, and a row with two blanks in it reads as a bug.
   // Fall back to what is always true: the address, and that it has no name.
@@ -118,7 +121,10 @@ export function AssetCell({
             />
           ) : null}
         </span>
-        <span className="trd-asset__name">{name || t('trading.token.unknown')}</span>
+        <span className="trd-asset__name">
+          {tag ? <span className="trd-asset__tag">{tag}</span> : null}
+          {name || t('trading.token.unknown')}
+        </span>
       </span>
     </span>
   )

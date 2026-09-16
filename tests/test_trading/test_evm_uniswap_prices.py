@@ -117,6 +117,15 @@ class TestEvmClient:
         chain.calls.clear()
         assert await client.erc20_balances(WALLET, [USDC, WETH]) == {USDC: 42 * 10**6, WETH: 0}
 
+    async def test_failed_balance_read_is_none_not_zero(
+        self, client: EvmClient, chain: FakeChain
+    ) -> None:
+        """A per-item RPC error is 'unknown'; a zero here would erase a holding."""
+        chain.fail_balance_of.add(USDC)
+        assert await client.erc20_balances(WALLET, [USDC, WETH]) == {USDC: None, WETH: 0}
+        chain.batch_supported = False
+        assert await client.erc20_balances(WALLET, [USDC, WETH]) == {USDC: None, WETH: 0}
+
     async def test_rpc_error_surfaces(self, client: EvmClient) -> None:
         with pytest.raises(EvmRpcError) as info:
             await client.call("eth_nope")

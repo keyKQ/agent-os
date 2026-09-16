@@ -10,10 +10,12 @@ from agentos.trading.service import TradingError, TradingService
 from tests.test_trading.conftest import PASSWORD
 from tests.test_trading.fakes import (
     AAPL,
+    OTHER,
     ROUTER,
     USDC,
     WETH,
     FakeChain,
+    FakeIndexer,
     FakePrices,
     FakeUniswap,
     decode_fake_raw,
@@ -208,6 +210,141 @@ class TestTokensAndBalances:
         assert sum(h["allocationPct"] for h in portfolio["holdings"]) == pytest.approx(100.0)
         assert portfolio["wallets"][0]["wallet"]["address"] == wallet
         assert (await service.portfolio(wallet))["totals"]["valueUsd"] == pytest.approx(3000.0)
+
+    async def test_balances_read_the_ledger_and_refresh_is_throttled(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        """A client asking for balances never makes the engine read the chain.
+
+        Only the sync loop, a settled swap and an explicit refresh do — and a
+        refresh at most once per wallet per MANUAL_SYNC_MIN_S.
+        """
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        await service.sync_all()
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet)}
+        assert by_token[USDC]["amount"] == "1000"
+        assert by_token[USDC]["updatedAt"] > 0
+        reads = service.chain_reads(wallet)
+        assert {r["chainId"]: r["status"] for r in reads} == {8453: "ok", 4663: "ok"}
+
+        # The wallet moved on-chain; a plain read still shows the ledger.
+        base_chain.set_erc20(USDC, wallet, 2_000 * 10**6)
+        base_chain.calls.clear()
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet)}
+        assert by_token[USDC]["amount"] == "1000"
+        assert base_chain.calls == []
+
+        # refresh=True runs the real sync path and sees the change.
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet, refresh=True)}
+        assert by_token[USDC]["amount"] == "2000"
+        assert any(c["method"] == "eth_call" for c in base_chain.calls)
+
+        # ...but not again within the throttle window.
+        base_chain.set_erc20(USDC, wallet, 3_000 * 10**6)
+        base_chain.calls.clear()
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet, refresh=True)}
+        assert by_token[USDC]["amount"] == "2000"
+        assert base_chain.calls == []
+
+    async def test_junk_airdrop_is_hidden_until_someone_means_it(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        """An unlisted, unpooled token that just arrived stays out of sight.
+
+        Its ledger rows are real (the balance is), so it still reconciles;
+        it is simply not shown, counted, priced or scanned every tick.
+        """
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        junk = "0x9999000000000000000000000000000000000077"
+        base_chain.tokens[junk] = ("CLAIM", "Visit site to claim", 18)
+        base_chain.set_erc20(junk, wallet, 5 * 10**18)
+        base_chain.add_transfer(token=junk, sender=OTHER, recipient=wallet, amount=5 * 10**18)
+        await service.sync_all()
+
+        # Out of balances, portfolio and history; counted; back on request.
+        assert not any(b["token"]["address"] == junk for b in await service.balances(wallet))
+        assert service.hidden_balance_count(wallet) == 1
+        portfolio = await service.portfolio(wallet)
+        assert portfolio["hiddenCount"] == 1
+        assert not any(h["token"]["address"] == junk for h in portfolio["holdings"])
+        assert portfolio["totals"]["valueUsd"] == pytest.approx(3000.0)
+        deposits = service.history(wallet=wallet, kind="deposit")["entries"]
+        assert not any((e["tokenOut"] or {}).get("address") == junk for e in deposits)
+        assert any(
+            (e["tokenOut"] or {}).get("address") == junk
+            for e in service.history(wallet=wallet, kind="deposit", include_hidden=True)["entries"]
+        )
+        shown = await service.portfolio(wallet, include_hidden=True)
+        junk_row = next(h for h in shown["holdings"] if h["token"]["address"] == junk)
+        assert junk_row["hidden"] is True and junk_row["allocationPct"] == 0.0
+        assert shown["totals"]["valueUsd"] == pytest.approx(3000.0)
+
+        # The fast lane no longer reads it; the hourly pass does.
+        base_chain.calls.clear()
+        await service.sync_all()
+        reads = [c["params"][0]["to"] for c in base_chain.calls if c["method"] == "eth_call"]
+        assert junk not in reads
+        service._hidden_sync_at = 0.0
+        base_chain.calls.clear()
+        await service.sync_all()
+        reads = [c["params"][0]["to"] for c in base_chain.calls if c["method"] == "eth_call"]
+        assert junk in reads
+
+        # Quoting it is meaning it: it comes back, for good.
+        await service.quote(chain=BASE, wallet=None, token_in=junk, token_out="ETH", amount_in="1")
+        assert any(b["token"]["address"] == junk for b in await service.balances(wallet))
+        assert service.hidden_balance_count(wallet) == 0
+
+        # The user's own hide is final: the classifier does not argue.
+        token = await service.set_token_hidden(BASE, junk, True)
+        assert token["hidden"] is True and token["hiddenBy"] == "user"
+        await service.curator.review(BASE, junk, force=True)
+        assert service.hidden_balance_count(wallet) == 1
+        with pytest.raises(TradingError, match="cannot be hidden"):
+            await service.set_token_hidden(BASE, NATIVE_ADDRESS, True)
+        assert _events(service, "trading.changed")[-1]["reason"] == "token"
+
+    async def test_unreachable_node_marks_the_chain_failed(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        await service.sync_all()
+        base_chain.fail_methods.add("eth_blockNumber")
+        base_chain.set_erc20(USDC, wallet, 0)
+        await service.sync_all()
+        read = {r["chainId"]: r for r in service.chain_reads(wallet)}
+        assert read[8453]["status"] == "failed" and "node unavailable" in read[8453]["reason"]
+        assert read[4663]["status"] == "ok"
+        # Nothing on the failed chain was rewritten from a read that never happened.
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet, 8453)}
+        assert by_token[USDC]["amount"] == "1000"
+
+    async def test_indexer_holdings_reach_the_ledger(
+        self, funded_service: TradingService, base_chain: FakeChain, fake_indexer: FakeIndexer
+    ) -> None:
+        """A token the sweep never saw shows up because Blockscout listed it."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        hidden = "0x9999000000000000000000000000000000000002"
+        base_chain.tokens[hidden] = ("HID", "Hidden", 18)
+        base_chain.set_erc20(hidden, wallet, 4 * 10**18)
+        fake_indexer.hold(wallet, hidden, 4 * 10**18)
+        await service.sync_all()
+        # It reached the ledger — and, having no pool anywhere, was judged junk:
+        # out of the default view, in the count, back on request.
+        assert not any(b["token"]["address"] == hidden for b in await service.balances(wallet))
+        assert service.hidden_balance_count(wallet, 8453) == 1
+        shown = await service.balances(wallet, 8453, include_hidden=True)
+        by_token = {b["token"]["address"]: b for b in shown}
+        assert by_token[hidden]["amount"] == "4" and by_token[hidden]["token"]["symbol"] == "HID"
+        assert by_token[hidden]["hidden"] is True and by_token[USDC]["hidden"] is False
+        # The indexer was asked once (Base only; Robinhood has none), and every
+        # number came from the RPC.
+        assert len(fake_indexer.requests) == 1
+        assert any(c["method"] == "eth_call" for c in base_chain.calls)
 
 
 class TestQuote:

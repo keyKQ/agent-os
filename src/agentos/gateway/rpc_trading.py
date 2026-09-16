@@ -341,16 +341,29 @@ async def _wallet_set_primary(params: dict | None, ctx: RpcContext) -> dict[str,
 
 @_d.method("wallet.balances")
 async def _wallet_balances(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Balances from the ledger. ``refresh: true`` forces a chain read first (throttled).
+
+    ``chains`` says how fresh each wallet/chain is: ``ok``, ``partial`` (some
+    token reads failed, their rows are last-good) or ``failed`` (the node was
+    unreachable). ``updatedAt`` is the newest balance row returned.
+    """
     p = _params(params)
     address = _str(p, "address")
     chain = _chain(p, required=False)
+    chain_id = chain.chain_id if chain else None
     service = _service(ctx)
     service.ensure_unlocked()
+    include_hidden = bool(p.get("includeHidden"))
     try:
-        rows = await service.balances(address, chain.chain_id if chain else None)
+        rows = await service.balances(
+            address, chain_id, refresh=bool(p.get("refresh")), include_hidden=include_hidden
+        )
+        reads = service.chain_reads(address, chain_id)
+        hidden = service.hidden_balance_count(address, chain_id)
     except Exception as exc:
         raise _raise(exc) from exc
-    return {"balances": rows, "updatedAt": int(service._now() * 1000)}
+    newest = max((int(r.get("updatedAt") or 0) for r in rows), default=0)
+    return {"balances": rows, "hiddenCount": hidden, "chains": reads, "updatedAt": newest or None}
 
 
 # ── trading.* ──────────────────────────────────────────────────────────────
@@ -427,6 +440,25 @@ async def _trading_tokens_resolve(params: dict | None, ctx: RpcContext) -> dict[
     except Exception as exc:
         raise _raise(exc) from exc
     return {"token": meta.to_dict()}
+
+
+@_d.method("trading.tokens.hide")
+@_operator_only
+async def _trading_tokens_hide(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Hide (``hidden: true``, the default) or show a token. The user's call, and final."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    address = _str(p, "address", required=True) or ""
+    hidden = p.get("hidden", True)
+    if not isinstance(hidden, bool):
+        raise RpcHandlerError("trading.invalid", "hidden must be a boolean")
+    service = _service(ctx)
+    try:
+        token = await service.set_token_hidden(chain, address, hidden)
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"token": token}
 
 
 @_d.method("trading.quote")
@@ -568,6 +600,7 @@ async def _trading_history(params: dict | None, ctx: RpcContext) -> dict[str, An
             kind=_str(p, "kind"),
             limit=_int(p, "limit", 100),
             before=before / 1000.0 if before is not None and before > 10**11 else before,
+            include_hidden=bool(p.get("includeHidden")),
         )
     except Exception as exc:
         raise _raise(exc) from exc
@@ -579,7 +612,9 @@ async def _trading_portfolio(params: dict | None, ctx: RpcContext) -> dict[str, 
     service = _service(ctx)
     service.ensure_unlocked()
     try:
-        return await service.portfolio(_str(p, "wallet"))
+        return await service.portfolio(
+            _str(p, "wallet"), include_hidden=bool(p.get("includeHidden"))
+        )
     except Exception as exc:
         raise _raise(exc) from exc
 

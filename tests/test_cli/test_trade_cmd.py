@@ -183,8 +183,10 @@ class _FakeClient:
                         "allocationPct": 100,
                     }
                 ],
+                "hiddenCount": 2,
                 "syncing": True,
             },
+            "trading.tokens.hide": {"token": {**TOKENS["USDC"], "hidden": True}},
             "trading.sync": {"started": True},
             "trading.limits": {
                 "dailyCapUsd": 1000,
@@ -639,6 +641,24 @@ def test_portfolio_renders_totals_and_holdings(client: _FakeClient) -> None:
     assert "$100.00" in result.output
     assert "+11.10%" in result.output
     assert "sync in progress" in result.output
+    assert "2 junk tokens hidden" in result.output
+
+
+def test_hidden_flags_and_hide_unhide(client: _FakeClient) -> None:
+    shown = runner.invoke(trade_cmd.app, ["portfolio", "--hidden"])
+    history = runner.invoke(trade_cmd.app, ["history", "--hidden"])
+    hide = runner.invoke(trade_cmd.app, ["hide", USDC, "--chain", "base"])
+    unhide = runner.invoke(trade_cmd.app, ["unhide", USDC, "--chain", "robinhood"])
+    for result in (shown, history, hide, unhide):
+        assert result.exit_code == 0, result.output
+    assert client.calls == [
+        ("trading.portfolio", {"includeHidden": True}),
+        ("trading.history", {"limit": 100, "includeHidden": True}),
+        ("trading.tokens.hide", {"chainId": 8453, "address": USDC, "hidden": True}),
+        ("trading.tokens.hide", {"chainId": 4663, "address": USDC, "hidden": False}),
+    ]
+    assert "junk tokens hidden" not in shown.output
+    assert "Hidden: USDC on base" in hide.output
 
 
 def test_sync_and_limits(client: _FakeClient) -> None:
@@ -668,6 +688,8 @@ def test_every_command_supports_json(client: _FakeClient) -> None:
         ["portfolio"],
         ["sync"],
         ["limits", WALLET],
+        ["hide", USDC, "--chain", "base"],
+        ["unhide", USDC, "--chain", "base"],
     ]
     for args in invocations:
         result = runner.invoke(trade_cmd.app, [*args, "--json"])

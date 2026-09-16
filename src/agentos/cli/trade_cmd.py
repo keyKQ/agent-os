@@ -406,6 +406,46 @@ def trade_tokens(
     console.print(table)
 
 
+def _set_hidden(chain: str, address: str, hidden: bool, json_output: bool) -> None:
+    chain_id = chain_id_from_arg(chain)
+
+    async def _run(client):
+        return await client.call(
+            "trading.tokens.hide", {"chainId": chain_id, "address": address, "hidden": hidden}
+        )
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    if json_output:
+        print_json(result)
+        return
+    token = _dict(_dict(result).get("token"))
+    symbol = markup_escape(str(token.get("symbol") or token.get("address") or address))
+    verb = "Hidden" if token.get("hidden") else "Shown"
+    console.print(f"{verb}: {symbol} on {chain_label(chain_id)}")
+
+
+@app.command("hide")
+def trade_hide(
+    address: str = typer.Argument(..., help="Token address"),
+    chain: str = typer.Option(..., "--chain", help="base or robinhood"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Hide a token from balances, portfolio and history (the ledger keeps it)."""
+
+    _set_hidden(chain, address, True, json_output)
+
+
+@app.command("unhide")
+def trade_unhide(
+    address: str = typer.Argument(..., help="Token address"),
+    chain: str = typer.Option(..., "--chain", help="base or robinhood"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Show a token again; the engine will not auto-hide it after this."""
+
+    _set_hidden(chain, address, False, json_output)
+
+
 @app.command("quote")
 def trade_quote(
     chain: str = typer.Option(..., "--chain", help="base or robinhood"),
@@ -665,6 +705,7 @@ def trade_history(
     chain: str | None = typer.Option(None, "--chain", help="base or robinhood"),
     kind: str | None = typer.Option(None, "--kind", help="swap, deposit, withdraw, gas, approval"),
     limit: int = typer.Option(100, "--limit", help="Max rows", min=1, max=1000),
+    hidden: bool = typer.Option(False, "--hidden", help="Include entries of hidden (junk) tokens"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Show the ledger: swaps, deposits, withdrawals, approvals."""
@@ -676,6 +717,8 @@ def trade_history(
         params["chainId"] = chain_id_from_arg(chain)
     if kind:
         params["kind"] = kind
+    if hidden:
+        params["includeHidden"] = True
 
     async def _run(client):
         return await client.call("trading.history", params)
@@ -725,6 +768,7 @@ def trade_history(
 @app.command("portfolio")
 def trade_portfolio(
     wallet: str | None = typer.Option(None, "--wallet", help="One wallet (default: all)"),
+    hidden: bool = typer.Option(False, "--hidden", help="Include hidden (junk) tokens"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Holdings with cost basis, realized and unrealized PnL."""
@@ -732,6 +776,8 @@ def trade_portfolio(
     params: dict[str, Any] = {}
     if wallet:
         params["wallet"] = wallet
+    if hidden:
+        params["includeHidden"] = True
 
     async def _run(client):
         return await client.call("trading.portfolio", params)
@@ -769,9 +815,10 @@ def trade_portfolio(
     for row in holdings if isinstance(holdings, list) else []:
         if not isinstance(row, dict):
             continue
+        symbol = markup_escape(token_symbol(row.get("token")))
         table.add_row(
             chain_label(row.get("chainId")),
-            markup_escape(token_symbol(row.get("token"))),
+            f"[dim]{symbol} (hidden)[/dim]" if row.get("hidden") else symbol,
             amount_text(row.get("amount")),
             money(row.get("priceUsd")),
             money(row.get("valueUsd")),
@@ -781,6 +828,13 @@ def trade_portfolio(
             percent(row.get("allocationPct")),
         )
     console.print(table)
+    hidden_count = int(result.get("hiddenCount") or 0)
+    if hidden_count and not hidden:
+        noun = "token" if hidden_count == 1 else "tokens"
+        console.print(
+            f"[dim]{hidden_count} junk {noun} hidden and not counted; add --hidden to list "
+            "them, or `agentos trade unhide` to keep one.[/dim]"
+        )
     if result.get("syncing"):
         console.print("Ledger sync in progress; numbers may still move.")
 
