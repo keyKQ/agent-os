@@ -116,8 +116,13 @@ describe('ComposerSeats', () => {
     expect(screen.getByTestId('wallet-seat')).toHaveTextContent('Main')
     fireEvent.click(screen.getByTestId('permission-seat'))
     expect(onOpenSettings).toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('quick-dip'))
-    expect(onQuick).toHaveBeenCalledWith('dip')
+    // Swap is the only quick action left: DCA, dip and rebalance are
+    // missions now, and missions start from the catalogue.
+    expect(screen.queryByTestId('quick-dca')).toBeNull()
+    expect(screen.queryByTestId('quick-dip')).toBeNull()
+    expect(screen.queryByTestId('quick-rebalance')).toBeNull()
+    fireEvent.click(screen.getByTestId('quick-swap'))
+    expect(onQuick).toHaveBeenCalledWith('swap')
   })
 
   it('takes the chips out of the tab order while typing', () => {

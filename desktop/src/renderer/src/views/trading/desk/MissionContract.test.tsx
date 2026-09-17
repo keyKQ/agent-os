@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { renderDesk, WALLET } from '../test-utils'
 import { MissionContract } from './MissionContract'
+import { presetById } from './presets'
 
 const limits = { dailyCapUsd: 1000, spentTodayUsd: 0, thresholdUsd: 100, approvalTtlSeconds: 900 }
 
@@ -110,6 +111,77 @@ describe('MissionContract', () => {
     fireEvent.change(screen.getByTestId('contract-name'), { target: { value: 'Mine' } })
     expect(screen.getByTestId('contract-submit')).toBeDisabled()
     expect(screen.getByText('Say what the mission should do')).toBeInTheDocument()
+  })
+
+  it('opened from a preset, shows only its knobs until Advanced is asked for', () => {
+    renderDesk(
+      <MissionContract
+        kind="custom"
+        preset={presetById('dca')}
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onBack={vi.fn()}
+        onClose={vi.fn()}
+        onSend={vi.fn()}
+        onCreate={vi.fn(async () => ({}))}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    // The two numbers that differ, plus the cadence. Nothing else.
+    expect(screen.getByTestId('knob-token')).toHaveValue('ETH')
+    expect(screen.getByTestId('knob-usd')).toHaveValue('10')
+    expect(screen.getByTestId('contract-interval')).toHaveValue('86400')
+    expect(screen.queryByTestId('contract-goal')).toBeNull()
+    expect(screen.queryByTestId('contract-budget')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('contract-advanced-toggle'))
+    expect(screen.getByTestId('contract-goal')).toBeInTheDocument()
+    expect(screen.getByTestId('contract-budget')).toHaveValue('300')
+  })
+
+  it('rewrites the goal as the knobs turn, and stops once the goal is written by hand', () => {
+    renderDesk(
+      <MissionContract
+        kind="custom"
+        preset={presetById('dca')}
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={vi.fn()}
+        onSend={vi.fn()}
+        onCreate={vi.fn(async () => ({}))}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('knob-usd'), { target: { value: '75' } })
+    fireEvent.click(screen.getByTestId('contract-advanced-toggle'))
+    expect((screen.getByTestId('contract-goal') as HTMLTextAreaElement).value).toContain(
+      '75 USD of ETH',
+    )
+    expect(screen.getByTestId('contract-name')).toHaveValue('DCA ETH')
+
+    // Hand-written wins: turning a knob afterwards must not throw it away.
+    fireEvent.change(screen.getByTestId('contract-goal'), { target: { value: 'my own words' } })
+    fireEvent.change(screen.getByTestId('knob-token'), { target: { value: 'WBTC' } })
+    expect(screen.getByTestId('contract-goal')).toHaveValue('my own words')
+  })
+
+  it('warns on the preset that cannot promise what its name suggests', () => {
+    renderDesk(
+      <MissionContract
+        kind="custom"
+        preset={presetById('drawdown-alert')}
+        wallets={[WALLET]}
+        primary={WALLET.address}
+        limits={limits}
+        onClose={vi.fn()}
+        onSend={vi.fn()}
+        onCreate={vi.fn(async () => ({}))}
+        onUpdate={vi.fn(async () => {})}
+      />,
+    )
+    expect(screen.getByTestId('preset-caveat')).toHaveTextContent('it does not sell')
   })
 
   it('sends a one-shot swap into the chat instead of scheduling it', async () => {

@@ -1,4 +1,4 @@
-import type { RawJob } from '@/views/cron/logic'
+import type { RawJob, RawRun } from '@/views/cron/logic'
 import { chainName, formatAmount, formatPct, formatUsd, sameAddress, shortAddress } from '../logic'
 import { CHAINS, providerLabel, type Order, type Wallet } from '../types'
 import { TRADING_AGENT_ID } from './agent'
@@ -380,19 +380,50 @@ function toEpochMs(value: unknown): number | null {
   return n < 1e12 ? n * 1000 : n
 }
 
+/**
+ * Whether the last run failed. `cron.list` never sends `last_status` — that
+ * field only ever existed on the TypeScript type — so the truth is in the
+ * counters the scheduler keeps: a success clears `last_error` and resets
+ * `consecutive_errors`, a failure sets both and can push `status` to
+ * `failed`. Reading `last_status` made this state unreachable, so a mission
+ * that errored every run still read as sleeping.
+ */
+export function missionFailing(job: RawJob): boolean {
+  const consecutive = Number(job.consecutive_errors ?? 0)
+  if (Number.isFinite(consecutive) && consecutive > 0) return true
+  if (job.lastResult) return true
+  return String(job.status ?? '') === 'failed'
+}
+
 export function missionStatus(
   job: RawJob,
   ctx: { running: boolean; pendingApprovals: number },
 ): MissionStatus {
   if (ctx.running) return { state: 'running', until: null }
   if (ctx.pendingApprovals > 0) return { state: 'awaiting', until: null }
+  const failing = missionFailing(job)
   if (job.enabled === false) {
-    return { state: job.last_status === 'error' ? 'failed' : 'paused', until: null }
+    return { state: failing ? 'failed' : 'paused', until: null }
   }
   const next = toEpochMs(job.next_run)
-  if (job.last_status === 'error') return { state: 'failed', until: next }
+  if (failing) return { state: 'failed', until: next }
   if (next === null) return { state: 'done', until: null }
   return { state: 'sleeping', until: next }
+}
+
+/** Whether a run's recorded text declares the mission finished. */
+export function runSaysComplete(text: string | null | undefined): boolean {
+  return Boolean(text && text.includes(MISSION_COMPLETE_MARKER))
+}
+
+/**
+ * Whether the preview alone cannot settle whether a run finished the
+ * mission. `cron.runs` caps `summary` at its first 500 characters, while the
+ * marker is instructed to be the *last* thing the agent says — so a talkative
+ * run hides it, and only `cron.runOutput` can answer.
+ */
+export function needsFullOutput(run: RawRun): boolean {
+  return !runSaysComplete(run.summary) && Boolean(run.summaryTruncated)
 }
 
 export function jobText(job: RawJob): string {

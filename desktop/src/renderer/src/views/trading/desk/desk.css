@@ -1247,6 +1247,152 @@ body[data-dragging] .trd-book__handle {
 .trd-contract legend {
   margin-bottom: 4px;
 }
+.trd-contract__preset {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.trd-contract__preset p {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-contract__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  margin-left: -3px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-contract__back:hover {
+  color: var(--foreground);
+}
+/* The two or three numbers that actually differ, side by side. */
+.trd-contract__knobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.trd-contract__advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.trd-contract__caveat {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--warning, var(--foreground)) 8%, transparent);
+}
+
+/* ── Mission catalogue ───────────────────────────────────────────────────── */
+
+.trd-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.trd-picker__lead {
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.trd-picker__group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.trd-picker__group h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-picker__group p {
+  margin-top: -4px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-picker__grid {
+  display: grid;
+  /* Two per row at the catalogue width — ~355px each, enough that a title
+     and its hint each fit on one line. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 8px;
+}
+.trd-picker__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: left;
+  background: color-mix(in srgb, var(--foreground) 2%, transparent);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.trd-picker__card:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-picker__card svg {
+  margin-top: 1px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.trd-picker__card:hover svg {
+  color: var(--foreground);
+}
+.trd-picker__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.trd-picker__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.trd-picker__text b {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.trd-picker__text span {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted-foreground);
+}
+/* Said on the card, not only in the group heading: the safe ones are the
+   way in, and that has to be legible at the moment of choosing. */
+.trd-picker__safe {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--trd-live, var(--primary));
+  background: color-mix(in srgb, var(--trd-live, var(--primary)) 14%, transparent);
+}
+.trd-picker__safe svg {
+  color: inherit;
+}
+.trd-picker__card--custom {
+  align-items: center;
+  background: none;
+  border-style: dashed;
+}
 
 /* ── Tool output modal (chat-thread "view full") ─────────────────────────── */
 

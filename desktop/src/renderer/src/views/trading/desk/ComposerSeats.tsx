@@ -2,11 +2,8 @@ import {
   ArrowLeftRight,
   ChevronDown,
   Lock,
-  Repeat,
   Rocket,
-  Scale,
   Settings2,
-  TrendingDown,
   Wallet as WalletIcon,
   Zap,
 } from 'lucide-react'
@@ -25,11 +22,14 @@ import {
 } from '../types'
 import type { MissionKind } from './desk-logic'
 
+/**
+ * A one-shot swap is not a mission — it creates no job and turns up in no
+ * mission list — so it stays a plain quick action. DCA, dip and rebalance
+ * left this row when the mission catalogue took them over: two ways to start
+ * the same thing, one of them with fewer defaults, is not a shortcut.
+ */
 const QUICK: readonly { kind: MissionKind; icon: LucideIcon; key: MessageKey }[] = [
   { kind: 'swap', icon: Zap, key: 'trading.quick.swap' },
-  { kind: 'dca', icon: Repeat, key: 'trading.quick.dca' },
-  { kind: 'dip', icon: TrendingDown, key: 'trading.quick.dip' },
-  { kind: 'rebalance', icon: Scale, key: 'trading.quick.rebalance' },
 ]
 
 /**

@@ -15,6 +15,7 @@ export function Sheet({
   onClose,
   role = 'dialog',
   wide,
+  widest,
   children,
   foot,
   note,
@@ -23,6 +24,8 @@ export function Sheet({
   onClose: () => void
   role?: 'dialog' | 'alertdialog'
   wide?: boolean
+  /** Wider still, for a sheet laying cards out in a grid rather than a column. */
+  widest?: boolean
   children: ReactNode
   foot?: ReactNode
   note?: ReactNode
@@ -34,7 +37,7 @@ export function Sheet({
       labelledBy={titleId}
       onClose={onClose}
       overlayClassName="trd-modal__overlay"
-      className={cn('trd-modal', wide && 'trd-modal--wide')}
+      className={cn('trd-modal', wide && 'trd-modal--wide', widest && 'trd-modal--widest')}
     >
       <header className="trd-modal__head">
         <h2 id={titleId}>{title}</h2>

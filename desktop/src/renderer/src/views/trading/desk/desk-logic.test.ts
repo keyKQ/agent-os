@@ -13,10 +13,12 @@ import {
   missionFromJob,
   missionPrefill,
   missionStatus,
+  needsFullOutput,
   ordersForSession,
   PLACEHOLDERS,
   rejectionMessage,
   riskStamp,
+  runSaysComplete,
   statusWord,
   tradingProjectKnowledge,
   validateMission,
@@ -233,15 +235,46 @@ describe('missions', () => {
       'paused',
     )
     expect(
-      missionStatus(
-        { enabled: true, next_run: next, last_status: 'error' },
-        { running: false, pendingApprovals: 0 },
-      ).state,
-    ).toBe('failed')
-    expect(
       missionStatus({ enabled: true, next_run: null }, { running: false, pendingApprovals: 0 })
         .state,
     ).toBe('done')
+  })
+
+  // `cron.list` never sends `last_status`; reading it made `failed`
+  // unreachable, so a mission that errored every run read as sleeping.
+  it('reads failure from the counters the gateway actually sends', () => {
+    const next = new Date(Date.now() + 60_000).toISOString()
+    const ctx = { running: false, pendingApprovals: 0 }
+    expect(missionStatus({ enabled: true, next_run: next, consecutive_errors: 2 }, ctx).state).toBe(
+      'failed',
+    )
+    expect(missionStatus({ enabled: true, next_run: next, lastResult: 'boom' }, ctx).state).toBe(
+      'failed',
+    )
+    expect(missionStatus({ enabled: true, next_run: next, status: 'failed' }, ctx).state).toBe(
+      'failed',
+    )
+    // Disabled after failing reads as failed, not as a plain pause.
+    expect(missionStatus({ enabled: false, lastResult: 'boom' }, ctx).state).toBe('failed')
+    // A success clears both, so the job is back to sleeping.
+    expect(
+      missionStatus({ enabled: true, next_run: next, consecutive_errors: 0, lastResult: null }, ctx)
+        .state,
+    ).toBe('sleeping')
+  })
+
+  it('needs the full output only when the preview could hide the marker', () => {
+    expect(runSaysComplete(`all done\n${MISSION_COMPLETE_MARKER}`)).toBe(true)
+    expect(runSaysComplete('nothing to do this run')).toBe(false)
+    expect(runSaysComplete(undefined)).toBe(false)
+    // Short and marker-free: settled, no second call.
+    expect(needsFullOutput({ summary: 'nothing to do' })).toBe(false)
+    // Truncated: the marker is the last thing the agent says, so it may be cut.
+    expect(needsFullOutput({ summary: 'nothing to do', summaryTruncated: true })).toBe(true)
+    // Truncated but the marker already showed: no second call needed.
+    expect(
+      needsFullOutput({ summary: `x ${MISSION_COMPLETE_MARKER}`, summaryTruncated: true }),
+    ).toBe(false)
   })
 
   it('edits a job back into a form', () => {

@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useRpc } from '@/app/providers'
 import { useConnection } from '@/stores/connection'
-import type { RawJob } from '@/views/cron/logic'
+import type { RawJob, RawRun } from '@/views/cron/logic'
 import { t } from '~/i18n'
 import { errorText } from '../logic'
 import {
   isSessionMission,
   jobText,
-  MISSION_COMPLETE_MARKER,
   missionCronPayload,
+  needsFullOutput,
+  runSaysComplete,
   withoutDryRun,
   type MissionForm,
 } from './desk-logic'
@@ -26,6 +27,33 @@ const MISSIONS_KEY = ['trading', 'missions'] as const
 
 interface CronListResult {
   jobs?: RawJob[]
+}
+
+interface CronRunsResult {
+  runs?: RawRun[]
+}
+
+interface RunOutputResult {
+  output?: string
+}
+
+type Rpc = ReturnType<typeof useRpc>
+
+/**
+ * Whether the job's last recorded run declared the mission complete. Both
+ * the live `cron.run.finished` payload and `cron.runs` carry only the first
+ * 500 characters of the agent's reply, while the marker is instructed to be
+ * the last thing it says — so a talkative run is settled against the full
+ * text from `cron.runOutput`.
+ */
+async function lastRunComplete(rpc: Rpc, jobId: string): Promise<boolean> {
+  const data = await rpc.call<RawRun[] | CronRunsResult>('cron.runs', { id: jobId, limit: 1 })
+  const run = (Array.isArray(data) ? data : (data.runs ?? []))[0]
+  if (!run) return false
+  if (runSaysComplete(run.summary)) return true
+  if (!needsFullOutput(run)) return false
+  const full = await rpc.call<RunOutputResult>('cron.runOutput', { runId: run.id, jobId })
+  return runSaysComplete(full?.output)
 }
 
 interface RunStartPayload {
@@ -77,6 +105,18 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
     [query.data, sessionKey],
   )
 
+  const stopCompleted = useCallback(
+    (id: string) =>
+      rpc
+        .call('cron.update', { id, enabled: false })
+        .then(() => {
+          toast.success(t('trading.mission.completed'), { id: `mission-${id}` })
+          void queryClient.invalidateQueries({ queryKey: MISSIONS_KEY })
+        })
+        .catch(() => {}),
+    [rpc, queryClient],
+  )
+
   // Runs: start marks the job live, finished clears it and refreshes the
   // list (next_run moved). A mission that reports completion turns itself
   // off; a first run in dry-run mode drops the dry-run line for the next.
@@ -107,14 +147,12 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
         })
       }
       const job = (queryClient.getQueryData<RawJob[]>(MISSIONS_KEY) ?? []).find((j) => j.id === id)
-      if (job && isSessionMission(job, sessionKey)) {
-        const summary = String(p.summary ?? '')
-        if (summary.includes(MISSION_COMPLETE_MARKER)) {
-          void rpc
-            .call('cron.update', { id, enabled: false })
-            .then(() => toast.success(t('trading.mission.completed'), { id: `mission-${id}` }))
-            .catch(() => {})
+      if (job && id && isSessionMission(job, sessionKey)) {
+        if (runSaysComplete(p.summary)) {
+          void stopCompleted(id)
         } else {
+          // The preview may have cut the marker off; reconciliation below
+          // settles that against the full output once the run is recorded.
           const text = jobText(job)
           const cleaned = withoutDryRun(text)
           if (cleaned !== text) void rpc.call('cron.update', { id, text: cleaned }).catch(() => {})
@@ -131,7 +169,35 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
       offFinished()
       offHello()
     }
-  }, [rpc, queryClient, sessionKey, enabled])
+  }, [rpc, queryClient, sessionKey, enabled, stopCompleted])
+
+  // Reconciliation. Turning a finished mission off used to happen only in
+  // the live `cron.run.finished` handler above, so a mission that reported
+  // completion while this window was closed stayed enabled — and kept
+  // spending. Settle every enabled mission against its last recorded run,
+  // once per run: `run_count` moves after the run lands, so a job is checked
+  // again only when there is something new to check.
+  const settled = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!enabled || !connected) return
+    let cancelled = false
+    for (const job of missions) {
+      const id = job.id
+      if (!id || job.enabled === false || running.has(id) || !job.last_run) continue
+      const stamp = `${id}:${String(job.run_count ?? '')}:${String(job.last_run)}`
+      if (settled.current.has(stamp)) continue
+      settled.current.add(stamp)
+      void lastRunComplete(rpc, id)
+        .then((done) => {
+          if (done && !cancelled) return stopCompleted(id)
+        })
+        // A failed lookup must not mark the run settled: try again next poll.
+        .catch(() => settled.current.delete(stamp))
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [missions, running, rpc, enabled, connected, stopCompleted])
 
   const create = useMutation({
     mutationFn: async ({ form, prompt }: { form: MissionForm; prompt: string }) => {

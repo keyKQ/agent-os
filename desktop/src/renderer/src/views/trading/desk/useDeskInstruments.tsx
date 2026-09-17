@@ -28,7 +28,9 @@ import {
 } from './desk-logic'
 import { MissionContract } from './MissionContract'
 import { MissionControls, MissionStrip, missionWord } from './MissionControls'
+import { MissionPicker } from './MissionPicker'
 import type { MissionsApi } from './missions'
+import type { MissionPreset } from './presets'
 
 const ROTATE_MS = 6000
 const NO_JOBS: RawJob[] = []
@@ -209,7 +211,13 @@ export function useDeskInstruments(
   // would listen to `cron.run.finished` twice and update every job twice.
   const missionJobs = desk?.missions.missions ?? NO_JOBS
   const missionRuns = desk?.missions.running ?? NO_RUNS
-  const [contract, setContract] = useState<{ kind: MissionKind; job?: RawJob | null } | null>(null)
+  // `pick` is the catalogue; `form` is one contract, with the preset it came
+  // from (null for a blank contract, an edit, or the one-shot swap chip).
+  const [contract, setContract] = useState<
+    | { mode: 'pick' }
+    | { mode: 'form'; kind: MissionKind; preset: MissionPreset | null; job?: RawJob | null }
+    | null
+  >(null)
   // The composer's wallet chip is the one wallet affordance that is always on
   // screen in Trading, so it opens the manager rather than nudging a tab.
   const [walletSheet, setWalletSheet] = useState<WalletSheetMode | null>(null)
@@ -311,8 +319,8 @@ export function useDeskInstruments(
             running={missions.running}
             pendingApprovals={pendingOrders.length}
             busy={missions.busy}
-            onStart={() => setContract({ kind: 'custom' })}
-            onEdit={(job) => setContract({ kind: 'custom', job })}
+            onStart={() => setContract({ mode: 'pick' })}
+            onEdit={(job) => setContract({ mode: 'form', kind: 'custom', preset: null, job })}
             onRun={missions.runNow}
             onSetEnabled={missions.setEnabled}
             onRemove={missions.remove}
@@ -321,7 +329,7 @@ export function useDeskInstruments(
         ) : null}
         <ComposerSeats
           limits={desk.limits}
-          onStartMission={() => setContract({ kind: 'custom' })}
+          onStartMission={() => setContract({ mode: 'pick' })}
           provider={desk.gate.provider}
           providers={tradingStatus.data?.providers ?? []}
           switching={switchProvider.switching}
@@ -330,16 +338,28 @@ export function useDeskInstruments(
           onOpenSettings={() => openSettings('trading')}
           onSwitchProvider={switchProvider.switchTo}
           onOpenWallets={() => setWalletSheet({ kind: 'manage' })}
-          onQuick={(kind) => setContract({ kind })}
+          onQuick={(kind) => setContract({ mode: 'form', kind, preset: null })}
         />
       </div>
     ),
     modal: walletSheet ? (
       <WalletSheet mode={walletSheet} onClose={() => setWalletSheet(null)} />
+    ) : contract?.mode === 'pick' ? (
+      <MissionPicker
+        onPick={(preset) => setContract({ mode: 'form', kind: 'custom', preset })}
+        onCustom={() => setContract({ mode: 'form', kind: 'custom', preset: null })}
+        onClose={() => setContract(null)}
+      />
     ) : contract ? (
       <MissionContract
         kind={contract.kind}
+        preset={contract.preset}
         job={contract.job ?? null}
+        // Only what the catalogue opened can go back to it: an edit and the
+        // one-shot swap chip never passed through it.
+        onBack={
+          contract.job || contract.kind === 'swap' ? undefined : () => setContract({ mode: 'pick' })
+        }
         wallets={desk.wallets}
         primary={desk.primary}
         limits={desk.limits}

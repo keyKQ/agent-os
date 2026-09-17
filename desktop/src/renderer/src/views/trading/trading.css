@@ -1986,6 +1986,11 @@ tr:focus-within .trd-row__actions {
 .trd-modal--wide {
   max-width: 480px;
 }
+/* The catalogue is a grid of cards, not a column of fields: at the column
+   width a card title wraps and every hint runs to three lines. */
+.trd-modal--widest {
+  max-width: 760px;
+}
 .trd-modal__head {
   display: flex;
   align-items: center;
