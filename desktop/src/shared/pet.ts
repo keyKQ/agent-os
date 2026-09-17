@@ -141,6 +141,61 @@ export interface InstalledPet {
   sheetUrl: string
 }
 
+/** What a pet folder on disk must say about itself before it is copied in. */
+export interface PetFolderMeta {
+  slug: string
+  displayName: string
+  description: string
+  /** The sheet's file name inside the folder (`spritesheetPath`, default `spritesheet.webp`). */
+  sheetFile: string
+}
+
+export type PetFolderCheck = { ok: true; pet: PetFolderMeta } | { ok: false; reason: string }
+
+/**
+ * Read a `pet.json` someone handed us (a download, a friend's export) and
+ * decide whether it is a petdex pet. The sheet's pixel size is checked
+ * here too, so a folder is refused before anything is copied.
+ */
+export function parsePetFolder(
+  manifest: unknown,
+  sheet: { width: number; height: number } | null,
+  fallbackSlug = '',
+): PetFolderCheck {
+  const meta = manifest && typeof manifest === 'object' ? (manifest as Record<string, unknown>) : {}
+  const rawSlug = typeof meta.id === 'string' && meta.id.trim() ? meta.id.trim() : fallbackSlug
+  const slug = rawSlug.toLowerCase()
+  if (!isPetSlug(slug)) {
+    return {
+      ok: false,
+      reason: `"${rawSlug || '?'}" is not a pet id (lowercase letters, digits, dashes).`,
+    }
+  }
+  const sheetFile =
+    typeof meta.spritesheetPath === 'string' && meta.spritesheetPath.trim()
+      ? meta.spritesheetPath.trim()
+      : 'spritesheet.webp'
+  if (sheetFile.includes('/') || sheetFile.includes('\\') || !sheetFile.endsWith('.webp')) {
+    return { ok: false, reason: `spritesheetPath must name a .webp file in the same folder.` }
+  }
+  if (!sheet) return { ok: false, reason: `${sheetFile} is missing or not an image.` }
+  if (!sheetGeometry(sheet.width, sheet.height)) {
+    return {
+      ok: false,
+      reason: `${sheetFile} is ${sheet.width}×${sheet.height}; a petdex sheet is a grid of ${PET_FRAME_W}×${PET_FRAME_H} frames.`,
+    }
+  }
+  return {
+    ok: true,
+    pet: {
+      slug,
+      displayName: String(meta.displayName || slug),
+      description: String(meta.description || ''),
+      sheetFile,
+    },
+  }
+}
+
 export const PET_SCHEME = 'agentos-pet'
 
 export function petSheetUrl(slug: string): string {

@@ -106,6 +106,9 @@ function createFallbackApi(): DesktopApi {
       preview: async () => {
         throw new Error('Pets are only available inside the desktop app.')
       },
+      importFolder: async () => {
+        throw new Error('Pets are only available inside the desktop app.')
+      },
     },
     gateway: {
       status: stoppedOnly,

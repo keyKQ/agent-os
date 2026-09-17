@@ -41,6 +41,7 @@ const api: DesktopApi = {
     install: (slug: string) => ipcRenderer.invoke(IPC.pets.install, slug),
     remove: (slug: string) => ipcRenderer.invoke(IPC.pets.remove, slug),
     preview: (slug: string) => ipcRenderer.invoke(IPC.pets.preview, slug),
+    importFolder: () => ipcRenderer.invoke(IPC.pets.importFolder),
   },
   gateway: {
     status: () => ipcRenderer.invoke(IPC.gateway.status),

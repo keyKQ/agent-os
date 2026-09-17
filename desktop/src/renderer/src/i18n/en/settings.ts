@@ -232,6 +232,10 @@ export const settings = {
   'settings.pet.desktopOnly': 'Pets are only available inside the desktop app.',
   'settings.pet.adopted': 'adopted',
   'settings.pet.installFailed': 'Could not install the pet',
+  'settings.pet.import': 'Import folder…',
+  'settings.pet.import.help':
+    'A pet you were given: a folder with pet.json and spritesheet.webp, the petdex layout.',
+  'settings.pet.importFailed': 'Could not import the pet',
   'settings.pet.size': 'Size',
   'settings.pet.size.help': 'Applies instantly.',
   'settings.pet.current': 'Active pet',

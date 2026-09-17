@@ -1,5 +1,51 @@
 import { describe, expect, it } from 'vitest'
-import { derivePetState, isPetSlug, petStateRow, rowFrameCounts, sheetGeometry } from './pet'
+import {
+  derivePetState,
+  isPetSlug,
+  parsePetFolder,
+  petStateRow,
+  rowFrameCounts,
+  sheetGeometry,
+} from './pet'
+
+describe('parsePetFolder', () => {
+  const muse = {
+    id: 'muse',
+    displayName: 'Muse',
+    description: 'A fluffy cream-colored plush buddy.',
+    spritesheetPath: 'spritesheet.webp',
+  }
+  it('accepts a petdex folder as shared by hand', () => {
+    const check = parsePetFolder(muse, { width: 1536, height: 1872 })
+    expect(check).toEqual({
+      ok: true,
+      pet: {
+        slug: 'muse',
+        displayName: 'Muse',
+        description: 'A fluffy cream-colored plush buddy.',
+        sheetFile: 'spritesheet.webp',
+      },
+    })
+  })
+  it('falls back to the folder name for an id, lower-cased', () => {
+    const check = parsePetFolder({ displayName: 'X' }, { width: 1536, height: 1872 }, 'My-Pet')
+    expect(check.ok && check.pet.slug).toBe('my-pet')
+  })
+  it('refuses a bad id, a sheet outside the folder, a missing or odd-sized sheet', () => {
+    const size = { width: 1536, height: 1872 }
+    expect(parsePetFolder({ id: 'Bad Id!' }, size)).toMatchObject({ ok: false })
+    expect(parsePetFolder({ id: 'a', spritesheetPath: '../x.webp' }, size)).toMatchObject({
+      ok: false,
+    })
+    expect(parsePetFolder({ id: 'a', spritesheetPath: 'sheet.png' }, size)).toMatchObject({
+      ok: false,
+    })
+    expect(parsePetFolder({ id: 'a' }, null)).toMatchObject({ ok: false })
+    const odd = parsePetFolder({ id: 'a' }, { width: 1000, height: 1000 })
+    expect(odd.ok).toBe(false)
+    expect(!odd.ok && odd.reason).toMatch(/192×208/)
+  })
+})
 
 describe('petdex sheets', () => {
   it('reads the frame grid from the pixel size', () => {

@@ -1,8 +1,22 @@
-import { net } from 'electron'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { nativeImage, net } from 'electron'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { isPetSlug, petSheetUrl, type InstalledPet, type PetManifestEntry } from '@shared/pet'
+import {
+  isPetSlug,
+  parsePetFolder,
+  petSheetUrl,
+  type InstalledPet,
+  type PetManifestEntry,
+} from '@shared/pet'
 
 const MANIFEST_URL = 'https://petdex.dev/api/manifest'
 const MANIFEST_TTL_MS = 5 * 60_000
@@ -181,6 +195,57 @@ export class PetStore {
   async remove(slug: string): Promise<void> {
     if (!isPetSlug(slug)) return
     rmSync(this.dir(slug), { recursive: true, force: true })
+  }
+
+  /**
+   * Adopt a pet folder from anywhere on disk (`pet.json` + its sheet): the
+   * petdex layout people share by hand. The folder is checked before a byte
+   * is copied, the sheet is copied through a temp file, and an installed
+   * pet with the same id is replaced.
+   */
+  async importFolder(dir: string): Promise<InstalledPet> {
+    let manifest: unknown = null
+    try {
+      manifest = JSON.parse(readFileSync(path.join(dir, 'pet.json'), 'utf8'))
+    } catch {
+      throw new PetStoreError(`${dir} has no readable pet.json.`)
+    }
+    const declared =
+      manifest && typeof manifest === 'object'
+        ? (manifest as { spritesheetPath?: unknown }).spritesheetPath
+        : undefined
+    const sheetFile =
+      typeof declared === 'string' && declared.trim() ? declared.trim() : 'spritesheet.webp'
+    const sheetSrc = path.join(dir, sheetFile)
+    let size: { width: number; height: number } | null = null
+    if (!sheetFile.includes('/') && !sheetFile.includes('\\') && existsSync(sheetSrc)) {
+      const image = nativeImage.createFromPath(sheetSrc)
+      size = image.isEmpty() ? null : image.getSize()
+    }
+    const check = parsePetFolder(manifest, size, path.basename(dir))
+    if (!check.ok) throw new PetStoreError(check.reason)
+    const { pet } = check
+    const dest = this.dir(pet.slug)
+    mkdirSync(dest, { recursive: true })
+    const sheet = path.join(dest, 'spritesheet.webp')
+    const tmp = `${sheet}.part`
+    copyFileSync(sheetSrc, tmp)
+    renameSync(tmp, sheet)
+    const petJson = {
+      id: pet.slug,
+      displayName: pet.displayName,
+      description: pet.description,
+      spritesheetPath: 'spritesheet.webp',
+    }
+    writeFileSync(path.join(dest, 'pet.json'), JSON.stringify(petJson, null, 2) + '\n', 'utf8')
+    // A gallery preview cached under the same slug would now be stale.
+    rmSync(path.join(this.cacheDir(), `${pet.slug}.webp`), { force: true })
+    return {
+      slug: pet.slug,
+      displayName: pet.displayName,
+      description: pet.description,
+      sheetUrl: petSheetUrl(pet.slug),
+    }
   }
 }
 

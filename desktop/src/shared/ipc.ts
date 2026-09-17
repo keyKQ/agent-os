@@ -44,6 +44,7 @@ export const IPC = {
     install: 'pets:install',
     remove: 'pets:remove',
     preview: 'pets:preview',
+    importFolder: 'pets:importFolder',
   },
   app: {
     version: 'app:version',
@@ -129,6 +130,11 @@ export interface DesktopApi {
     remove(slug: string): Promise<void>
     /** Make the sheet loadable for a gallery preview; resolves to its URL. */
     preview(slug: string): Promise<string>
+    /**
+     * Ask for a folder (`pet.json` + `spritesheet.webp`) and copy it into
+     * the pets directory. Null when the dialog was cancelled.
+     */
+    importFolder(): Promise<InstalledPet | null>
   }
   gateway: {
     status(): Promise<GatewayStatus>

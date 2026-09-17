@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Search } from 'lucide-react'
+import { Check, FolderInput, Search } from 'lucide-react'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import type { InstalledPet, PetManifestEntry } from '@shared/pet'
@@ -84,6 +84,19 @@ export function PetCard() {
       toast.error(`${t('settings.pet.installFailed')}: ${errorText(err)}`, { id: 'stg-pet-err' }),
   })
 
+  const importFolder = useMutation({
+    mutationFn: () => desktopApi().pets.importFolder(),
+    onSuccess: async (installedPet) => {
+      if (!installedPet) return // cancelled
+      await update({ pet: { slug: installedPet.slug, enabled: true } })
+      await queryClient.invalidateQueries({ queryKey: INSTALLED_KEY })
+      await queryClient.invalidateQueries({ queryKey: ['pets', 'preview', installedPet.slug] })
+      toast.success(`${installedPet.displayName} ${t('settings.pet.adopted')}`, { id: 'stg-pet' })
+    },
+    onError: (err) =>
+      toast.error(`${t('settings.pet.importFailed')}: ${errorText(err)}`, { id: 'stg-pet-err' }),
+  })
+
   const tiles = filterPets(installed.data ?? [], manifest.data ?? [], query)
   const total = (manifest.data?.length ?? 0) + (installed.data?.length ?? 0)
 
@@ -107,17 +120,28 @@ export function PetCard() {
       ) : (
         <>
           <Row label={t('settings.pet.choose')} help={t('settings.pet.choose.help')} stack>
-            <label className="mac-search app-no-drag" style={{ width: '100%' }}>
-              <Search className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
-              <input
-                type="search"
-                placeholder={t('settings.pet.search')}
-                aria-label={t('settings.pet.search')}
-                autoComplete="off"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </label>
+            <div className="pet-toolbar">
+              <label className="mac-search app-no-drag">
+                <Search className="size-3.5 shrink-0" strokeWidth={1.75} aria-hidden />
+                <input
+                  type="search"
+                  placeholder={t('settings.pet.search')}
+                  aria-label={t('settings.pet.search')}
+                  autoComplete="off"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+              <Button
+                title={t('settings.pet.import.help')}
+                disabled={importFolder.isPending}
+                onClick={() => importFolder.mutate()}
+                data-testid="pet-import"
+              >
+                <FolderInput className="size-3.5" strokeWidth={1.75} aria-hidden />
+                {t('settings.pet.import')}
+              </Button>
+            </div>
           </Row>
           <div className="stg-card__body">
             {manifest.isError && !installed.data?.length ? (
