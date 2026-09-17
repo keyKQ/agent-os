@@ -291,6 +291,16 @@ class TestTradingRpc:
         assert (await call("trading.swap", {**base, "wallets": 5}, ctx)).ok is False
         assert (await call("trading.swap", {**base, "initiator": "bot"}, ctx)).ok is False
         assert (await call("trading.swap", {**base, "amountIn": {"x": 1}}, ctx)).ok is False
+        # Sizing is exactly one of amountIn / amountPct / amountUsd.
+        both = {**base, "amountUsd": 5}
+        assert (await call("trading.swap", both, ctx)).error.code == "trading.invalid"
+        usd_quote = await call(
+            "trading.quote",
+            {"chainId": 8453, "tokenIn": "ETH", "tokenOut": "USDC", "amountUsd": 5},
+            ctx,
+        )
+        assert usd_quote.ok, usd_quote.error
+        assert usd_quote.payload["amountIn"] == "0.0025"
         assert (
             await call("trading.swap", {**base, "chainId": 999}, ctx)
         ).error.code == "trading.unsupported_chain"

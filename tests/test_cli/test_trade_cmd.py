@@ -357,6 +357,25 @@ def test_quote_resolves_symbols_and_eth(client: _FakeClient) -> None:
     assert "allow" in result.output
 
 
+def test_usd_sizing_reaches_the_engine(client: _FakeClient) -> None:
+    quote = runner.invoke(
+        trade_cmd.app, ["quote", "--chain", "base", "--in", "ETH", "--out", USDC, "--usd", "5"]
+    )
+    swap = runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "ETH", "--out", USDC, "--usd", "0.1", "--json"],
+    )
+    assert quote.exit_code == 0 and swap.exit_code == 0, quote.output + swap.output
+    assert client.calls_to("trading.quote")[0]["amountUsd"] == 5
+    assert "amountIn" not in client.calls_to("trading.quote")[0]
+    assert client.calls_to("trading.swap")[0]["amountUsd"] == 0.1
+    both = runner.invoke(
+        trade_cmd.app,
+        ["quote", "--chain", "base", "--in", "ETH", "--out", USDC, "--amount", "1", "--usd", "5"],
+    )
+    assert both.exit_code == 2 and "--amount or --usd" in both.output
+
+
 def test_quote_passes_wallet_and_slippage_and_address_untouched(client: _FakeClient) -> None:
     result = runner.invoke(
         trade_cmd.app,
@@ -706,7 +725,7 @@ def test_argument_errors_are_json_when_asked(client: _FakeClient) -> None:
     assert result.exit_code == 2 and result.stdout == ""
     payload = json.loads(result.stderr.strip().splitlines()[-1])
     assert payload["error"]["code"] == "INVALID_ARGUMENT"
-    assert "--amount or --pct" in payload["error"]["message"]
+    assert "--amount, --pct or --usd" in payload["error"]["message"]
     assert client.calls_to("trading.swap") == []
     result = runner.invoke(
         trade_cmd.app,

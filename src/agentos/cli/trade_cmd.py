@@ -451,13 +451,20 @@ def trade_quote(
     chain: str = typer.Option(..., "--chain", help="base or robinhood"),
     token_in: str = typer.Option(..., "--in", help="Token to sell: symbol, address, or ETH"),
     token_out: str = typer.Option(..., "--out", help="Token to buy: symbol, address, or ETH"),
-    amount: str = typer.Option(..., "--amount", help="Amount of --in to sell, human units"),
+    amount: str | None = typer.Option(None, "--amount", help="Amount of --in to sell, human units"),
+    usd: float | None = typer.Option(
+        None, "--usd", help="Sell this many US dollars' worth of --in"
+    ),
     wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
     slippage: float | None = typer.Option(None, "--slippage", help="Slippage %, default auto"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Get a swap quote without executing anything."""
 
+    if (amount is None) == (usd is None):
+        _bad_argument("Use exactly one of --amount or --usd", json_output=json_output)
+    if usd is not None and usd <= 0:
+        _bad_argument("--usd must be above 0", json_output=json_output)
     chain_id = chain_id_from_arg(chain)
     # The gateway decides who is asking from the connection itself; this is
     # the fallback declaration so a quote inside an agent turn carries the
@@ -469,9 +476,12 @@ def trade_quote(
             "chainId": chain_id,
             "tokenIn": await resolve_token(client, chain_id, token_in),
             "tokenOut": await resolve_token(client, chain_id, token_out),
-            "amountIn": amount,
             "initiator": initiator,
         }
+        if amount is not None:
+            params["amountIn"] = amount
+        else:
+            params["amountUsd"] = usd
         if wallet:
             params["wallet"] = wallet
         if slippage is not None:
@@ -523,6 +533,9 @@ def trade_swap(
     pct: float | None = typer.Option(
         None, "--pct", help="Percent of the --in balance (above 0, up to 100; fractions allowed)"
     ),
+    usd: float | None = typer.Option(
+        None, "--usd", help="Sell this many US dollars' worth of --in"
+    ),
     wallets: list[str] | None = typer.Option(
         None, "--wallet", help="Wallet address (repeatable; default primary)"
     ),
@@ -540,10 +553,12 @@ def trade_swap(
 ) -> None:
     """Swap tokens from one, several, or all wallets."""
 
-    if (amount is None) == (pct is None):
-        _bad_argument("Use exactly one of --amount or --pct", json_output=json_output)
+    if sum(v is not None for v in (amount, pct, usd)) != 1:
+        _bad_argument("Use exactly one of --amount, --pct or --usd", json_output=json_output)
     if pct is not None and not 0 < pct <= 100:
         _bad_argument("--pct must be above 0 and at most 100", json_output=json_output)
+    if usd is not None and usd <= 0:
+        _bad_argument("--usd must be above 0", json_output=json_output)
     if all_wallets and wallets:
         _bad_argument("Use either --wallet or --all-wallets, not both", json_output=json_output)
     chain_id = chain_id_from_arg(chain)
@@ -559,8 +574,10 @@ def trade_swap(
         }
         if amount is not None:
             params["amountIn"] = amount
-        else:
+        elif pct is not None:
             params["amountPct"] = pct
+        else:
+            params["amountUsd"] = usd
         if all_wallets:
             params["wallets"] = "all"
         elif wallets:

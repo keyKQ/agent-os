@@ -475,7 +475,8 @@ async def _trading_quote(params: dict | None, ctx: RpcContext) -> dict[str, Any]
             wallet=_str(p, "wallet"),
             token_in=_str(p, "tokenIn", required=True) or "",
             token_out=_str(p, "tokenOut", required=True) or "",
-            amount_in=_str(p, "amountIn", required=True) or "",
+            amount_in=_str(p, "amountIn"),
+            amount_usd=_number(p, "amountUsd"),
             slippage_pct=_number(p, "slippagePct"),
             initiator=initiator,  # type: ignore[arg-type]
         )
@@ -504,6 +505,7 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
             token_out=_str(p, "tokenOut", required=True) or "",
             amount_in=str(amount_in) if amount_in is not None else None,
             amount_pct=_number(p, "amountPct"),
+            amount_usd=_number(p, "amountUsd"),
             slippage_pct=_number(p, "slippagePct"),
             initiator=initiator,  # type: ignore[arg-type]
             session_key=session_key,

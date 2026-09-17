@@ -798,8 +798,9 @@ agentos trade provider                      # show the swap provider (uniswap | 
 agentos trade provider kyber                # switch it (= config set trading.provider kyber)
 agentos trade probe [--provider uniswap|kyber] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok)
 agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
-agentos trade quote --chain base --in ETH --out USDC --amount 0.01 [--wallet <addr>] [--slippage <pct>]
+agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet <addr>] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
+agentos trade swap  --chain base --in ETH --out USDC --usd 5     # "$5 of ETH": the engine sizes it at the current price
 agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
 agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--limit N]

@@ -362,6 +362,32 @@ class TestQuote:
         # and crashed on, and which lost digits on very small prices.
         assert quote["rate"] == "0.00005"
         assert quote["guard"]["decision"] == "allow"
+        # "$5 of ETH": the engine reads the price (ETH = $2,000 in the fake) and sizes it.
+        usd_quote = await service.quote(
+            chain=BASE, wallet=None, token_in="ETH", token_out="USDC", amount_usd=5
+        )
+        assert usd_quote["amountIn"] == "0.0025"
+        with pytest.raises(TradingError, match="exactly one of amountIn or amountUsd"):
+            await service.quote(chain=BASE, wallet=None, token_in="ETH", token_out="USDC")
+        with pytest.raises(TradingError, match="exactly one of amountIn or amountUsd"):
+            await service.quote(
+                chain=BASE,
+                wallet=None,
+                token_in="ETH",
+                token_out="USDC",
+                amount_in="1",
+                amount_usd=1,
+            )
+        with pytest.raises(TradingError, match="greater than zero"):
+            await service.quote(
+                chain=BASE, wallet=None, token_in="ETH", token_out="USDC", amount_usd=0
+            )
+        unpriced = "0x9999000000000000000000000000000000000099"
+        service.ledger.upsert_token(8453, unpriced, symbol="NOPX", name="No price", decimals=18)
+        with pytest.raises(TradingError, match="No USD price for NOPX"):
+            await service.quote(
+                chain=BASE, wallet=None, token_in=unpriced, token_out="USDC", amount_usd=5
+            )
         agent_quote = await service.quote(
             chain=BASE,
             wallet=None,
@@ -759,7 +785,7 @@ class TestSwapFlow:
             await service.swap(
                 token_in="USDC", token_out=USDC, amount_in="1", amount_pct=None, **common
             )
-        with pytest.raises(TradingError, match="amountIn or amountPct"):
+        with pytest.raises(TradingError, match="amountIn, amountPct or amountUsd"):
             await service.swap(
                 token_in="USDC", token_out="WETH", amount_in=None, amount_pct=None, **common
             )

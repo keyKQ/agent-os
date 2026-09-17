@@ -66,6 +66,29 @@ describe('trading agent spec', () => {
   })
 })
 
+describe('tradingAgentFiles · reading an order', () => {
+  // A desk once answered "swap 0.1$ ETH to USDC" with "do you mean $0.10 or
+  // 0.1 ETH?" and took six tool calls to place a swap the engine prices,
+  // checks and guards on its own. The files now carry the conventions and
+  // the one-command path.
+  const files = tradingAgentFiles()
+  it('reads dollar, token and share sizes without asking', () => {
+    expect(files['AGENTS.md']).toContain('## Reading an order')
+    expect(files['AGENTS.md']).toMatch(/`0\.1\$ ETH`.*`--usd 0\.1`/s)
+    expect(files['AGENTS.md']).toMatch(/`hết`.*`--pct 100`/s)
+    expect(files['AGENTS.md']).toMatch(/states the default you will take/)
+  })
+  it('places a clear chat order with one swap command', () => {
+    expect(files['AGENTS.md']).toContain('## The fast path')
+    expect(files['AGENTS.md']).toMatch(
+      /do\s+not need a separate quote, a wallet listing or a balance read/,
+    )
+    expect(files['TOOLS.md']).toMatch(/--usd 0\.1 --note/)
+    expect(files['TOOLS.md']).toMatch(/Do not open it or run `--help`/)
+    expect(files['SOUL.md']).toMatch(/Never ask the user to\s+confirm what they just said/)
+  })
+})
+
 describe('syncTradingAgent', () => {
   function rpcWith(agents: Array<{ id: string }>) {
     const calls: Array<[string, Record<string, unknown>]> = []

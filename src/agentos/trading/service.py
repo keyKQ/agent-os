@@ -19,6 +19,7 @@ import contextlib
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Literal
 
 import httpx
@@ -1524,6 +1525,26 @@ class TradingService:
             return None
         return float(to_human(amount_raw, token.decimals)) * price
 
+    async def _raw_for_usd(self, chain: ChainSpec, token: TokenMeta, amount_usd: float) -> int:
+        """How much of ``token`` is worth ``amount_usd`` right now, in raw units.
+
+        "$5 of ETH" is how people size an order; the price is read once, here,
+        so neither the user nor the agent has to divide by hand. A token
+        without a USD price cannot be sized this way and says so.
+        """
+        if amount_usd <= 0:
+            raise TradingError("trading.invalid", "amountUsd must be greater than zero")
+        price = await self.prices.price(chain, token.address)
+        if price is None or price <= 0:
+            raise TradingError(
+                "trading.unpriced",
+                f"No USD price for {token.symbol or token.address} on {chain.name}; "
+                "size the order in token units instead",
+                details={"token": token.address, "chainId": chain.chain_id},
+            )
+        human = Decimal(str(amount_usd)) / Decimal(str(price))
+        return to_raw(human, token.decimals)
+
     async def quote(
         self,
         *,
@@ -1531,14 +1552,23 @@ class TradingService:
         wallet: str | None,
         token_in: str,
         token_out: str,
-        amount_in: str,
+        amount_in: str | None = None,
+        amount_usd: float | None = None,
         slippage_pct: float | None = None,
         initiator: Initiator = "manual",
     ) -> dict[str, Any]:
+        """Price a swap. Size it in token units (``amount_in``) or in dollars (``amount_usd``)."""
         record = self.vault.resolve(wallet)
         meta_in = await self.resolve_token(chain, token_in)
         meta_out = await self.resolve_token(chain, token_out)
-        amount_raw = to_raw(amount_in, meta_in.decimals)
+        if (amount_in is None) == (amount_usd is None):
+            raise TradingError(
+                "trading.invalid", "exactly one of amountIn or amountUsd is required"
+            )
+        if amount_in is not None:
+            amount_raw = to_raw(amount_in, meta_in.decimals)
+        else:
+            amount_raw = await self._raw_for_usd(chain, meta_in, float(amount_usd or 0))
         if amount_raw <= 0:
             raise TradingError("trading.invalid", "amountIn must be greater than zero")
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
@@ -1671,6 +1701,7 @@ class TradingService:
         session_key: str | None,
         note: str | None,
         wait: bool = False,
+        amount_usd: float | None = None,
     ) -> list[dict[str, Any]]:
         if not getattr(self.config, "enabled", True):
             raise TradingError("trading.disabled", "Trading is disabled in config")
@@ -1684,8 +1715,11 @@ class TradingService:
         meta_out = await self.resolve_token(chain, token_out)
         if meta_in.address == meta_out.address:
             raise TradingError("trading.invalid", "tokenIn and tokenOut are the same token")
-        if amount_in is None and amount_pct is None:
-            raise TradingError("trading.invalid", "amountIn or amountPct is required")
+        sizes = [s for s in (amount_in, amount_pct, amount_usd) if s is not None]
+        if len(sizes) != 1:
+            raise TradingError(
+                "trading.invalid", "exactly one of amountIn, amountPct or amountUsd is required"
+            )
         if amount_pct is not None and not (0 < float(amount_pct) <= 100):
             raise TradingError("trading.invalid", "amountPct must be between 0 and 100")
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
@@ -1696,7 +1730,9 @@ class TradingService:
                 await asyncio.sleep(BATCH_PAUSE_S)
             order_id = new_order_id()
             try:
-                amount_raw = await self._amount_for(chain, record, meta_in, amount_in, amount_pct)
+                amount_raw = await self._amount_for(
+                    chain, record, meta_in, amount_in, amount_pct, amount_usd
+                )
                 row = self._new_order(
                     order_id,
                     chain,
@@ -1749,9 +1785,12 @@ class TradingService:
         meta_in: TokenMeta,
         amount_in: str | None,
         amount_pct: float | None,
+        amount_usd: float | None = None,
     ) -> int:
         if amount_in is not None:
             raw = to_raw(amount_in, meta_in.decimals)
+        elif amount_usd is not None:
+            raw = await self._raw_for_usd(chain, meta_in, float(amount_usd))
         else:
             balance = await self._balance_raw(chain, record, meta_in)
             if meta_in.native and float(amount_pct or 0) >= 100:

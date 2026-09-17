@@ -61,7 +61,10 @@ tell the user and suggest `agentos trade provider uniswap` (or a VPN); do
 not retry. Never try to work around a locked vault.
 
 **Always pass `--json`** and read the structured fields; never parse the
-tables. Amounts are **human units** (`0.01` ETH, `25` USDC), never wei.
+tables. Amounts are **human units** (`0.01` ETH, `25` USDC), never wei. An
+order sized in dollars ("$5 of ETH", "0.1$ ETH", "5 USD worth") is `--usd 5`:
+the engine reads the price and sizes it; never divide by a price yourself.
+`--pct` is a share of the balance (`--pct 100` = all of it, gas reserved).
 
 ## JSON contract and exit codes
 
@@ -138,8 +141,9 @@ agentos trade tokens --chain robinhood AAPL --json
 agentos trade tokens --chain base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --json
 
 # Quote first, then swap
-agentos trade quote --chain base --in ETH --out USDC --amount 0.01 [--wallet ADDR] [--slippage P] --json
+agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet ADDR] [--slippage P] --json
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --note "user asked" --wait --wait-seconds 600 --json
+agentos trade swap  --chain base --in ETH --out USDC --usd 5 --note "user: $5 of ETH" --wait --wait-seconds 600 --json   # dollars of --in, sized by the engine
 agentos trade swap  --chain robinhood --in USDC --out 0x1b0e…153e --pct 50 --wallet 0xA… --wallet 0xB… --json
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --json
 
