@@ -109,6 +109,19 @@
   color: var(--muted-foreground);
 }
 
+/* The swap route's brand mark: monochrome, so it takes the colour of
+   whatever row, seat or plate it sits in. */
+.trd-mark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+.trd-mark > svg {
+  width: 100%;
+  height: 100%;
+}
+
 /* A figure that just changed: a wash that fades out. */
 @keyframes trd-tick {
   0% {

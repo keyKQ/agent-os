@@ -5,6 +5,7 @@ import { t } from '~/i18n'
 import { shortAge } from '~/lib/relative-time'
 import { allocationSegments, formatPct, formatUsd, pnlTone } from './logic'
 import { Money, Spinner, useCountUp } from './parts'
+import { ProviderMark, providerMark } from './ProviderMark'
 import { providerLabel, type Holding, type ProviderId, type Totals } from './types'
 
 /**
@@ -80,7 +81,7 @@ export function Overview({
         <div className="trd-hero__tools">
           {provider ? (
             <span className="trd-venue" data-testid="provider-pill">
-              <i aria-hidden />
+              {providerMark(provider) ? <ProviderMark id={provider} size={13} /> : <i aria-hidden />}
               {providerLabel(provider)}
             </span>
           ) : null}

@@ -781,6 +781,11 @@
   color: var(--primary);
   background: color-mix(in srgb, var(--primary) 14%, transparent);
 }
+/* The route's own logo replaces the letter when we have one. */
+.trd-ledger__mark > svg {
+  width: 15px;
+  height: 15px;
+}
 .trd-ledger__main {
   display: flex;
   min-width: 0;

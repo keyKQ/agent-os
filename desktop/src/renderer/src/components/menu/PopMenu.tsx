@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { cn } from '~/lib/utils'
 
 /** Gap kept between a floating menu and the window edge. */
 const EDGE = 8
@@ -347,6 +348,7 @@ export function Menu({
 /** One row. `checked` turns the leading slot into a checkmark. */
 export function MenuItem({
   icon: Icon,
+  mark,
   label,
   onSelect,
   tone,
@@ -356,6 +358,8 @@ export function MenuItem({
   role = checked === undefined ? 'menuitem' : 'menuitemcheckbox',
 }: {
   icon?: LucideIcon
+  /** A brand mark before the label; it sits beside the check, not in its place. */
+  mark?: ReactNode
   label: string
   onSelect: () => void
   tone?: 'danger'
@@ -371,7 +375,8 @@ export function MenuItem({
       type="button"
       role={role}
       aria-checked={checked === undefined ? undefined : checked}
-      className="mac-menu__item"
+      // A mark takes a column of its own, so the row keeps its three others.
+      className={cn('mac-menu__item', mark && 'mac-menu__item--mark')}
       data-tone={tone}
       disabled={disabled}
       onClick={() => {
@@ -388,6 +393,7 @@ export function MenuItem({
       ) : (
         <span className="mac-menu__check" aria-hidden />
       )}
+      {mark ? <span className="mac-menu__mark">{mark}</span> : null}
       <span className="mac-menu__label">{label}</span>
       {aside ? <span className="mac-menu__aside">{aside}</span> : null}
     </button>

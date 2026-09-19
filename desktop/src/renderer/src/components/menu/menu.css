@@ -101,6 +101,17 @@
   width: 16px;
   height: 16px;
 }
+/* A brand mark sits between the check and the label, in a column of its own. */
+.mac-menu__item--mark {
+  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+}
+.mac-menu__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
 .mac-menu__label {
   overflow: hidden;
   white-space: nowrap;

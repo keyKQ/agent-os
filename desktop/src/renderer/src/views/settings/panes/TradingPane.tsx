@@ -10,6 +10,7 @@ import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { useProbe, useTradingStatus, useWalletMutation, useWalletStatus } from '~/stores/trading'
 import { errorText } from '~/views/trading/logic'
+import { ProviderMark } from '~/views/trading/ProviderMark'
 import {
   DEFAULT_PROVIDER,
   PROVIDERS,
@@ -190,7 +191,11 @@ function TradingBody({
             label={t('trading.settings.provider')}
             value={provider}
             disabled={blocked || save.isPending}
-            options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+            options={PROVIDERS.map((p) => ({
+              value: p.id,
+              label: p.label,
+              icon: <ProviderMark id={p.id} size={13} />,
+            }))}
             onChange={(next) => {
               if (next !== provider) save.mutate({ provider: next })
             }}

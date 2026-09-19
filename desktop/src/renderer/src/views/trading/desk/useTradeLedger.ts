@@ -3,6 +3,7 @@ import type { StreamEventPayload } from '@/views/chat/types'
 import type { TranscriptEventSeams } from '@/views/chat/useTranscript'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
+import { providerMark } from '../ProviderMark'
 import { providerLabel } from '../types'
 import {
   commandFromToolInput,
@@ -69,6 +70,11 @@ function toolResultText(payload: StreamEventPayload | undefined): string {
   return ''
 }
 
+/**
+ * The row's mark. A call that names its route wears that route's logo; the
+ * letter behind it is what the folded group's header shows, where there is
+ * room for a glyph but not for a plate.
+ */
 function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
   const p = outcome?.provider
   if (p === 'aggregator') return 'A'
@@ -127,9 +133,16 @@ function renderRow(
           ? 'confirmed'
           : 'done'
 
-  const mark = el('span', 'trd-ledger__mark', glyphFor(call, outcome))
+  const glyph = glyphFor(call, outcome)
+  const mark = el('span', 'trd-ledger__mark', glyph)
   mark.setAttribute('aria-hidden', 'true')
-  if (outcome?.provider) mark.dataset.provider = outcome.provider
+  mark.dataset.glyph = glyph
+  if (outcome?.provider) {
+    mark.dataset.provider = outcome.provider
+    const logo = providerMark(outcome.provider)
+    // Static, bundled SVG from assets/providers: not user content.
+    if (logo) mark.innerHTML = logo
+  }
   row.appendChild(mark)
 
   const main = el('div', 'trd-ledger__main')
@@ -213,7 +226,12 @@ function refreshGroup(group: HTMLElement): void {
     group.prepend(summary)
   }
   summary.textContent = ''
-  const glyphs = new Set(rows.map((r) => r.querySelector('.trd-ledger__mark')?.textContent || ''))
+  const glyphs = new Set(
+    rows.map((r) => {
+      const mark = r.querySelector<HTMLElement>('.trd-ledger__mark')
+      return mark?.dataset.glyph || mark?.textContent || ''
+    }),
+  )
   summary.appendChild(el('span', 'trd-lgroup__glyphs', [...glyphs].join(' ')))
   summary.appendChild(
     el('span', 'trd-lgroup__title', `${rows.length} ${t('trading.ledger.calls')}`),

@@ -12,6 +12,7 @@ import { useRef, useState } from 'react'
 import { MenuItem, MenuSep, PopMenu } from '~/components/menu/PopMenu'
 import { t, type MessageKey } from '~/i18n'
 import { formatUsd, walletLabel } from '../logic'
+import { ProviderMark, providerMark } from '../ProviderMark'
 import {
   PROVIDERS,
   providerLabel,
@@ -180,7 +181,11 @@ function ProviderSeat({
         disabled={switching}
         data-testid="provider-seat"
       >
-        <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
+        {providerMark(provider) ? (
+          <ProviderMark id={provider} size={13} />
+        ) : (
+          <ArrowLeftRight className="size-3" strokeWidth={2} aria-hidden />
+        )}
         <span className="trd-seat__text">{providerLabel(provider)}</span>
         <ChevronDown className="size-3 opacity-70" strokeWidth={2} aria-hidden />
       </button>
@@ -197,6 +202,7 @@ function ProviderSeat({
               key={p.id}
               role="menuitemradio"
               checked={p.id === provider}
+              mark={<ProviderMark id={p.id} size={13} />}
               label={p.label}
               aside={facts(p.id)}
               onSelect={() => {
@@ -208,6 +214,8 @@ function ProviderSeat({
           <MenuSep />
           <MenuItem
             icon={Settings2}
+            // An empty mark slot: the labels in this menu line up in one column.
+            mark={<span aria-hidden />}
             label={t('trading.seat.provider.settings')}
             onSelect={() => {
               setAnchor(null)
