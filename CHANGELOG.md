@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Engine wallet vault and trading subsystem (`agentos.trading`): keystore v3
   wallets under `~/.agentos/wallets/` with `auto`/`manual` unlock, Uniswap
-  Trading API swaps on Base and Robinhood Chain, a chain-rebuildable SQLite
+  aggregator- or Uniswap-routed swaps on Base and Robinhood Chain, a chain-rebuildable SQLite
   ledger with FIFO cost basis and PnL, and code-enforced agent guardrails
   (per-order approval threshold, per-wallet daily cap, approval expiry).
   Exposed as `wallet.*` / `trading.*` gateway RPCs, configured under
@@ -20,10 +20,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`status`, `provider`, `probe`, `tokens`, `quote`, `swap`, `orders`,
   `order`, `approve`, `reject`, `history`, `portfolio`, `sync`, `limits`):
   thin clients over the new `wallet.*` / `trading.*` gateway RPCs. Two swap
-  providers: Uniswap (default, needs `trading.uniswap_api_key`) and
-  KyberSwap (`agentos trade provider kyber`; no key, but geo-restricted in
-  some countries — `probe --provider kyber` reports `blocked` and swaps fail
-  with `trading.provider_blocked` instead of crashing). Symbols resolve
+  providers: the AgentOS Aggregator (default, `https://agg.404defi.capital`,
+  no key — one GET returns the price and the unsigned calldata, including
+  the ERC-20 approval, and the engine refuses any quote whose approval names
+  a spender other than the swap target) and Uniswap
+  (`agentos trade provider uniswap`, needs `trading.uniswap_api_key`).
+  Tokens the venue refuses for legal reasons — the 29 tokenised stocks on
+  Robinhood Chain — fail with `trading.token_not_tradeable` rather than
+  being retried. Symbols resolve
   to exactly one verified token or the command exits 2; passwords come from a
   hidden prompt or `AGENTOS_WALLET_PASSWORD`; a swap run inside an agent turn
   is agent-initiated and subject to the approval threshold and daily cap.

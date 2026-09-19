@@ -145,11 +145,11 @@ describe('parseTradeResult', () => {
         tokenOut: { symbol: 'USDC' },
         priceImpactPct: 0.12,
         guard: { decision: 'needs_approval' },
-        provider: 'kyber',
+        provider: 'aggregator',
       }),
     )
     expect(quote.summary).toBe('0.1 ETH → 250 USDC · impact 0.12% · would need approval')
-    expect(quote.provider).toBe('kyber')
+    expect(quote.provider).toBe('aggregator')
 
     const balances = parseTradeResult(
       parseTradeCommand('agentos wallet balances --json')!,

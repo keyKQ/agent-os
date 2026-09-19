@@ -156,7 +156,6 @@ function ProviderSeat({
   const facts = (id: ProviderId): string => {
     const row = providers.find((p) => p.id === id)
     if (!row) return ''
-    if (row.blocked) return t('trading.seat.provider.blocked')
     if (row.needsKey) {
       return row.keyConfigured
         ? t('trading.seat.provider.keyOk')

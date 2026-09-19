@@ -1,9 +1,9 @@
 # Wallets and Trading
 
 AgentOS can hold EVM wallets of its own and swap tokens on **Base** and
-**Robinhood Chain** through a pluggable swap provider: the **Uniswap Trading
-API** (default, needs a free API key) or the **KyberSwap Aggregator**
-(opt-in, no key). The engine owns everything:
+**Robinhood Chain** through a pluggable swap provider: the **AgentOS
+Aggregator** (default, no key) or the **Uniswap Trading API** (fallback,
+needs a free API key). The engine owns everything:
 the encrypted wallet vault, the ledger with cost basis and PnL, quote and
 swap execution, and the guardrails that bound what an agent may do on its
 own. The desktop app's Trading page, the `agentos wallet` / `agentos trade`
@@ -50,8 +50,8 @@ gateway RPC surface (`wallet.*`, `trading.*`).
   for this; where one exists it only widens the set of tokens the sweep
   reads. A full resync drops and rebuilds the ledger.
 - **Swaps** — quote, approve (a plain ERC-20 approval to the provider's
-  spender: Uniswap's proxy or Kyber's router, no Permit2 signatures), sign
-  and broadcast, then confirm from the receipt.
+  spender: 0x's AllowanceHolder or Uniswap's proxy, no Permit2 signatures),
+  sign and broadcast, then confirm from the receipt.
   A swap can target one wallet, several, or all of them as a batch; one
   wallet failing never blocks the others.
 - **Agent trading** — the agent signs on its own within code-enforced limits
@@ -72,21 +72,30 @@ reports `deliveredToken` and the app offers a one-click unwrap
 
 ## Swap providers
 
-| Provider | Key | Where it works | Notes |
-| --- | --- | --- | --- |
-| `uniswap` (default) | Uniswap Trading API key | everywhere | Universal Router; `x-agent-info` attribution on every call |
-| `kyber` | none | geo-restricted: Kyber's edge answers HTTP 403 from some countries (Vietnam confirmed) | Aggregator routes + `route/build`; honeypot check refuses scam tokens, fee-on-transfer tokens produce a warning |
+| Provider | Key | Notes |
+| --- | --- | --- |
+| `aggregator` (default) | none | AgentOS Aggregator at `https://agg.404defi.capital`, an HTTP API in front of 0x Swap v2. One `GET /v1/quote` returns the price *and* the unsigned calldata, including the ERC-20 approval when one is needed. 20 bps integrator fee, reported in the quote and already deducted from the output. Quotes expire in 30 s upstream; the engine stops trusting them at 20 s. |
+| `uniswap` | Uniswap Trading API key | Universal Router; `x-agent-info` attribution on every call. Quotes fresh for 30 s. |
+
+The aggregator holds no key of its own and neither signs nor broadcasts:
+reading it cannot move funds. Before anything is signed the engine checks
+the one relation its calldata cannot hide — the approval's `spender` must be
+the same contract the swap transaction is sent `to` (0x's AllowanceHolder) —
+and refuses the quote outright otherwise. The approval is always for exactly
+the order's amount, never unlimited.
+
+The tokenised stocks on Robinhood Chain (29 of the 34 listed: AAPL, TSLA,
+NVDA, SPY, …) cannot be routed in either direction, at any size, at any time
+— 0x refuses them for legal reasons. That surfaces as
+`trading.token_not_tradeable`, and retrying does not help. ETH, WETH and
+USDG trade normally there.
 
 The provider is read from `trading.provider` on **every** call, so switching
 takes effect immediately, no gateway restart. There is one canonical way to
 change it: write the config key. The desktop does `config.patch
-{trading: {provider: "kyber"}}`; the CLI does `agentos trade provider kyber`
-(`config.set trading.provider`); `trading.setProvider {provider}` is a thin
-RPC wrapper over the same `config.set` path. When Kyber is blocked, quotes
-and swaps fail with error code `trading.provider_blocked` (non-fatal; the
-order is marked `failed`, nothing is signed) and `trading.probe
-{provider: "kyber"}` reports `blocked: true`. Switch back to Uniswap or use
-a VPN.
+{trading: {provider: "uniswap"}}`; the CLI does `agentos trade provider
+uniswap` (`config.set trading.provider`); `trading.setProvider {provider}`
+is a thin RPC wrapper over the same `config.set` path.
 
 Prices, balances and history never depend on the provider (DexScreener /
 CoinGecko / your RPC node); only quoting and calldata do.
@@ -96,10 +105,10 @@ CoinGecko / your RPC node); only quoting and calldata do.
 ```toml
 [trading]
 enabled = true
-provider = "uniswap"                 # or "kyber"
-uniswap_api_key = ""                 # or set UNISWAP_API_KEY in the environment
+provider = "aggregator"              # or "uniswap"
+aggregator_base_url = "https://agg.404defi.capital"
+uniswap_api_key = ""                 # only for provider = "uniswap"; or set UNISWAP_API_KEY
 uniswap_api_key_env = "UNISWAP_API_KEY"
-kyber_client_id = "agentos"          # X-Client-Id sent to KyberSwap
 approval_threshold_usd = 100.0       # agent orders above this wait for approval
 daily_cap_usd = 1000.0               # per wallet, agent-initiated swaps only; 0 = agent swaps off
 approval_ttl_seconds = 900           # unanswered approvals expire
@@ -119,7 +128,7 @@ RPC resolution order per chain: `trading.rpc_urls`, then the environment
 variables `RPC_BASE_URL` (8453) / `RPC_ROBINHOOD_URL` (4663), then the
 public default. Every `[trading]` key is also an environment variable with
 the `AGENTOS_TRADING_` prefix (`AGENTOS_TRADING_DAILY_CAP_USD=250`,
-`AGENTOS_TRADING_PROVIDER=kyber`). The API key is redacted in
+`AGENTOS_TRADING_PROVIDER=uniswap`). The API key is redacted in
 `config.snapshot` and every public config view like any other `*_api_key`.
 Get a key from the Uniswap developer dashboard; the desktop's **Settings →
 Trading** pane has a *Test key* button (`trading.probe`).
@@ -212,9 +221,14 @@ please re-approve` instead of executing. `trading.limits` and
 `approvalTtlSeconds`, `agentMaxPriceImpactPct`, `agentMaxSlippagePct`) and
 `spentTodayUsd`.
 
-Every quote result and order carries `provider` (`uniswap` / `kyber`),
-`expiresAt` (a Uniswap quote is fresh for 30 s, a Kyber route for 8 s) and
-`warnings` (Kyber fee-on-transfer notice, route output change).
+Every quote result and order carries `provider` (`aggregator` / `uniswap`),
+`expiresAt` (about 20 s for an aggregator quote, 30 s for a Uniswap one) and
+`warnings` (a clamped slippage, a route the venue could not fully simulate).
+
+The aggregator publishes no price-impact figure and prices gas in ETH rather
+than dollars, so the engine fills both in from its own price feed before the
+guardrails read them — `agent_max_price_impact_pct` keeps biting on a thin
+route whichever provider found it.
 
 Order statuses: `quoted → awaiting_approval | submitted → confirmed |
 failed`, with `approved`, `rejected` and `expired` in between (`expired` is

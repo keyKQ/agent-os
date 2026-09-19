@@ -1,8 +1,8 @@
 """Offline doubles for every network dependency of ``agentos.trading``.
 
-One ``httpx.MockTransport`` routes by host: JSON-RPC nodes, the Uniswap
-Trading API, DexScreener, CoinGecko and GeckoTerminal. Tests configure the
-fakes and assert on what was requested.
+One ``httpx.MockTransport`` routes by host: JSON-RPC nodes, the AgentOS
+Aggregator, the Uniswap Trading API, DexScreener, CoinGecko and
+GeckoTerminal. Tests configure the fakes and assert on what was requested.
 """
 
 from __future__ import annotations
@@ -10,12 +10,15 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
 
+from agentos.trading.aggregator import NATIVE_SENTINEL as AGG_NATIVE
 from agentos.trading.evm import (
+    SEL_ALLOWANCE,
     SEL_APPROVE,
     SEL_BALANCE_OF,
     SEL_DECIMALS,
@@ -89,6 +92,11 @@ class FakeChain:
     # Raise a JSON-RPC error for eth_getLogs spans wider than this (forces chunk halving).
     max_log_span: int | None = None
     on_send: Callable[[str], str] | None = None
+    #: ``"token:owner:spender" -> amount``, as ``approve`` leaves it.
+    allowances: dict[str, int] = field(default_factory=dict)
+    #: Answer eth_getBalance per (address, block) instead of from ``native``.
+    #: Lets a test play a load-balanced node whose "latest" is a block behind.
+    balance_at: Callable[[str, str], int] | None = None
     batch_supported: bool = True
     block_timestamps: dict[int, int] = field(default_factory=dict)
     fee_history: bool = True
@@ -104,6 +112,26 @@ class FakeChain:
 
     def set_erc20(self, token: str, address: str, raw: int) -> None:
         self.erc20.setdefault(token.lower(), {})[address.lower()] = raw
+
+    @staticmethod
+    def _allowance_key(token: str, owner: str, spender: str) -> str:
+        return f"{token.lower()}:{owner.lower()}:{spender.lower()}"
+
+    def set_allowance(self, token: str, owner: str, spender: str, amount: int) -> None:
+        self.allowances[self._allowance_key(token, owner, spender)] = amount
+
+    def get_allowance(self, token: str, owner: str, spender: str) -> int:
+        return self.allowances.get(self._allowance_key(token, owner, spender), 0)
+
+    def apply_approve(self, owner: str, tx: dict[str, Any]) -> bool:
+        """Record what an ``approve(spender, amount)`` calldata grants."""
+        data = str(tx.get("data") or "")
+        if not data.startswith(SEL_APPROVE) or len(data) < 138:
+            return False
+        self.set_allowance(
+            str(tx.get("to") or ""), owner, "0x" + data[10:74][-40:], int(data[74:138], 16)
+        )
+        return True
 
     def get_erc20(self, token: str, address: str) -> int:
         return self.erc20.get(token.lower(), {}).get(address.lower(), 0)
@@ -157,7 +185,11 @@ class FakeChain:
         if method == "eth_blockNumber":
             return hex(self.block)
         if method == "eth_getBalance":
-            return hex(self.native.get(str(params[0]).lower(), 0))
+            address = str(params[0]).lower()
+            block = str(params[1]) if len(params) > 1 else "latest"
+            if self.balance_at is not None:
+                return hex(self.balance_at(address, block))
+            return hex(self.native.get(address, 0))
         if method == "eth_getBlockByNumber":
             number = int(str(params[0]), 16) if str(params[0]).startswith("0x") else self.block
             ts = self.block_timestamps.get(number, 1_700_000_000 + number * 2)
@@ -206,6 +238,10 @@ class FakeChain:
                 raise _RpcFailError("execution timeout", -32000)
             owner = "0x" + data[10:74][-40:]
             return _enc_uint(self.get_erc20(to, owner))
+        if selector == SEL_ALLOWANCE:
+            owner = "0x" + data[10:74][-40:]
+            spender = "0x" + data[74:138][-40:]
+            return _enc_uint(self.get_allowance(to, owner, spender))
         meta = self.tokens.get(to)
         if selector == SEL_SYMBOL:
             return _enc_string(meta[0]) if meta else "0x"
@@ -377,6 +413,136 @@ class FakeUniswap:
 
 
 @dataclass
+class FakeAggregator:
+    """The AgentOS Aggregator: one GET answers with price *and* calldata.
+
+    Knob names mirror :class:`FakeUniswap` where the concept is the same, so
+    a test can be pointed at either provider. ``approval_spender`` defaults
+    to ``tx_to`` because that relation — spender is the swap target — is what
+    the real API guarantees and what the provider refuses to sign without.
+    """
+
+    # 0.005 WETH ($10 at the fake's $2,000) for the default 10 USDC quote.
+    # Unlike Uniswap, this provider publishes no price impact, so the engine
+    # derives one from these amounts — they have to add up.
+    amount_out: int = 5_000_000_000_000_000
+    min_out: int | None = None
+    approval_needed: bool = False
+    approval_spender: str | None = None  # None => the same contract as tx_to
+    gas_estimate: str = "288079"
+    gas_cost_native: str = "0.00001"
+    slippage_bps: int = 50
+    route_source: str = "Uniswap_V4"
+    liquidity: bool = True
+    expires_in_s: float = 30.0
+    configured: bool = True
+    quote_error: tuple[int, dict[str, Any]] | None = None
+    tx_to: str = ROUTER
+    tx_value: str = "0"
+    tx_data: str = "0x2213bc0b" + "22" * 32
+    requests: list[httpx.Request] = field(default_factory=list)
+    quotes: int = 0
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        path = request.url.path
+        if path == "/health":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "version": "0.1.0",
+                    "chains": [8453, 4663],
+                    "configured": self.configured,
+                },
+            )
+        if path not in ("/v1/quote", "/v1/price"):
+            return httpx.Response(404, json={"error": {"code": "INVALID_REQUEST"}})
+        self.quotes += 1
+        if self.quote_error is not None:
+            status, payload = self.quote_error
+            return httpx.Response(status, json=payload)
+        params = {k: v[0] for k, v in parse_qs(request.url.query.decode()).items()}
+        sell, buy = params["sell"], params["buy"]
+        amount_raw = int(params["sellAmountRaw"])
+        taker = params.get("taker", WALLET)
+        if not self.liquidity:
+            return httpx.Response(
+                200,
+                json={
+                    "chainId": int(params["chain"]),
+                    "sellToken": self._token(sell),
+                    "buyToken": self._token(buy),
+                    "sellAmount": {"raw": str(amount_raw), "formatted": None},
+                    "buyAmount": None,
+                    "minBuyAmount": None,
+                    "price": None,
+                    "fee": None,
+                    "route": [],
+                    "liquidityAvailable": False,
+                    "explanation": "No route for this pair right now.",
+                },
+            )
+        min_out = self.min_out if self.min_out is not None else self.amount_out * 995 // 1000
+        spender = (self.approval_spender or self.tx_to).lower()
+        approval: dict[str, Any] | None = None
+        if self.approval_needed and sell.lower() != AGG_NATIVE.lower():
+            approval = {
+                "required": True,
+                "token": sell.lower(),
+                "spender": spender,
+                "currentAllowance": "0",
+                "amountNeeded": str(amount_raw),
+                "transaction": {
+                    "to": sell.lower(),
+                    "data": approve_calldata(spender, amount_raw),
+                    "value": "0",
+                },
+                "explanation": "Send this approve transaction first.",
+            }
+        expires = datetime.now(tz=UTC) + timedelta(seconds=self.expires_in_s)
+        return httpx.Response(
+            200,
+            json={
+                "chainId": int(params["chain"]),
+                "sellToken": self._token(sell),
+                "buyToken": self._token(buy),
+                "sellAmount": {"raw": str(amount_raw), "formatted": None},
+                "buyAmount": {"raw": str(self.amount_out), "formatted": None},
+                "minBuyAmount": {"raw": str(min_out), "formatted": None},
+                "price": "1",
+                "fee": {"bps": 20, "token": "ETH", "amount": {"raw": "1", "formatted": None}},
+                "gas": {
+                    "estimate": self.gas_estimate,
+                    "gasPriceWei": "5040000",
+                    "estimatedCostNative": self.gas_cost_native,
+                },
+                "route": [{"source": self.route_source, "proportionBps": 10000}],
+                "slippageBps": int(params.get("slippageBps", self.slippage_bps)),
+                "liquidityAvailable": True,
+                "cached": False,
+                "recipient": taker,
+                "approval": approval,
+                "transaction": {
+                    "to": self.tx_to,
+                    "data": self.tx_data,
+                    "value": self.tx_value,
+                    "gas": self.gas_estimate,
+                    "gasPrice": "5040000",
+                },
+                "expiresAt": expires.isoformat().replace("+00:00", "Z"),
+                "issues": {"balance": None, "simulationIncomplete": False},
+                "explanation": "Sell for about something via a pool.",
+            },
+        )
+
+    @staticmethod
+    def _token(address: str) -> dict[str, Any]:
+        decimals = {USDC: 6}.get(address.lower(), 18)
+        return {"address": address.lower(), "symbol": "TKN", "decimals": decimals}
+
+
+@dataclass
 class FakePrices:
     """DexScreener spot prices + CoinGecko lists/history + GeckoTerminal candles."""
 
@@ -483,12 +649,15 @@ def make_transport(
     chains: dict[str, FakeChain],
     uniswap: FakeUniswap,
     prices: FakePrices,
+    aggregator: FakeAggregator | None = None,
     indexer: FakeIndexer | None = None,
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if host in chains:
             return chains[host].handle(request)
+        if host == "agg.404defi.capital":
+            return (aggregator or FakeAggregator()).handle(request)
         if host == "trade-api.gateway.uniswap.org":
             return uniswap.handle(request)
         if host.endswith("blockscout.com"):

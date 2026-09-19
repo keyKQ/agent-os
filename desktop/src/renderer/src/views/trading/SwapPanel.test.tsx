@@ -21,7 +21,6 @@ function mount(extra: Partial<Parameters<typeof SwapPanel>[0]> = {}) {
       selectedWallet="all"
       provider="uniswap"
       providerReady
-      onSwitchProvider={vi.fn()}
       onOpenSettings={vi.fn()}
       unlocked
       prefill={{ chainId: 8453, tokenIn: ETH, tokenOut: USDC, seq: 1 }}
@@ -177,24 +176,13 @@ describe('SwapPanel', () => {
     expect(rpcCall.mock.calls.some((c) => c[0] === 'trading.quote')).toBe(false)
   })
 
-  it('opens Settings from the no-key button and switches provider from the blocked one', () => {
+  it('opens Settings from the no-key button', () => {
     const onOpenSettings = vi.fn()
-    const onSwitchProvider = vi.fn()
-    const { unmount } = mount({ providerReady: false, onOpenSettings, onSwitchProvider })
+    mount({ provider: 'uniswap', providerReady: false, onOpenSettings })
     const cta = screen.getByTestId('swap-review')
     expect(cta).toHaveTextContent('Add a Uniswap key')
     expect(cta).not.toBeDisabled()
     fireEvent.click(cta)
-    expect(onOpenSettings).toHaveBeenCalledTimes(1)
-    expect(onSwitchProvider).not.toHaveBeenCalled()
-    unmount()
-
-    mount({ provider: 'kyber', providerReady: false, onOpenSettings, onSwitchProvider })
-    const fix = screen.getByTestId('swap-review')
-    expect(fix).toHaveTextContent('Switch to Uniswap')
-    expect(fix).not.toBeDisabled()
-    fireEvent.click(fix)
-    expect(onSwitchProvider).toHaveBeenCalledWith('uniswap')
     expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 
@@ -273,7 +261,6 @@ describe('SwapPanel', () => {
         selectedWallet="all"
         provider="uniswap"
         providerReady
-        onSwitchProvider={vi.fn()}
         onOpenSettings={vi.fn()}
         unlocked
         prefill={null}
@@ -320,7 +307,7 @@ describe('SwapPanel · providers', () => {
   it('names the provider on the quote line', async () => {
     rpcCall.mockImplementation(async (method: string) =>
       method === 'trading.quote'
-        ? quote({ provider: 'kyber' })
+        ? quote({ provider: 'aggregator' })
         : method === 'wallet.balances'
           ? {
               balances: [
@@ -337,22 +324,18 @@ describe('SwapPanel · providers', () => {
             }
           : {},
     )
-    mount({ provider: 'kyber' })
+    mount({ provider: 'aggregator' })
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '0.1' } })
     await waitFor(() =>
-      expect(screen.getByTestId('quote-provider')).toHaveTextContent('via KyberSwap'),
+      expect(screen.getByTestId('quote-provider')).toHaveTextContent('via AgentOS Aggregator'),
     )
   })
 
-  it('offers to switch to Uniswap when the provider is blocked in this region', async () => {
+  it('shows what the provider refused instead of a dead ticket', async () => {
     rpcCall.mockImplementation(async (method: string) => {
       if (method === 'trading.quote') {
-        const err = new Error(
-          'KyberSwap is not available from your region (HTTP 403).',
-        ) as Error & {
-          code?: string
-        }
-        err.code = 'trading.provider_blocked'
+        const err = new Error('TSLA is not authorized for trade.') as Error & { code?: string }
+        err.code = 'trading.token_not_tradeable'
         throw err
       }
       if (method === 'wallet.balances')
@@ -371,20 +354,16 @@ describe('SwapPanel · providers', () => {
         }
       return {}
     })
-    const onSwitchProvider = vi.fn()
-    mount({ provider: 'kyber', onSwitchProvider })
+    mount({ provider: 'aggregator' })
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '0.1' } })
-    const fix = await screen.findByTestId('provider-blocked-fix')
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'KyberSwap is not available from your region',
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('not authorized for trade'),
     )
-    fireEvent.click(fix)
-    expect(onSwitchProvider).toHaveBeenCalled()
     expect(screen.getByTestId('swap-review')).toBeDisabled()
   })
 
-  it('does not ask for a key when Kyber is the provider', () => {
-    mount({ provider: 'kyber', providerReady: true })
+  it('does not ask for a key when the aggregator is the provider', () => {
+    mount({ provider: 'aggregator', providerReady: true })
     expect(screen.getByTestId('swap-review')).toHaveTextContent('Enter an amount')
   })
 })
@@ -422,7 +401,7 @@ describe('SwapPanel · provider warnings', () => {
   it('lists what the provider flagged, in the ticket and again in the confirm sheet', async () => {
     rpcCall.mockImplementation(async (method: string) =>
       method === 'trading.quote'
-        ? quote({ provider: 'kyber', warnings: ['USDC charges a 1% fee on transfer.', ''] })
+        ? quote({ provider: 'aggregator', warnings: ['USDC charges a 1% fee on transfer.', ''] })
         : method === 'wallet.balances'
           ? {
               balances: [
@@ -439,7 +418,7 @@ describe('SwapPanel · provider warnings', () => {
             }
           : {},
     )
-    mount({ provider: 'kyber' })
+    mount({ provider: 'aggregator' })
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '0.1' } })
     const list = await screen.findByTestId('quote-warnings')
     expect(list.querySelectorAll('li')).toHaveLength(1)

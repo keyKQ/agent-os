@@ -33,6 +33,7 @@ import { PriceChart } from './PriceChart'
 import { SwapPanel, type SwapPrefill } from './SwapPanel'
 import {
   CHAINS,
+  DEFAULT_PROVIDER,
   type ChainId,
   type Holding,
   type Order,
@@ -40,8 +41,8 @@ import {
   type Totals,
   type Wallet,
 } from './types'
-import { useSwitchProvider } from './useSwitchProvider'
-import { WalletRail, type WalletAction, type WalletSelection } from './WalletRail'
+import { WalletHead } from './WalletHead'
+import { Budget, WalletRail, type WalletAction, type WalletSelection } from './WalletRail'
 import { WalletSheet, type WalletSheetMode } from './WalletSheet'
 
 type Tab = 'holdings' | 'history' | 'orders' | 'approvals'
@@ -161,19 +162,13 @@ function Gate({ entering }: { entering: boolean }) {
       </>
     )
   }
-  const provider = status.data?.provider ?? 'uniswap'
-  const providerStatus = status.data?.providers?.find((p) => p.id === provider)
+  const provider = status.data?.provider ?? DEFAULT_PROVIDER
   return (
     <Desk
       entering={entering}
       provider={provider}
-      // Only Uniswap needs a key; Kyber's readiness is whether the region lets it answer.
-      providerReady={
-        provider === 'uniswap'
-          ? Boolean(status.data?.apiKeyConfigured)
-          : providerStatus?.blocked !== true
-      }
-      providerBlocked={providerStatus?.blocked === true}
+      // Only Uniswap needs a key; the aggregator is ready as soon as it answers.
+      providerReady={provider !== 'uniswap' || Boolean(status.data?.apiKeyConfigured)}
       needsKey={provider === 'uniswap' && !status.data?.apiKeyConfigured}
     />
   )
@@ -203,13 +198,11 @@ function State({
 function Desk({
   provider,
   providerReady,
-  providerBlocked,
   needsKey,
   entering,
 }: {
   provider: ProviderId
   providerReady: boolean
-  providerBlocked: boolean
   needsKey: boolean
   /** The mode switch is playing: the head counts its value up from zero. */
   entering: boolean
@@ -224,6 +217,7 @@ function Desk({
   const [prefill, setPrefill] = useState<SwapPrefill | null>(null)
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
   const [highlight, setHighlight] = useState<string | null>(null)
+  const [railWanted, setRailWanted] = useRailPreference()
   const openSettings = useUi((s) => s.openSettings)
   const now = useNow(30_000)
   const location = useLocation()
@@ -262,7 +256,6 @@ function Desk({
   const decide = useOrderDecision()
   const sync = useSync()
   const walletWrite = useWalletMutation()
-  const switchProvider = useSwitchProvider()
 
   const totalsByWallet = useMemo(() => {
     const m = new Map<string, Totals>()
@@ -344,25 +337,32 @@ function Desk({
 
   const showWallet = selected === 'all'
   const totals = portfolio.data?.totals ?? EMPTY_TOTALS
+  // A list of one is not a list: with a single wallet the head says everything
+  // the rail would, and the column is 232 px the ledger can have instead.
+  const railOpen = railWanted && wallets.length > 1
+
+  function onSelectWallet(s: WalletSelection) {
+    setSelected(s)
+    setPicked(null)
+  }
 
   return (
     <div className="trd-viewport">
-      <div className="trd" data-testid="trading-desk">
-        <WalletRail
-          wallets={wallets}
-          totals={railTotals}
-          selected={selected}
-          onSelect={(s) => {
-            setSelected(s)
-            setPicked(null)
-          }}
-          onAction={onWalletAction}
-          onSetPrimary={onSetPrimary}
-          limits={limits.data}
-          limitsWallet={limitsWallet}
-          chains={status.data?.chains ?? []}
-          manualUnlock={vault.data?.unlockMode === 'manual'}
-        />
+      <div className="trd" data-testid="trading-desk" data-rail={railOpen ? 'on' : 'off'}>
+        {railOpen ? (
+          <WalletRail
+            wallets={wallets}
+            totals={railTotals}
+            selected={selected}
+            onSelect={onSelectWallet}
+            onAction={onWalletAction}
+            onSetPrimary={onSetPrimary}
+            limits={limits.data}
+            limitsWallet={limitsWallet}
+            chains={status.data?.chains ?? []}
+            manualUnlock={vault.data?.unlockMode === 'manual'}
+          />
+        ) : null}
 
         <div className="trd-desk">
           {needsKey ? (
@@ -379,22 +379,6 @@ function Desk({
                 <b>{t('trading.noKey.title')}</b> {t('trading.noKey.body')}
               </Notice>
             </div>
-          ) : providerBlocked ? (
-            <div className="trd-desk__notice">
-              <Notice
-                tone="warn"
-                action={
-                  <Button
-                    onClick={() => openSettings('trading')}
-                    data-testid="provider-blocked-fix"
-                  >
-                    {t('trading.provider.switch')}
-                  </Button>
-                }
-              >
-                {t('trading.provider.blocked')}
-              </Notice>
-            </div>
           ) : null}
 
           <Overview
@@ -407,7 +391,26 @@ function Desk({
             onSync={() => sync.mutate(walletAddress ? { wallet: walletAddress } : {})}
             provider={provider}
             entering={entering}
+            head={
+              <WalletHead
+                wallets={wallets}
+                selected={selected}
+                onSelect={onSelectWallet}
+                totals={railTotals}
+                onAction={onWalletAction}
+                onSetPrimary={onSetPrimary}
+                chains={status.data?.chains ?? []}
+                railOpen={railOpen}
+                onToggleRail={() => setRailWanted(!railWanted)}
+              />
+            }
           />
+
+          {/* The agent's budget rides in the rail; with the rail away it still
+              has to be on screen, so it lays itself out as a strip instead. */}
+          {!railOpen && limits.data && limitsWallet ? (
+            <Budget limits={limits.data} wallet={limitsWallet} strip />
+          ) : null}
 
           <div className="trd-panel">
             <div className="trd-tabs" role="tablist" aria-label={t('trading.title')}>
@@ -519,7 +522,6 @@ function Desk({
           selectedWallet={selected}
           provider={provider}
           providerReady={providerReady}
-          onSwitchProvider={switchProvider.switchTo}
           onOpenSettings={() => openSettings('trading')}
           unlocked={Boolean(vault.data?.unlocked)}
           prefill={prefill}
@@ -530,6 +532,27 @@ function Desk({
       </div>
     </div>
   )
+}
+
+/** Where the rail's shown/hidden choice is kept. */
+const RAIL_KEY = 'agentos.trading.rail'
+
+/**
+ * Whether the wallet rail is wanted, remembered across visits.
+ *
+ * Showing it again every time the desk mounts would undo the choice on each
+ * trip through chat, which reads as the toggle not working. localStorage
+ * rather than the gateway: it is this window's layout, not an account setting.
+ */
+function useRailPreference(): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== 'off')
+  return [
+    open,
+    (next: boolean) => {
+      setOpen(next)
+      localStorage.setItem(RAIL_KEY, next ? 'on' : 'off')
+    },
+  ]
 }
 
 function useTotalsMap(rows: { wallet: Wallet; totals: Totals }[] | undefined): Map<string, Totals> {

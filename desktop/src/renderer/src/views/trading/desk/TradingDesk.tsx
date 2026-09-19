@@ -16,8 +16,7 @@ import {
 } from '~/stores/trading'
 import { useUi } from '~/stores/ui'
 import { sameAddress } from '../logic'
-import type { ProviderId } from '../types'
-import { useSwitchProvider } from '../useSwitchProvider'
+import { DEFAULT_PROVIDER, type ProviderId } from '../types'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
 import { Book } from './Book'
 import { bookConcession } from './desk-logic'
@@ -63,7 +62,6 @@ export function useDeskFrame(input: {
   const status = useTradingStatus(active)
   const vault = useWalletStatus(active)
   const openSettings = useUi((s) => s.openSettings)
-  const switchProvider = useSwitchProvider()
   const location = useLocation()
   const navigate = useNavigate()
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
@@ -73,13 +71,9 @@ export function useDeskFrame(input: {
   const vaultReady = Boolean(v && v.initialized && v.unlocked)
   const locked = Boolean(v && v.initialized && !v.unlocked)
   const ready = active && !disabled && vaultReady
-  const provider: ProviderId = status.data?.provider ?? 'uniswap'
-  const providerStatus = status.data?.providers?.find((p) => p.id === provider)
-  const providerReady =
-    provider === 'uniswap'
-      ? Boolean(status.data?.apiKeyConfigured)
-      : providerStatus?.blocked !== true
-  const providerBlocked = providerStatus?.blocked === true
+  const provider: ProviderId = status.data?.provider ?? DEFAULT_PROVIDER
+  // Only Uniswap needs a key; the aggregator is ready as soon as it answers.
+  const providerReady = provider !== 'uniswap' || Boolean(status.data?.apiKeyConfigured)
   const needsKey = provider === 'uniswap' && !status.data?.apiKeyConfigured
   const chains = useMemo(
     () => (status.data?.chains ?? []).map((c) => c.chainId),
@@ -252,7 +246,7 @@ export function useDeskFrame(input: {
     wallets,
     primary,
     limits: limits.data ?? null,
-    gate: { needsKey, providerBlocked, provider },
+    gate: { needsKey, provider },
     missions,
     onFirstSend: session.ensureFiled,
     onStartFresh: session.startFresh,
@@ -292,7 +286,6 @@ export function useDeskFrame(input: {
         width={concession.book}
         onResize={setBookWidth}
         onToggle={toggleBook}
-        onSwitchProvider={switchProvider.switchTo}
         onOpenSettings={() => openSettings('trading')}
         highlightOrder={null}
         entering={entering}

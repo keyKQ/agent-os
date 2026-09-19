@@ -522,6 +522,7 @@ when multiple packages use the same license.
 - `motion@12.42.2` — MIT
 - `motion-dom@12.42.2` — MIT
 - `motion-utils@12.39.0` — MIT
+- `qrcode-generator@1.5.2` — MIT
 - `react@19.2.7` — MIT
 - `react-dom@19.2.7` — MIT
 - `react-router@7.18.1` — MIT

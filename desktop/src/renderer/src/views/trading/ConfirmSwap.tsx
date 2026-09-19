@@ -17,7 +17,7 @@ import {
   walletLabel,
 } from './logic'
 import { Sheet } from './parts'
-import { isProviderBlocked, QuoteWarnings } from './SwapPanel'
+import { QuoteWarnings } from './SwapPanel'
 import { providerLabel, type Order, type Quote, type Token, type Wallet } from './types'
 
 /**
@@ -38,7 +38,6 @@ export function ConfirmSwap({
   onRefresh,
   onClose,
   onSent,
-  onSwitchProvider,
 }: {
   quote: Quote
   fetchedAt: number
@@ -53,8 +52,6 @@ export function ConfirmSwap({
   onRefresh: () => void
   onClose: () => void
   onSent: (orders: Order[]) => void
-  /** Where a geo-blocked provider is fixed (Settings › Trading). */
-  onSwitchProvider?: () => void
 }) {
   const now = useNow(1000)
   const stale = quoteCountdown(fetchedAt, now).expired
@@ -90,15 +87,6 @@ export function ConfirmSwap({
           onSent(orders)
         },
         onError: (err) => {
-          if (isProviderBlocked(err)) {
-            toast.error(t('trading.provider.blocked'), {
-              id: 'trd-swap',
-              action: onSwitchProvider
-                ? { label: t('trading.provider.switch'), onClick: onSwitchProvider }
-                : undefined,
-            })
-            return
-          }
           toast.error(`${t('trading.swap.error')}: ${errorText(err)}`, { id: 'trd-swap' })
         },
       },

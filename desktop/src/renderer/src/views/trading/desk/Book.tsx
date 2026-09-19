@@ -5,12 +5,8 @@ import {
   ChevronsRight,
   History as HistoryIcon,
   ListChecks,
-  Plus,
-  Settings2,
-  Star,
   TrendingDown,
   TrendingUp,
-  Wallet as WalletIcon,
 } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -24,6 +20,8 @@ import {
   useOrders,
   usePortfolio,
   useTokenVisibility,
+  useTradingStatus,
+  useWalletMutation,
 } from '~/stores/trading'
 import { History } from '../History'
 import { Holdings } from '../Holdings'
@@ -36,12 +34,12 @@ import {
   isAwaitingApproval,
   pnlTone,
   sameAddress,
-  walletLabel,
 } from '../logic'
 import { Orders } from '../Orders'
 import { Money, useCountUp } from '../parts'
 import { SwapPanel, type SwapPrefill } from '../SwapPanel'
-import type { Holding, Order, ProviderId, Wallet } from '../types'
+import type { Holding, Order, ProviderId, Totals, Wallet } from '../types'
+import { WalletHead } from '../WalletHead'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
 import { BOOK_MAX, BOOK_MIN } from './desk-logic'
 
@@ -67,7 +65,6 @@ export function Book({
   width,
   onResize,
   onToggle,
-  onSwitchProvider,
   onOpenSettings,
   highlightOrder,
   entering = false,
@@ -81,7 +78,6 @@ export function Book({
   width: number
   onResize: (width: number) => void
   onToggle: () => void
-  onSwitchProvider: (id: ProviderId) => void
   onOpenSettings: () => void
   highlightOrder: string | null
   /** The desk is powering on: the hero value counts up once. */
@@ -95,6 +91,8 @@ export function Book({
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
   const now = useNow(30_000)
   const decide = useOrderDecision()
+  const walletWrite = useWalletMutation()
+  const chains = useTradingStatus().data?.chains ?? []
 
   const selected: string | 'all' =
     walletSel !== 'all' && !wallets.some((w) => sameAddress(w.address, walletSel))
@@ -116,12 +114,17 @@ export function Book({
   const tone = pnlTone(totals.change24hUsd)
   const Arrow = tone === 'down' ? TrendingDown : TrendingUp
   const segments = allocationSegments(holdings)
-  const byWallet = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const row of portfolio.data?.wallets ?? [])
-      m.set(row.wallet.address.toLowerCase(), row.totals.valueUsd)
+  // The switcher names every wallet and what it holds. A portfolio scoped to
+  // one wallet only carries that one, and a dropdown that showed one figure
+  // beside "All wallets" would be lying, so the unscoped totals are fetched
+  // exactly while a single wallet is selected.
+  const allPortfolio = usePortfolio(undefined, !collapsed && selected !== 'all')
+  const headTotals = useMemo(() => {
+    const rows = (selected === 'all' ? portfolio.data : allPortfolio.data)?.wallets ?? []
+    const m = new Map<string, Totals>()
+    for (const row of rows) m.set(row.wallet.address.toLowerCase(), row.totals)
     return m
-  }, [portfolio.data])
+  }, [portfolio.data, allPortfolio.data, selected])
 
   // Drag the left edge; the width is measured from the rendered edge so a
   // concession-clamped panel does not jump on the first pixel.
@@ -259,7 +262,29 @@ export function Book({
             {/* The same head the full desk wears, compressed by the
                 .trd-book overrides — one vocabulary, one set of rules. */}
             <section className="trd-hero trd-book__hero" data-tone={tone}>
-              <span className="trd-hero__label">{t('trading.overview.value')}</span>
+              <WalletHead
+                compact
+                wallets={wallets}
+                selected={selected}
+                onSelect={setWalletSel}
+                totals={headTotals}
+                // Locking the vault is the full desk's rail; the head never
+                // raises it, and the BOOK has no sheet for it.
+                onAction={(action) => {
+                  if (action.kind !== 'lock') setSheet(action)
+                }}
+                onSetPrimary={(w) =>
+                  walletWrite.mutate(
+                    { method: 'wallet.setPrimary', params: { address: w.address } },
+                    {
+                      onError: (err) =>
+                        toast.error(`${t('trading.sheet.error')}: ${errorText(err)}`),
+                    },
+                  )
+                }
+                onManage={() => setSheet({ kind: 'manage' })}
+                chains={chains}
+              />
               <div className="trd-hero__figure">
                 <b data-testid="book-value">
                   {portfolio.isPending ? (
@@ -306,64 +331,6 @@ export function Book({
               </div>
             </section>
 
-            <div className="trd-book__wallets" role="listbox" aria-label={t('trading.rail.title')}>
-              {wallets.length > 1 ? (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={selected === 'all'}
-                  className="trd-book__wallet app-no-drag"
-                  onClick={() => setWalletSel('all')}
-                >
-                  <WalletIcon className="size-3" strokeWidth={2} aria-hidden />
-                  <span>{t('trading.rail.all')}</span>
-                </button>
-              ) : null}
-              {wallets.map((w) => (
-                <button
-                  key={w.address}
-                  type="button"
-                  role="option"
-                  aria-selected={selected !== 'all' && sameAddress(selected, w.address)}
-                  className="trd-book__wallet app-no-drag"
-                  onClick={() => setWalletSel(w.address)}
-                  title={w.address}
-                >
-                  {w.primary ? (
-                    <Star className="trd-book__star size-3" strokeWidth={2} aria-hidden />
-                  ) : null}
-                  <span>{walletLabel(w)}</span>
-                  <span className="trd-num trd-book__walletvalue">
-                    {formatUsd(byWallet.get(w.address.toLowerCase()) ?? null, { compact: true })}
-                  </span>
-                </button>
-              ))}
-              {/* The chips are a filter, so everything *about* a wallet — its
-                  address above all — lives one click away in the manager. The
-                  rail is 300–520 px wide; an address does not fit in it and
-                  should not be cut down to fit. */}
-              <button
-                type="button"
-                className="trd-book__wallet trd-book__wallet--add app-no-drag"
-                onClick={() => setSheet({ kind: 'manage' })}
-                title={t('trading.rail.manage')}
-                aria-label={t('trading.rail.manage')}
-                data-testid="book-manage-wallets"
-              >
-                <Settings2 className="size-3" strokeWidth={2} aria-hidden />
-              </button>
-              <button
-                type="button"
-                className="trd-book__wallet trd-book__wallet--add app-no-drag"
-                onClick={() => setSheet({ kind: 'create' })}
-                title={t('trading.rail.add')}
-                aria-label={t('trading.rail.add')}
-                data-testid="book-add-wallet"
-              >
-                <Plus className="size-3" strokeWidth={2} aria-hidden />
-              </button>
-            </div>
-
             <Holdings
               holdings={holdings}
               loading={portfolio.isPending}
@@ -395,7 +362,6 @@ export function Book({
             selectedWallet={selected}
             provider={provider}
             providerReady={providerReady}
-            onSwitchProvider={onSwitchProvider}
             onOpenSettings={onOpenSettings}
             unlocked={unlocked}
             prefill={prefill}

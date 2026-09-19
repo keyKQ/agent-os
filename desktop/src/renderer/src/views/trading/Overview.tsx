@@ -1,4 +1,5 @@
 import { RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { shortAge } from '~/lib/relative-time'
@@ -7,10 +8,10 @@ import { Money, Spinner, useCountUp } from './parts'
 import { providerLabel, type Holding, type ProviderId, type Totals } from './types'
 
 /**
- * The instrument head of the desk: one panel carrying the value in the
- * display face, today's move as a toned chip, four figures on their own
- * tiles, and the allocation meter. Everything here is a total of what the
- * table below lists; nothing is computed twice.
+ * The instrument head of the desk: one panel carrying whose wallet this is,
+ * the value in the display face, today's move as a toned chip, four figures
+ * on their own tiles, and the allocation meter. Everything here is a total of
+ * what the table below lists; nothing is computed twice.
  */
 export function Overview({
   totals,
@@ -22,6 +23,7 @@ export function Overview({
   loading,
   provider,
   entering,
+  head,
 }: {
   totals: Totals
   holdings: Holding[]
@@ -34,6 +36,8 @@ export function Overview({
   provider?: ProviderId
   /** The mode switch is playing: the value counts up on the same clock. */
   entering?: boolean
+  /** Whose value this is: the wallet head, above the figure. */
+  head?: ReactNode
 }) {
   const tone = pnlTone(totals.change24hUsd)
   const segments = allocationSegments(holdings)
@@ -42,8 +46,37 @@ export function Overview({
 
   return (
     <section className="trd-hero" data-tone={tone} aria-label={t('trading.overview.value')}>
-      <header className="trd-hero__bar">
-        <span className="trd-hero__label">{t('trading.overview.value')}</span>
+      {head}
+
+      <div className="trd-hero__figure">
+        <b data-testid="portfolio-value">
+          {loading ? (
+            <span className="trd-skel" style={{ width: 190, height: 34 }} />
+          ) : counting ? (
+            <span className="trd-num" data-testid="portfolio-value-counting" ref={attach}>
+              {formatUsd(0)}
+            </span>
+          ) : (
+            <Money value={totals.valueUsd} />
+          )}
+        </b>
+        {!loading && totals.change24hUsd !== null ? (
+          <span
+            className="trd-delta"
+            data-tone={tone}
+            data-testid="portfolio-delta"
+            title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
+          >
+            {tone !== 'flat' ? <Arrow className="size-3.5" strokeWidth={2.25} aria-hidden /> : null}
+            <Money value={totals.change24hUsd} signed cell />
+            <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
+            <small>{t('trading.overview.today')}</small>
+          </span>
+        ) : null}
+
+        {/* Where orders route and how fresh the figures are: facts about the
+            desk, not about the wallet, so they sit with the value rather than
+            in the identity line above it. */}
         <div className="trd-hero__tools">
           {provider ? (
             <span className="trd-venue" data-testid="provider-pill">
@@ -79,33 +112,6 @@ export function Overview({
             />
           </Button>
         </div>
-      </header>
-
-      <div className="trd-hero__figure">
-        <b data-testid="portfolio-value">
-          {loading ? (
-            <span className="trd-skel" style={{ width: 190, height: 34 }} />
-          ) : counting ? (
-            <span className="trd-num" data-testid="portfolio-value-counting" ref={attach}>
-              {formatUsd(0)}
-            </span>
-          ) : (
-            <Money value={totals.valueUsd} />
-          )}
-        </b>
-        {!loading && totals.change24hUsd !== null ? (
-          <span
-            className="trd-delta"
-            data-tone={tone}
-            data-testid="portfolio-delta"
-            title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
-          >
-            {tone !== 'flat' ? <Arrow className="size-3.5" strokeWidth={2.25} aria-hidden /> : null}
-            <Money value={totals.change24hUsd} signed cell />
-            <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
-            <small>{t('trading.overview.today')}</small>
-          </span>
-        ) : null}
       </div>
 
       <div className="trd-hero__stats">

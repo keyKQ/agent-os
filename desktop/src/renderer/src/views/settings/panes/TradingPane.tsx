@@ -11,6 +11,7 @@ import { desktopApi } from '~/lib/desktop-api'
 import { useProbe, useTradingStatus, useWalletMutation, useWalletStatus } from '~/stores/trading'
 import { errorText } from '~/views/trading/logic'
 import {
+  DEFAULT_PROVIDER,
   PROVIDERS,
   type ProviderId,
   type ProviderStatus,
@@ -38,11 +39,10 @@ function isProviderId(value: unknown): value is ProviderId {
   return PROVIDERS.some((p) => p.id === value)
 }
 
-/** The no-key provider: one button says whether it answers from here. */
-function KyberRow({ status, active }: { status: ProviderStatus | undefined; active: boolean }) {
+/** The keyless default: one button says whether it answers from here. */
+function AggregatorRow({ status, active }: { status: ProviderStatus | undefined; active: boolean }) {
   const probe = useProbe()
   const result = probe.data
-  const blocked = result?.blocked === true || (result === undefined && status?.blocked === true)
   const verdict: 'idle' | 'checking' | 'ok' | 'bad' = probe.isPending
     ? 'checking'
     : probe.isError
@@ -51,37 +51,33 @@ function KyberRow({ status, active }: { status: ProviderStatus | undefined; acti
         ? result.ok
           ? 'ok'
           : 'bad'
-        : blocked
+        : status?.healthy === false
           ? 'bad'
           : 'idle'
   const detail = probe.error ? errorText(probe.error) : (result?.error ?? '')
   return (
     <Row
-      label={t('trading.settings.kyber')}
+      label={t('trading.settings.aggregator')}
       help={
         <>
-          <span>{t('trading.settings.kyber.blurb')}</span>
-          {blocked ? (
-            <span className="stg-error" data-testid="kyber-blocked">
-              {t('trading.provider.blocked')}
-            </span>
-          ) : verdict !== 'idle' ? (
-            <span className="trd-stg__probe" data-verdict={verdict} data-testid="kyber-probe">
+          <span>{t('trading.settings.aggregator.blurb')}</span>
+          {verdict !== 'idle' ? (
+            <span className="trd-stg__probe" data-verdict={verdict} data-testid="aggregator-probe">
               {verdict === 'checking' ? (
                 <>
                   <LoaderCircle className="stg-spin size-3" strokeWidth={2} aria-hidden />
-                  {t('trading.settings.kyber.testing')}
+                  {t('trading.settings.aggregator.testing')}
                 </>
               ) : verdict === 'ok' ? (
                 <>
                   <Check className="size-3" strokeWidth={2.5} aria-hidden />
-                  {t('trading.settings.kyber.works')}
+                  {t('trading.settings.aggregator.works')}
                   {result?.latencyMs ? ` ${result.latencyMs} ms` : ''}
                 </>
               ) : (
                 <>
                   <AlertTriangle className="size-3" strokeWidth={2} aria-hidden />
-                  {t('trading.settings.kyber.failed')} <code>{detail}</code>
+                  {t('trading.settings.aggregator.failed')} <code>{detail}</code>
                 </>
               )}
             </span>
@@ -93,10 +89,12 @@ function KyberRow({ status, active }: { status: ProviderStatus | undefined; acti
       {active ? <Pill tone="primary">{t('settings.providers.state.active')}</Pill> : null}
       <Button
         disabled={probe.isPending}
-        onClick={() => probe.mutate({ provider: 'kyber' })}
-        data-testid="kyber-test"
+        onClick={() => probe.mutate({ provider: 'aggregator' })}
+        data-testid="aggregator-test"
       >
-        {probe.isPending ? t('trading.settings.kyber.testing') : t('trading.settings.kyber.test')}
+        {probe.isPending
+          ? t('trading.settings.aggregator.testing')
+          : t('trading.settings.aggregator.test')}
       </Button>
     </Row>
   )
@@ -148,7 +146,7 @@ function TradingBody({
   const vault = useWalletStatus()
   const provider: ProviderId = isProviderId(cfg.provider)
     ? cfg.provider
-    : (status.data?.provider ?? 'uniswap')
+    : (status.data?.provider ?? DEFAULT_PROVIDER)
 
   const save = useMutation({
     mutationFn: (patch: Record<string, unknown>) =>
@@ -198,9 +196,9 @@ function TradingBody({
             }}
           />
         </Row>
-        <KyberRow
-          status={status.data?.providers?.find((p) => p.id === 'kyber')}
-          active={provider === 'kyber'}
+        <AggregatorRow
+          status={status.data?.providers?.find((p) => p.id === 'aggregator')}
+          active={provider === 'aggregator'}
         />
       </Card>
 

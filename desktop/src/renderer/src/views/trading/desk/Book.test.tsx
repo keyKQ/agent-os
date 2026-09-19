@@ -1,0 +1,113 @@
+import { fireEvent, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { holding, renderDesk, USDC, WALLET } from '../test-utils'
+import type { Totals, Wallet } from '../types'
+import { Book } from './Book'
+
+const rpcCall = vi.fn()
+const rpc = { call: rpcCall, waitForConnection: async () => {}, on: () => () => {} }
+vi.mock('@/app/providers', () => ({ useRpc: () => rpc }))
+vi.mock('~/lib/desktop-api', () => ({
+  desktopApi: () => ({ app: { openExternal: vi.fn(async () => {}) } }),
+  isDesktop: () => true,
+}))
+
+const SECOND: Wallet = {
+  address: '0x89e0fa1b2c3d4e5f60718293a4b5c6d7e8f9da97',
+  label: 'Wallet 02',
+  primary: false,
+  createdAt: 1_700_000_000_000,
+  chains: [8453],
+}
+
+function totals(valueUsd: number): Totals {
+  return {
+    valueUsd,
+    costUsd: valueUsd,
+    unrealizedUsd: 0,
+    realizedUsd: 0,
+    gasUsd: 0,
+    change24hUsd: 0,
+    change24hPct: 0,
+  }
+}
+
+beforeEach(() => {
+  rpcCall.mockReset()
+  rpcCall.mockImplementation(async (method: string) => {
+    switch (method) {
+      case 'trading.status':
+        return {
+          enabled: true,
+          chains: [{ chainId: 8453, name: 'Base', explorer: 'https://basescan.org' }],
+          provider: 'uniswap',
+          providers: [],
+        }
+      case 'wallet.list':
+        return { wallets: [WALLET, SECOND], primary: WALLET.address }
+      case 'trading.portfolio':
+        return {
+          totals: totals(1240.99),
+          holdings: [holding({ token: USDC })],
+          wallets: [
+            { wallet: WALLET, totals: totals(1240.5) },
+            { wallet: SECOND, totals: totals(0.49) },
+          ],
+          hiddenCount: 0,
+          syncing: false,
+        }
+      default:
+        return {}
+    }
+  })
+})
+
+function render() {
+  renderDesk(
+    <Book
+      wallets={[WALLET, SECOND]}
+      primary={WALLET.address}
+      provider="uniswap"
+      providerReady
+      unlocked
+      collapsed={false}
+      width={360}
+      onResize={vi.fn()}
+      onToggle={vi.fn()}
+      onOpenSettings={vi.fn()}
+      highlightOrder={null}
+    />,
+  )
+}
+
+describe('Book · the desk beside the chat', () => {
+  it('heads the portfolio with the same wallet identity the full desk uses', async () => {
+    render()
+    // Not a row of nameless filter chips: the mark, the name, and the actions
+    // that act on the wallet whose value is right below them.
+    expect(await screen.findByTestId('wallet-head-address')).toHaveTextContent('All wallets')
+    expect(screen.getByText('2 wallets')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('wallet-switcher'))
+    fireEvent.click(screen.getAllByRole('menuitemradio')[2]!)
+    expect(await screen.findByTestId('wallet-head-address')).toHaveTextContent('0x89e0…da97')
+    expect(screen.getByRole('button', { name: 'Show QR' })).toBeInTheDocument()
+  })
+
+  it('keeps the wallet manager one click away, now inside the switcher', async () => {
+    render()
+    await screen.findByTestId('wallet-switcher')
+    fireEvent.click(screen.getByTestId('wallet-switcher'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Manage wallets' }))
+    // The manager lists every wallet, which is what the chip row used to do.
+    const sheet = await screen.findByRole('dialog')
+    expect(sheet).toHaveTextContent('Wallet 02')
+    expect(sheet).toHaveTextContent('Main')
+  })
+
+  it('offers no rail toggle: there is no rail beside the chat', async () => {
+    render()
+    await screen.findByTestId('wallet-switcher')
+    expect(screen.queryByTestId('rail-toggle')).toBeNull()
+  })
+})

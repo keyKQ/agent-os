@@ -1078,78 +1078,44 @@ body[data-dragging] .trd-book__handle {
   padding: 0 8px 0 6px;
   font-size: 11px;
 }
-.trd-book__wallets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--hairline);
+/* The identity line, sized for 300 px: the mark comes down to 30, the address
+   to the size a label wears, and the actions lose their padding rather than
+   their targets. The BOOK has no rail, so it has no rail toggle either. */
+/* At the BOOK's 300 px floor the address wants 91 px and the gap was eating
+   the last five of them, clipping "…da97". Eight is enough to separate the
+   identity from the actions and leaves the address whole. */
+.trd-head[data-compact='true'] {
+  gap: 8px;
 }
-.trd-book__wallet {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 9px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  font-size: 11.5px;
-  color: var(--muted-foreground);
-  transition:
-    color 120ms ease-out,
-    background-color 120ms ease-out;
+.trd-head[data-compact='true'] .trd-head__mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
 }
-.trd-book__wallet[aria-selected='true'] {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+.trd-head[data-compact='true'] .trd-head__stack {
+  width: 30px;
+  height: 30px;
+  padding-left: 2px;
 }
-/* Lime marks the primary wallet, nothing else in the row: the add button's
-   own glyph is chrome, not a signal. */
-.trd-book__wallet:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-}
-.trd-book__wallet .trd-book__star {
-  color: var(--primary);
-}
-/* The address sits between the name and the figure, a tier down in ink so the
-   row still reads name-first. Mono, because it is a hash, not a word. */
-.trd-book__walletaddr {
-  font-size: 10.5px;
-  color: var(--dim);
-}
-.trd-book__walletvalue {
-  color: var(--dim);
-}
-/* Kept in the row at all times rather than revealed on hover: copying the
-   address is why the address is here, and a control you have to find by
-   hovering is not a control a keyboard can reach either. */
-.trd-book__walletcopy {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.trd-head[data-compact='true'] .trd-head__stack img {
   width: 18px;
   height: 18px;
-  margin-right: -3px;
-  border-radius: var(--radius-control);
-  color: var(--dim);
-  transition:
-    color 120ms ease-out,
-    background-color 120ms ease-out;
+  border-radius: 5px;
 }
-.trd-book__walletcopy:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 12%, transparent);
+.trd-head[data-compact='true'] .trd-head__stack img + img {
+  margin-left: -8px;
 }
-.trd-book__walletcopy:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
+.trd-head[data-compact='true'] .trd-head__id {
+  gap: 8px;
 }
-.trd-book__wallet--add {
-  width: 26px;
-  padding: 0;
-  justify-content: center;
-  color: var(--dim);
+.trd-head[data-compact='true'] .trd-head__line {
+  font-size: 14px;
+}
+.trd-head[data-compact='true'] .trd-head__sub {
+  font-size: 11px;
+}
+.trd-head[data-compact='true'] .trd-head__acts {
+  gap: 0;
 }
 .trd-book__body .trd-tablewrap {
   flex: 1;

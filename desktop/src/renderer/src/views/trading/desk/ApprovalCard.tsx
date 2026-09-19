@@ -101,7 +101,7 @@ export function ApprovalCard({
     >
       <header className="trd-card__head">
         <h3 id={`trd-card-${order.orderId}`} className="trd-card__title">
-          {t('trading.card.title')}
+          {live ? t('trading.card.title') : t('trading.card.titleSettled')}
         </h3>
         <span className="trd-card__stamps">
           <span className="trd-stamp">{t(`trading.card.by.${initiatorKey(order.initiator)}`)}</span>

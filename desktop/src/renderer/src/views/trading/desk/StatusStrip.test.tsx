@@ -129,7 +129,7 @@ describe('ComposerSeats', () => {
     renderDesk(
       <ComposerSeats
         limits={null}
-        provider="kyber"
+        provider="aggregator"
         wallet={null}
         typing
         onOpenSettings={vi.fn()}
@@ -139,7 +139,7 @@ describe('ComposerSeats', () => {
     )
     expect(screen.getByTestId('composer-seats')).toHaveAttribute('data-typing')
     expect(screen.getByTestId('quick-swap')).toHaveAttribute('tabindex', '-1')
-    expect(screen.getByTestId('provider-seat')).toHaveTextContent('KyberSwap')
+    expect(screen.getByTestId('provider-seat')).toHaveTextContent('AgentOS Aggregator')
   })
 })
 
@@ -156,15 +156,13 @@ describe('ProviderSeat', () => {
             label: 'Uniswap',
             needsKey: true,
             keyConfigured: false,
-            blocked: null,
             healthy: null,
           },
           {
-            id: 'kyber',
-            label: 'KyberSwap',
+            id: 'aggregator',
+            label: 'AgentOS Aggregator',
             needsKey: false,
             keyConfigured: true,
-            blocked: true,
             healthy: null,
           },
         ]}
@@ -177,16 +175,15 @@ describe('ProviderSeat', () => {
       />,
     )
     fireEvent.click(screen.getByTestId('provider-seat'))
-    const kyber = screen.getByRole('menuitemradio', { name: /KyberSwap/ })
-    expect(kyber).toHaveTextContent('blocked in your region')
-    expect(screen.getByRole('menuitemradio', { name: /Uniswap/ })).toHaveTextContent(
+    const aggregator = screen.getByRole('menuitemradio', { name: /AgentOS Aggregator/ })
+    expect(screen.getByRole('menuitemradio', { name: /^Uniswap/ })).toHaveTextContent(
       'needs an API key',
     )
-    fireEvent.click(kyber)
-    expect(onSwitchProvider).toHaveBeenCalledWith('kyber')
+    fireEvent.click(aggregator)
+    expect(onSwitchProvider).toHaveBeenCalledWith('aggregator')
     // Picking the active one is a no-op.
     fireEvent.click(screen.getByTestId('provider-seat'))
-    fireEvent.click(screen.getByRole('menuitemradio', { name: /Uniswap/ }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /^Uniswap/ }))
     expect(onSwitchProvider).toHaveBeenCalledTimes(1)
   })
 })

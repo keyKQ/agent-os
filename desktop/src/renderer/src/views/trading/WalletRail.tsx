@@ -1,22 +1,10 @@
-import {
-  Copy,
-  Download,
-  ExternalLink,
-  KeyRound,
-  Lock,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Star,
-  Trash2,
-} from 'lucide-react'
+import { Download, Lock, MoreHorizontal, Plus, Star } from 'lucide-react'
 import { useState } from 'react'
-import { toast } from 'sonner'
-import { Menu, MenuItem } from '~/components/menu/PopMenu'
+import { Menu } from '~/components/menu/PopMenu'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { desktopApi } from '~/lib/desktop-api'
 import { cn } from '~/lib/utils'
+import { blockieDataUrl } from './blockie'
 import {
   capUsage,
   formatPct,
@@ -28,6 +16,7 @@ import {
 } from './logic'
 import { Money } from './parts'
 import type { ChainStatus, Limits, Totals, Wallet } from './types'
+import { WalletMenuItems } from './WalletMenu'
 
 export type WalletSelection = 'all' | string
 
@@ -37,6 +26,7 @@ export type WalletAction =
   | { kind: 'rename'; wallet: Wallet }
   | { kind: 'export'; wallet: Wallet }
   | { kind: 'remove'; wallet: Wallet }
+  | { kind: 'receive'; wallet: Wallet }
   | { kind: 'lock' }
 
 /**
@@ -77,7 +67,6 @@ export function WalletRail({
     }),
     { valueUsd: 0, change24hUsd: 0 as number | null },
   )
-  const usage = limits ? capUsage(limits.spentTodayUsd, limits.dailyCapUsd) : null
 
   return (
     <aside className="trd-rail" aria-label={t('trading.rail.title')}>
@@ -146,32 +135,50 @@ export function WalletRail({
         </button>
       </div>
 
-      {limits && usage && limitsWallet ? (
-        <div className="trd-budget" data-testid="trading-budget">
-          <div className="trd-budget__label">
-            <span>{t('trading.rail.limits')}</span>
-            <span className="trd-mono">{walletLabel(limitsWallet)}</span>
-          </div>
-          <div
-            className="trd-budget__meter"
-            data-full={usage.fraction >= 1 ? 'true' : undefined}
-            role="meter"
-            aria-valuemin={0}
-            aria-valuemax={limits.dailyCapUsd}
-            aria-valuenow={limits.spentTodayUsd}
-            aria-label={t('trading.rail.limits')}
-          >
-            <span style={{ width: `${Math.round(usage.fraction * 100)}%` }} />
-          </div>
-          <div className="trd-budget__text">
-            <b>{formatUsd(usage.leftUsd)}</b> {t('trading.rail.limits.left')}{' '}
-            <b>{formatUsd(limits.dailyCapUsd)}</b>
-            {' · '}
-            {t('trading.rail.limits.threshold')} <b>{formatUsd(limits.thresholdUsd)}</b>
-          </div>
-        </div>
-      ) : null}
+      {limits && limitsWallet ? <Budget limits={limits} wallet={limitsWallet} /> : null}
     </aside>
+  )
+}
+
+/**
+ * What the agent may still spend today, as a meter. It belongs beside the
+ * wallets, but it is a guardrail rather than a list item: when the rail is
+ * away it lays itself out as a strip over the ledger instead of vanishing.
+ */
+export function Budget({
+  limits,
+  wallet,
+  strip,
+}: {
+  limits: Limits
+  wallet: Wallet
+  strip?: boolean
+}) {
+  const usage = capUsage(limits.spentTodayUsd, limits.dailyCapUsd)
+  return (
+    <div className={cn('trd-budget', strip && 'trd-budget--strip')} data-testid="trading-budget">
+      <div className="trd-budget__label">
+        <span>{t('trading.rail.limits')}</span>
+        <span className="trd-mono">{walletLabel(wallet)}</span>
+      </div>
+      <div
+        className="trd-budget__meter"
+        data-full={usage.fraction >= 1 ? 'true' : undefined}
+        role="meter"
+        aria-valuemin={0}
+        aria-valuemax={limits.dailyCapUsd}
+        aria-valuenow={limits.spentTodayUsd}
+        aria-label={t('trading.rail.limits')}
+      >
+        <span style={{ width: `${Math.round(usage.fraction * 100)}%` }} />
+      </div>
+      <div className="trd-budget__text">
+        <b>{formatUsd(usage.leftUsd)}</b> {t('trading.rail.limits.left')}{' '}
+        <b>{formatUsd(limits.dailyCapUsd)}</b>
+        {' · '}
+        {t('trading.rail.limits.threshold')} <b>{formatUsd(limits.thresholdUsd)}</b>
+      </div>
+    </div>
   )
 }
 
@@ -197,15 +204,6 @@ function WalletRow({
   const delta = totals?.change24hUsd ?? null
   const pct = totals?.change24hPct ?? null
 
-  async function copyAddress() {
-    try {
-      await navigator.clipboard.writeText(wallet.address)
-      toast.success(t('trading.rail.copied'), { id: 'trd-copy' })
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
-
   return (
     <div
       role="option"
@@ -221,6 +219,7 @@ function WalletRow({
         }
       }}
     >
+      <img className="trd-wallet__mark" src={blockieDataUrl(wallet.address, 20)} alt="" />
       <span className="trd-wallet__name">
         <span>{label}</span>
         {wallet.primary ? (
@@ -259,39 +258,11 @@ function WalletRow({
         </Button>
         {menu ? (
           <Menu onClose={() => setMenu(false)} label={t('trading.rail.menu')}>
-            <MenuItem
-              icon={Copy}
-              label={t('trading.rail.receive')}
-              onSelect={() => void copyAddress()}
-            />
-            {chains.map((c) => (
-              <MenuItem
-                key={c.chainId}
-                icon={ExternalLink}
-                label={`${t('trading.rail.explorer')} · ${c.name}`}
-                onSelect={() =>
-                  void desktopApi().app.openExternal(`${c.explorer}/address/${wallet.address}`)
-                }
-              />
-            ))}
-            {!wallet.primary ? (
-              <MenuItem icon={Star} label={t('trading.rail.setPrimary')} onSelect={onSetPrimary} />
-            ) : null}
-            <MenuItem
-              icon={Pencil}
-              label={t('trading.rail.rename')}
-              onSelect={() => onAction({ kind: 'rename', wallet })}
-            />
-            <MenuItem
-              icon={KeyRound}
-              label={t('trading.rail.export')}
-              onSelect={() => onAction({ kind: 'export', wallet })}
-            />
-            <MenuItem
-              icon={Trash2}
-              tone="danger"
-              label={t('trading.rail.remove')}
-              onSelect={() => onAction({ kind: 'remove', wallet })}
+            <WalletMenuItems
+              wallet={wallet}
+              chains={chains}
+              onAction={onAction}
+              onSetPrimary={onSetPrimary}
             />
           </Menu>
         ) : null}

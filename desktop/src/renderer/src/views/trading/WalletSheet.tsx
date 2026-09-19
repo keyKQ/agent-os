@@ -6,6 +6,7 @@ import {
   Lock,
   Pencil,
   Plus,
+  QrCode,
   Star,
   Trash2,
   TriangleAlert,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { qrDataUrl } from '@/lib/qr'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
@@ -37,6 +39,7 @@ export type WalletSheetMode =
   | { kind: 'rename'; wallet: Wallet }
   | { kind: 'export'; wallet: Wallet }
   | { kind: 'remove'; wallet: Wallet }
+  | { kind: 'receive'; wallet: Wallet }
 
 /**
  * Every write to the vault, one sheet each: create the vault, unlock it,
@@ -76,7 +79,59 @@ export function WalletSheet({ mode, onClose }: { mode: WalletSheetMode; onClose:
       return <ExportSheet wallet={active.wallet} onClose={close} />
     case 'remove':
       return <RemoveSheet wallet={active.wallet} onClose={close} />
+    case 'receive':
+      return <ReceiveSheet wallet={active.wallet} onClose={close} />
   }
+}
+
+/**
+ * The address, big, with a QR of it.
+ *
+ * The QR is drawn in this process from the address bytes — never fetched from
+ * a QR web service, which would disclose the address to whoever runs it. It
+ * encodes the bare address and nothing else: no amount, no chain, no EIP-681
+ * payment URI. A scan therefore means "here is where to send", which is true
+ * on every chain this wallet is on, and cannot be mistaken for a request the
+ * sender is agreeing to.
+ */
+function ReceiveSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const label = walletLabel(wallet)
+  const qr = useMemo(() => qrDataUrl(wallet.address, { size: 200 }), [wallet.address])
+
+  async function copyAddress() {
+    try {
+      await navigator.clipboard.writeText(wallet.address)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+      toast.success(t('trading.rail.copied'), { id: 'trd-copy' })
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  return (
+    <Sheet
+      title={`${t('trading.sheet.receive.title')} · ${label}`}
+      onClose={onClose}
+      foot={
+        <>
+          <Button onClick={onClose}>{t('trading.sheet.close')}</Button>
+          <Button variant="primary" onClick={() => void copyAddress()} data-testid="receive-copy">
+            {copied ? t('trading.rail.copied') : t('trading.rail.receive')}
+          </Button>
+        </>
+      }
+    >
+      <div className="trd-qr">
+        <img className="trd-qr__code" src={qr} alt={t('trading.sheet.receive.alt')} width={200} />
+        <code className="trd-qr__addr trd-num" data-testid="receive-address">
+          {wallet.address}
+        </code>
+        <p className="trd-qr__note">{t('trading.sheet.receive.note')}</p>
+      </div>
+    </Sheet>
+  )
 }
 
 /**
@@ -301,6 +356,15 @@ function ManageRow({
         <button
           type="button"
           className="trd-wman__act"
+          onClick={() => onOpen({ kind: 'receive', wallet })}
+          data-testid="manage-qr"
+        >
+          <QrCode className="size-3.5" strokeWidth={1.75} aria-hidden />
+          {t('trading.rail.qr')}
+        </button>
+        <button
+          type="button"
+          className="trd-wman__act"
           onClick={() => onOpen({ kind: 'rename', wallet })}
           data-testid="manage-rename"
         >
@@ -316,7 +380,6 @@ function ManageRow({
           <KeyRound className="size-3.5" strokeWidth={1.75} aria-hidden />
           {t('trading.rail.export')}
         </button>
-        <span className="trd-wman__spacer" />
         <button
           type="button"
           className="trd-wman__act trd-wman__act--danger"

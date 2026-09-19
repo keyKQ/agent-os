@@ -2033,7 +2033,7 @@ class UpdatesConfig(BaseModel):
 
 
 class TradingConfig(BaseSettings):
-    """Wallet + Uniswap trading settings (``[trading]``).
+    """Wallet + swap trading settings (``[trading]``).
 
     The wallet vault, ledger and swap execution live in the engine
     (``agentos.trading``); the desktop app and the ``wallet-trading`` skill
@@ -2049,12 +2049,14 @@ class TradingConfig(BaseSettings):
     )
 
     enabled: bool = True
-    # Swap provider: Uniswap Trading API (default, needs an API key) or the
-    # KyberSwap aggregator (no key; geo-restricted in some countries).
-    provider: Literal["uniswap", "kyber"] = "uniswap"
+    # Swap provider: the AgentOS Aggregator (default, no key) or Uniswap's
+    # Trading API (fallback, needs an API key).
+    provider: Literal["aggregator", "uniswap"] = "aggregator"
+    # Where the aggregator is served. Only change this to point at another
+    # deployment of the same API.
+    aggregator_base_url: str = "https://agg.404defi.capital"
     uniswap_api_key: str = ""
     uniswap_api_key_env: str = "UNISWAP_API_KEY"
-    kyber_client_id: str = "agentos"
     # Chain id (as a string, TOML keys are strings) -> JSON-RPC URL override.
     # When a chain has no entry, RPC_BASE_URL / RPC_ROBINHOOD_URL are tried
     # before the public default.

@@ -1,10 +1,10 @@
 """Swap providers: one protocol, two implementations.
 
 The service only ever talks to a :class:`SwapProvider`: quote, approval
-transaction (if any), swap transaction. Uniswap's Trading API is the
-default; KyberSwap's aggregator is the opt-in alternative (no API key). Each
-provider normalises its own quirks — native-token sentinel, quote freshness,
-slippage units — so the order pipeline stays provider-agnostic.
+transaction (if any), swap transaction. The AgentOS Aggregator is the
+default and needs no key; Uniswap's Trading API is the fallback, and needs
+one. Each provider normalises its own quirks — native-token sentinel, quote
+freshness, slippage units — so the order pipeline stays provider-agnostic.
 """
 
 from __future__ import annotations
@@ -25,9 +25,14 @@ from agentos.trading.uniswap import (
     UniswapError,
 )
 
-ProviderId = Literal["uniswap", "kyber"]
-PROVIDER_IDS: tuple[str, ...] = ("uniswap", "kyber")
-PROVIDER_LABELS: dict[str, str] = {"uniswap": "Uniswap", "kyber": "KyberSwap"}
+ProviderId = Literal["aggregator", "uniswap"]
+#: Ordered: the default comes first, everywhere a client lists providers.
+PROVIDER_IDS: tuple[str, ...] = ("aggregator", "uniswap")
+DEFAULT_PROVIDER_ID = "aggregator"
+PROVIDER_LABELS: dict[str, str] = {
+    "aggregator": "AgentOS Aggregator",
+    "uniswap": "Uniswap",
+}
 
 
 class ProviderError(RuntimeError):
@@ -42,27 +47,17 @@ class ProviderError(RuntimeError):
         self.details = details
 
 
-class ProviderBlockedError(ProviderError):
-    """The provider refuses requests from this network location (geo-block)."""
-
-    def __init__(self, provider: str, message: str) -> None:
-        super().__init__("trading.provider_blocked", message)
-        self.provider = provider
-
-
 @dataclass
 class ProbeResult:
     ok: bool
     latency_ms: float | None
     error: str | None
-    blocked: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
             "latencyMs": round(self.latency_ms, 1) if self.latency_ms is not None else None,
             "error": self.error,
-            "blocked": self.blocked,
         }
 
 
@@ -87,6 +82,9 @@ class ProviderQuote:
     fresh_for_s: float
     raw: Any
     warnings: list[str] = field(default_factory=list)
+    # Gas cost in the chain's own coin, for providers that price gas in ETH
+    # rather than dollars. The service converts it once it has a native price.
+    gas_native: float | None = None
 
     @property
     def age_s(self) -> float:

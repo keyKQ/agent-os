@@ -40,7 +40,6 @@ const STAMP_TTL_MS = 10 * 60_000
 
 export interface DeskGate {
   needsKey: boolean
-  providerBlocked: boolean
   provider: ProviderId
 }
 
@@ -291,17 +290,6 @@ export function useDeskInstruments(
             }
           >
             <b>{t('trading.noKey.title')}</b> {t('trading.noKey.chatBody')}
-          </Notice>
-        ) : desk.gate.providerBlocked ? (
-          <Notice
-            tone="warn"
-            action={
-              <Button onClick={() => openSettings('trading')} data-testid="chat-provider-fix">
-                {t('trading.provider.switch')}
-              </Button>
-            }
-          >
-            {t('trading.provider.blocked')}
           </Notice>
         ) : null}
         <MissionStrip

@@ -7,7 +7,6 @@ import {
   Zap,
 } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
-import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useBalances, useQuote, type QuoteParams } from '~/stores/trading'
@@ -30,7 +29,6 @@ import { TokenLogo } from './parts'
 import { nativeToken, TokenPicker } from './TokenPicker'
 import {
   CHAINS,
-  PROVIDER_BLOCKED_CODE,
   providerLabel,
   type Balance,
   type ChainId,
@@ -57,15 +55,6 @@ export function QuoteWarnings({ warnings }: { warnings: string[] | undefined }) 
   )
 }
 
-/** The gateway's geo-block error, whatever wrapper the transport put around it. */
-export function isProviderBlocked(err: unknown): boolean {
-  if (!err) return false
-  const code = (err as { code?: unknown }).code
-  if (code === PROVIDER_BLOCKED_CODE) return true
-  const text = err instanceof Error ? err.message : String(err)
-  return text.includes(PROVIDER_BLOCKED_CODE)
-}
-
 export interface SwapPrefill {
   chainId: number
   tokenIn?: Token
@@ -88,7 +77,6 @@ export function SwapPanel({
   selectedWallet,
   provider,
   providerReady,
-  onSwitchProvider,
   onOpenSettings,
   unlocked,
   prefill,
@@ -99,10 +87,8 @@ export function SwapPanel({
   /** The rail's selection: an address, or 'all'. */
   selectedWallet: string
   provider: ProviderId
-  /** Uniswap has its key, or Kyber is not known to be blocked. */
+  /** Uniswap has its key, or the keyless aggregator is selected. */
   providerReady: boolean
-  /** Make another provider route the swaps (a blocked Kyber → Uniswap). */
-  onSwitchProvider: (id: ProviderId) => void
   /** Opens Settings › Trading, the one place a Uniswap key is added. */
   onOpenSettings: () => void
   unlocked: boolean
@@ -224,13 +210,9 @@ export function SwapPanel({
                 ? 'trading.swap.cta.insufficient'
                 : null
   const canReview = ctaKey === null && fresh !== null && !quote.isError
-  // A gate the ticket can open itself: the button does that instead of sitting dead.
-  const gateAction: (() => void) | null =
-    unlocked && !providerReady
-      ? provider === 'uniswap'
-        ? onOpenSettings
-        : () => onSwitchProvider('uniswap')
-      : null
+  // A gate the ticket can open itself: the button does that instead of sitting
+  // dead. Only Uniswap can be un-ready, and only for want of its key.
+  const gateAction: (() => void) | null = unlocked && !providerReady ? onOpenSettings : null
 
   function flip() {
     setTokenIn(tokenOut)
@@ -413,17 +395,7 @@ export function SwapPanel({
 
         {ready && quote.isError ? (
           <div className="trd-ticket__error" role="alert">
-            {isProviderBlocked(quote.error) ? (
-              <span className="flex flex-col items-start gap-2">
-                {t('trading.provider.blocked')}
-                <Button
-                  onClick={() => onSwitchProvider('uniswap')}
-                  data-testid="provider-blocked-fix"
-                >
-                  {t('trading.provider.switch')}
-                </Button>
-              </span>
-            ) : quoteError?.includes('no_route') || quoteError?.includes('NoRoute') ? (
+            {quoteError?.includes('no_route') || quoteError?.includes('NoRoute') ? (
               t('trading.swap.noRoute')
             ) : (
               quoteError
@@ -514,7 +486,6 @@ export function SwapPanel({
           quoteError={quoteError}
           onRefresh={() => void quote.refetch()}
           onClose={() => setConfirm(false)}
-          onSwitchProvider={() => onSwitchProvider('uniswap')}
           onSent={(orders) => {
             setConfirm(false)
             setAmount('')

@@ -181,7 +181,8 @@ export interface Quote {
   slippagePct: number
   expiresAt: number
   provider?: ProviderId
-  /** Kyber token checks (fee-on-transfer and the like), for the confirm sheet. */
+  /** Provider-side notes (a clamped slippage, a route that could not be fully
+   *  simulated), for the confirm sheet. */
   warnings?: string[]
   guard: {
     decision: GuardDecision
@@ -212,13 +213,17 @@ export interface ChainStatus {
   healthy: boolean | null
 }
 
-/** Who routes and builds the swap. Uniswap needs a key; Kyber needs none but is geo-restricted. */
-export type ProviderId = 'uniswap' | 'kyber'
+/** Who routes and builds the swap. The aggregator is the default and needs no
+ *  key; Uniswap is the fallback and needs one. */
+export type ProviderId = 'aggregator' | 'uniswap'
 
+/** Ordered as the engine orders them: the default first. */
 export const PROVIDERS: readonly { id: ProviderId; label: string }[] = [
+  { id: 'aggregator', label: 'AgentOS Aggregator' },
   { id: 'uniswap', label: 'Uniswap' },
-  { id: 'kyber', label: 'KyberSwap' },
 ]
+
+export const DEFAULT_PROVIDER: ProviderId = 'aggregator'
 
 export function providerLabel(id: string | null | undefined): string {
   return PROVIDERS.find((p) => p.id === id)?.label ?? (id ? String(id) : '')
@@ -229,7 +234,6 @@ export interface ProviderStatus {
   label: string
   needsKey: boolean
   keyConfigured: boolean
-  blocked: boolean | null
   healthy: boolean | null
 }
 
@@ -242,7 +246,7 @@ export interface TradingStatus {
   unlocked: boolean
   syncing: boolean
   lastSyncAt: number | null
-  /** Older engines omit these; the app then assumes Uniswap. */
+  /** Older engines omit these; the app then assumes the default provider. */
   provider?: ProviderId
   providers?: ProviderStatus[]
 }
@@ -251,12 +255,7 @@ export interface ProbeResult {
   ok: boolean
   latencyMs: number | null
   error: string | null
-  /** Kyber only: the region is refused at the edge (HTTP 403). */
-  blocked?: boolean
 }
-
-/** The RPC error code a geo-blocked provider raises on quote and swap. */
-export const PROVIDER_BLOCKED_CODE = 'trading.provider_blocked'
 
 /** One close, in unix *seconds* — the units both producers emit. */
 export interface ChartPoint {

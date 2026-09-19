@@ -51,6 +51,7 @@ export const trading = {
   'trading.rail.menu': 'Wallet actions',
   'trading.rail.manage': 'Manage wallets',
   'trading.rail.receive': 'Copy address',
+  'trading.rail.qr': 'Show QR',
   'trading.rail.copied': 'Address copied',
   'trading.rail.setPrimary': 'Make primary',
   'trading.rail.rename': 'Rename',
@@ -59,6 +60,11 @@ export const trading = {
   'trading.rail.explorer': 'View on explorer',
 
   // Overview
+  'trading.head.switch': 'Switch wallet',
+  'trading.head.wallets': 'wallets',
+  'trading.head.hideList': 'Hide wallet list',
+  'trading.head.showList': 'Show wallet list',
+
   'trading.overview.value': 'Portfolio value',
   'trading.overview.today': 'today',
   'trading.overview.unrealized': 'Unrealized',
@@ -294,6 +300,11 @@ export const trading = {
   'trading.sheet.remove.password': 'Vault password',
   'trading.sheet.remove.cta': 'Remove wallet',
   'trading.sheet.remove.done': 'Wallet removed',
+  'trading.sheet.receive.title': 'Receive',
+  'trading.sheet.receive.alt': 'QR code of this wallet address',
+  'trading.sheet.receive.note':
+    'The QR is this address and nothing else — no amount, no chain. It is where to send, not a request to pay. The same address works on every chain this wallet is on.',
+  'trading.sheet.close': 'Close',
   'trading.sheet.password': 'Password',
   'trading.sheet.working': 'Working…',
   'trading.sheet.cancel': 'Cancel',
@@ -304,19 +315,18 @@ export const trading = {
   'trading.settings.enabled.help':
     'Off hides the desk and refuses every swap, including the agent’s.',
   'trading.provider.via': 'via',
-  'trading.provider.blocked':
-    'KyberSwap is not available from your region. Switch to Uniswap or use a VPN.',
-  'trading.provider.switch': 'Switch to Uniswap',
+  'trading.provider.switch': 'Switch provider',
   'trading.settings.provider': 'Swap provider',
   'trading.settings.provider.help':
-    'Who finds the route and builds the transaction. Uniswap needs an API key; KyberSwap needs none but is refused in some regions.',
+    'Who finds the route and builds the transaction. The AgentOS Aggregator is the default and needs no key; Uniswap is the fallback and needs an API key.',
   'trading.settings.provider.saved': 'Provider saved',
-  'trading.settings.kyber': 'KyberSwap',
-  'trading.settings.kyber.blurb': 'No key. Routes come from the KyberSwap aggregator.',
-  'trading.settings.kyber.test': 'Test connection',
-  'trading.settings.kyber.testing': 'Testing…',
-  'trading.settings.kyber.works': 'Reachable.',
-  'trading.settings.kyber.failed': 'Not reachable:',
+  'trading.settings.aggregator': 'AgentOS Aggregator',
+  'trading.settings.aggregator.blurb':
+    'No key. Routes and unsigned calldata come from the AgentOS Aggregator; your wallet still does every signature.',
+  'trading.settings.aggregator.test': 'Test connection',
+  'trading.settings.aggregator.testing': 'Testing…',
+  'trading.settings.aggregator.works': 'Reachable.',
+  'trading.settings.aggregator.failed': 'Not reachable:',
   'trading.settings.key.idle': 'Only used while Uniswap is the swap provider.',
   'trading.settings.uniswap': 'Uniswap',
   'trading.settings.uniswap.blurb': 'Quotes and swap calldata come from the Uniswap Trading API.',
@@ -390,7 +400,6 @@ export const trading = {
   'trading.seat.provider.needsKey': 'needs an API key',
   'trading.seat.provider.keyOk': 'key configured',
   'trading.seat.provider.noKey': 'no key',
-  'trading.seat.provider.blocked': 'blocked in your region',
   'trading.seat.provider.saved': 'Swap provider switched',
   'trading.seat.asksAbove': 'Asks above',
   'trading.seat.perDay': '/day',
@@ -404,6 +413,10 @@ export const trading = {
 
   'trading.card.region': 'Approvals',
   'trading.card.title': 'Approval needed · Swap',
+  // The same card is the receipt once the order settles — and an agent swap
+  // under the limits settles without ever asking, so the heading may not claim
+  // an approval that was never requested. The status pill says how it ended.
+  'trading.card.titleSettled': 'Swap',
   'trading.card.high': 'High',
   'trading.card.by.you': 'You',
   'trading.card.by.agent': 'Agent',

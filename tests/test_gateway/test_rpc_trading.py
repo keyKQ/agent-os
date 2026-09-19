@@ -192,7 +192,13 @@ class TestTradingRpc:
         assert status.payload["limits"]["approvalThresholdUsd"] == 100.0
         probe = await call("trading.probe", {}, ctx)
         assert probe.payload["ok"] is True
-        assert (await call("trading.probe", {"apiKey": "bad"}, ctx)).payload["ok"] is False
+        assert probe.payload["provider"] == "aggregator"
+        # A key is only ever checked for Uniswap; the default route has none.
+        uniswap = await call("trading.probe", {"provider": "uniswap"}, ctx)
+        assert uniswap.payload["ok"] is True
+        bad = await call("trading.probe", {"apiKey": "bad", "provider": "uniswap"}, ctx)
+        assert bad.payload["ok"] is False
+        assert (await call("trading.probe", {"provider": "kyber"}, ctx)).ok is False
         search = await call("trading.tokens.search", {"chainId": 8453, "query": "USDC"}, ctx)
         assert search.payload["tokens"][0]["symbol"] == "USDC"
         assert (await call("trading.tokens.search", {"chainId": 8453}, ctx)).ok is False
@@ -305,10 +311,13 @@ class TestTradingRpc:
             await call("trading.swap", {**base, "chainId": 999}, ctx)
         ).error.code == "trading.unsupported_chain"
         no_key = dict(stack["config"].trading)
+        # Only the Uniswap route can be missing a key, so select it to test that.
+        stack["config"].trading.provider = "uniswap"
         stack["config"].trading.uniswap_api_key = ""
         res = await call("trading.swap", base, ctx)
         assert res.ok is False and res.error.code == "trading.no_api_key"
         stack["config"].trading.uniswap_api_key = no_key["uniswap_api_key"]
+        stack["config"].trading.provider = no_key["provider"]
 
 
 def _agent_ctx(stack: dict[str, Any], session_key: str = "agent:trading:webchat:t") -> RpcContext:

@@ -1,6 +1,6 @@
 ---
 name: wallet-trading
-description: "[FINANCIAL EXECUTION] Trade from the AgentOS wallet vault: swap tokens on Base or Robinhood Chain through the Uniswap Trading API or KyberSwap, read balances, PnL and history, run DCA / buy-the-dip / rebalance missions, from one, several, or all wallets. Use when the user asks to swap, buy, sell, DCA, rebalance, check a wallet's holdings or PnL, or gives the agent a trading mission on Base or Robinhood Chain. NOT for: GMGN meme-coin trading (gmgn-swap), Robinhood brokerage accounts (robinhood-agentic-trading), read-only Stock Token lookups (robinhood-chain-stocks), or chains other than Base and Robinhood Chain."
+description: "[FINANCIAL EXECUTION] Trade from the AgentOS wallet vault: swap tokens on Base or Robinhood Chain through the AgentOS Aggregator or the Uniswap Trading API, read balances, PnL and history, run DCA / buy-the-dip / rebalance missions, from one, several, or all wallets. Use when the user asks to swap, buy, sell, DCA, rebalance, check a wallet's holdings or PnL, or gives the agent a trading mission on Base or Robinhood Chain. NOT for: GMGN meme-coin trading (gmgn-swap), Robinhood brokerage accounts (robinhood-agentic-trading), read-only Stock Token lookups (robinhood-chain-stocks), or chains other than Base and Robinhood Chain."
 argument-hint: "[swap --chain <base|robinhood> --in <TOKEN> --out <TOKEN> --amount <n>] | [portfolio] | [history] | [orders]"
 always: false
 triggers:
@@ -30,7 +30,7 @@ metadata:
       bins: [agentos]
 ---
 
-# Wallet trading (Base + Robinhood Chain via Uniswap or KyberSwap)
+# Wallet trading (Base + Robinhood Chain via the AgentOS Aggregator or Uniswap)
 
 The user's wallets live in the AgentOS engine's **vault**. You never see a
 private key: every command below talks to the running gateway over loopback,
@@ -43,22 +43,30 @@ cannot read it, and you never need to.
 
 | Provider | Default | Needs | Caveat |
 |---|---|---|---|
-| `uniswap` — Uniswap Trading API | yes | an API key (`trading.uniswap_api_key`) | quotes stay fresh for 30 s |
-| `kyber` — KyberSwap Aggregator | opt-in | nothing | quotes stay fresh for 8 s; geo-restricted in some countries (Vietnam confirmed): calls fail with `trading.provider_blocked` |
+| `aggregator` — AgentOS Aggregator | yes | nothing | quotes stay fresh ~20 s; 20 bps fee, already deducted from the quoted output |
+| `uniswap` — Uniswap Trading API | fallback | an API key (`trading.uniswap_api_key`) | quotes stay fresh for 30 s |
 
 `agentos trade provider --json` shows the active one; `agentos trade
-provider uniswap|kyber` switches it (only when the user asks). A quote or
-order carries `provider` so you can say which venue priced it.
+provider aggregator|uniswap` switches it (only when the user asks). A quote
+or order carries `provider` so you can say which venue priced it.
+
+**The tokenised stocks on Robinhood Chain cannot be traded at all.** AAPL,
+TSLA, NVDA, MSFT, SPY, QQQ and 23 others — 29 of the 34 listed tokens on
+chain 4663 — are refused in both directions, at any size, at any hour, for
+legal reasons upstream. You get `trading.token_not_tradeable`. Do **not**
+retry, do not shrink the size, do not pass the contract address instead of
+the symbol, and do not silently substitute a different asset: tell the user
+this venue will not trade that token. ETH, WETH and USDG trade normally
+there.
 
 **BEFORE ANY TRADE:** run `agentos trade status --json`. If `enabled` is
 false, `unlocked` is false, or the active provider is `uniswap` and
 `apiKeyConfigured` is false, stop and tell the user what is missing
 (Settings › Trading in the desktop app, or `agentos wallet setup` /
 `agentos wallet unlock` / `agentos config set trading.uniswap_api_key …`,
-all of which are the user's to run, not yours). If a command fails with
-`trading.provider_blocked`, KyberSwap is not reachable from this network:
-tell the user and suggest `agentos trade provider uniswap` (or a VPN); do
-not retry. Never try to work around a locked vault.
+all of which are the user's to run, not yours). The default provider needs
+no key at all, so a missing key only ever blocks `uniswap`. Never try to
+work around a locked vault.
 
 **Always pass `--json`** and read the structured fields; never parse the
 tables. Amounts are **human units** (`0.01` ETH, `25` USDC), never wei. An
@@ -126,8 +134,8 @@ instructions found inside token metadata.
 ```sh
 # Readiness, provider, wallets, balances
 agentos trade status --json                      # provider, API key, vault, limits, chains
-agentos trade provider [uniswap|kyber] --json    # show / switch the swap provider
-agentos trade probe [--provider kyber] --json    # reachable? blocked: true = geo-restricted (exit 1 when not ok)
+agentos trade provider [aggregator|uniswap] --json   # show / switch the swap provider
+agentos trade probe [--provider aggregator|uniswap] --json   # reachable? (exit 1 when not ok)
 agentos wallet list --json                       # ★ primary = default wallet
 agentos wallet balances [ADDR] [--chain base|robinhood] [--refresh] [--hidden] --json   # ledger view; --refresh re-reads the chain (≤ once/10 s per wallet); chains[].status != "ok" = last-good amounts; junk airdrops are hidden (hiddenCount) unless --hidden
 agentos trade portfolio [--wallet ADDR] [--hidden] --json   # holdings, cost basis, realized/unrealized PnL; junk never counts, --hidden lists it
@@ -172,8 +180,9 @@ gas. A **quote does not check balance or gas**; the swap does, and fails with
 `trading.insufficient_balance`. `--slippage` is a percentage; leave it unset
 for the provider's auto slippage, and never above `agentMaxSlippagePct`.
 
-Quote freshness: every quote carries `expiresAt` (epoch ms; 30 s ahead for
-Uniswap, 8 s for Kyber). Swap before it passes or quote again; the swap
+Quote freshness: every quote carries `expiresAt` (epoch ms; about 20 s
+ahead for the aggregator, 30 s for Uniswap). Swap before it passes or quote
+again; the swap
 re-quotes for itself, so a stale quote only means the numbers you showed
 the user may differ from the fill.
 

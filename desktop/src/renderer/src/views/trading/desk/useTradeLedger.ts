@@ -71,8 +71,8 @@ function toolResultText(payload: StreamEventPayload | undefined): string {
 
 function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
   const p = outcome?.provider
+  if (p === 'aggregator') return 'A'
   if (p === 'uniswap') return 'U'
-  if (p === 'kyber') return 'K'
   switch (call.kind) {
     case 'swap':
     case 'quote':

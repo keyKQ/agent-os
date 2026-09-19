@@ -13,6 +13,7 @@ import json
 from typing import Any
 
 import pytest
+from click.exceptions import BadParameter
 from typer.testing import CliRunner
 
 from agentos.cli import trade_cmd
@@ -73,22 +74,20 @@ class _FakeClient:
             "config.set": {"restartRequired": False},
             "trading.status": {
                 "enabled": True,
-                "provider": "uniswap",
+                "provider": "aggregator",
                 "providers": [
+                    {
+                        "id": "aggregator",
+                        "label": "AgentOS Aggregator",
+                        "needsKey": False,
+                        "keyConfigured": True,
+                        "healthy": True,
+                    },
                     {
                         "id": "uniswap",
                         "label": "Uniswap",
                         "needsKey": True,
                         "keyConfigured": True,
-                        "blocked": False,
-                        "healthy": True,
-                    },
-                    {
-                        "id": "kyber",
-                        "label": "KyberSwap",
-                        "needsKey": False,
-                        "keyConfigured": False,
-                        "blocked": True,
                         "healthy": None,
                     },
                 ],
@@ -236,17 +235,16 @@ def test_status_renders(client: _FakeClient) -> None:
 def test_status_shows_provider_and_provider_table(client: _FakeClient) -> None:
     result = runner.invoke(trade_cmd.app, ["status"])
     assert result.exit_code == 0, result.output
+    assert "AgentOS Aggregator" in result.output
     assert "Uniswap" in result.output
-    assert "KyberSwap" in result.output
-    assert "blocked in your region" in result.output
     assert "not needed" in result.output
     # The active provider gets the star, the other one does not.
     lines = result.output.splitlines()
+    agg_line = next(line for line in lines if "Aggregator" in line and "not needed" in line)
     uniswap_line = next(
-        line for line in lines if "Uniswap" in line and "API key" not in line and "yes" in line
+        line for line in lines if "Uniswap" in line and "API key" not in line and "★" not in line
     )
-    kyber_line = next(line for line in lines if "KyberSwap" in line and "not needed" in line)
-    assert "★" in uniswap_line and "★" not in kyber_line
+    assert "★" in agg_line and "★" not in uniswap_line
 
 
 def test_probe_passes_key_and_reports(client: _FakeClient) -> None:
@@ -262,34 +260,31 @@ def test_probe_passes_key_and_reports(client: _FakeClient) -> None:
     assert client.calls[-1] == ("trading.probe", {})
 
 
-def test_probe_provider_flag_and_geo_block(client: _FakeClient) -> None:
+def test_probe_provider_flag(client: _FakeClient) -> None:
     client.payloads["trading.probe"] = {
         "ok": True,
-        "provider": "kyber",
+        "provider": "aggregator",
         "latencyMs": 80,
         "error": None,
-        "blocked": False,
     }
-    ok = runner.invoke(trade_cmd.app, ["probe", "--provider", "KyberSwap"])
+    ok = runner.invoke(trade_cmd.app, ["probe", "--provider", "AGG"])
     assert ok.exit_code == 0, ok.output
-    assert client.calls == [("trading.probe", {"provider": "kyber"})]
-    assert "KyberSwap OK" in ok.output
+    assert client.calls == [("trading.probe", {"provider": "aggregator"})]
+    assert "AgentOS Aggregator OK" in ok.output
 
     client.payloads["trading.probe"] = {
         "ok": False,
-        "provider": "kyber",
+        "provider": "aggregator",
         "latencyMs": None,
-        "error": "HTTP 403",
-        "blocked": True,
+        "error": "Aggregator unreachable",
     }
-    blocked = runner.invoke(trade_cmd.app, ["probe", "--provider", "kyber"])
-    assert blocked.exit_code == 1
-    assert "not reachable from your region" in blocked.output
-    assert "agentos trade provider uniswap" in blocked.output
+    down = runner.invoke(trade_cmd.app, ["probe", "--provider", "aggregator"])
+    assert down.exit_code == 1
+    assert "Aggregator unreachable" in down.output
 
-    as_json = runner.invoke(trade_cmd.app, ["probe", "--provider", "kyber", "--json"])
+    as_json = runner.invoke(trade_cmd.app, ["probe", "--provider", "aggregator", "--json"])
     assert as_json.exit_code == 1
-    assert json.loads(as_json.stdout)["blocked"] is True
+    assert json.loads(as_json.stdout)["ok"] is False
 
     unknown = runner.invoke(trade_cmd.app, ["probe", "--provider", "1inch"])
     assert unknown.exit_code != 0
@@ -299,23 +294,23 @@ def test_probe_provider_flag_and_geo_block(client: _FakeClient) -> None:
 def test_provider_show_and_switch(client: _FakeClient) -> None:
     shown = runner.invoke(trade_cmd.app, ["provider"])
     assert shown.exit_code == 0, shown.output
-    assert "Uniswap" in shown.output
+    assert "AgentOS Aggregator" in shown.output
     assert client.calls == [("trading.status", {})]
 
     shown_json = runner.invoke(trade_cmd.app, ["provider", "--json"])
     payload = json.loads(shown_json.stdout)
-    assert payload["provider"] == "uniswap"
-    assert [p["id"] for p in payload["providers"]] == ["uniswap", "kyber"]
+    assert payload["provider"] == "aggregator"
+    assert [p["id"] for p in payload["providers"]] == ["aggregator", "uniswap"]
 
-    switched = runner.invoke(trade_cmd.app, ["provider", "kyber"])
+    switched = runner.invoke(trade_cmd.app, ["provider", "uniswap"])
     assert switched.exit_code == 0, switched.output
-    assert client.calls[-1] == ("config.set", {"path": "trading.provider", "value": "kyber"})
-    assert "KyberSwap" in switched.output
-    assert "geo-restricted" in switched.output
+    assert client.calls[-1] == ("config.set", {"path": "trading.provider", "value": "uniswap"})
+    assert "Uniswap" in switched.output
+    assert "needs an API key" in switched.output
 
-    back = runner.invoke(trade_cmd.app, ["provider", "uniswap", "--json"])
+    back = runner.invoke(trade_cmd.app, ["provider", "aggregator", "--json"])
     assert back.exit_code == 0, back.output
-    assert json.loads(back.stdout) == {"provider": "uniswap", "restartRequired": False}
+    assert json.loads(back.stdout) == {"provider": "aggregator", "restartRequired": False}
 
     bad = runner.invoke(trade_cmd.app, ["provider", "0x"])
     assert bad.exit_code != 0
@@ -324,10 +319,13 @@ def test_provider_show_and_switch(client: _FakeClient) -> None:
 
 def test_provider_helpers() -> None:
     assert trade_cmd.provider_id_from_arg("Uniswap") == "uniswap"
-    assert trade_cmd.provider_id_from_arg("kyberswap") == "kyber"
-    assert trade_cmd.provider_label("kyber") == "KyberSwap"
+    assert trade_cmd.provider_id_from_arg("AGG") == "aggregator"
+    assert trade_cmd.provider_id_from_arg("aggregator") == "aggregator"
+    assert trade_cmd.provider_label("aggregator") == "AgentOS Aggregator"
     assert trade_cmd.provider_label(None) == "—"
     assert trade_cmd.provider_label("other") == "other"
+    with pytest.raises(BadParameter):
+        trade_cmd.provider_id_from_arg("kyber")
 
 
 def test_tokens_search(client: _FakeClient) -> None:

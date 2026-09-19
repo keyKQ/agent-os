@@ -20,6 +20,7 @@ from tests.test_trading.fakes import (
     USDC,
     WALLET,
     WETH,
+    FakeAggregator,
     FakeChain,
     FakeIndexer,
     FakePrices,
@@ -75,6 +76,11 @@ def robinhood_chain() -> FakeChain:
 @pytest.fixture
 def fake_uniswap() -> FakeUniswap:
     return FakeUniswap()
+
+
+@pytest.fixture
+def fake_aggregator() -> FakeAggregator:
+    return FakeAggregator()
 
 
 @pytest.fixture
@@ -137,6 +143,7 @@ def transport(
     base_chain: FakeChain,
     robinhood_chain: FakeChain,
     fake_uniswap: FakeUniswap,
+    fake_aggregator: FakeAggregator,
     fake_prices: FakePrices,
     fake_indexer: FakeIndexer,
 ) -> httpx.MockTransport:
@@ -146,6 +153,7 @@ def transport(
             "rpc.mainnet.chain.robinhood.com": robinhood_chain,
         },
         uniswap=fake_uniswap,
+        aggregator=fake_aggregator,
         prices=fake_prices,
         indexer=fake_indexer,
     )

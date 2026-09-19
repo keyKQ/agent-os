@@ -132,7 +132,12 @@ describe('ApprovalCard', () => {
       />,
     )
     expect(screen.queryByTestId('card-approve')).toBeNull()
-    expect(screen.getByTestId('approval-card')).toHaveTextContent('Confirmed')
+    const settled = screen.getByTestId('approval-card')
+    expect(settled).toHaveTextContent('Confirmed')
+    // An agent swap under the limits settles without ever asking, so the
+    // heading must not claim an approval that was never requested.
+    expect(settled).not.toHaveTextContent('Approval needed')
+    expect(settled.querySelector('.trd-card__title')).toHaveTextContent('Swap')
     fireEvent.click(screen.getByText(/0xabcd/))
     expect(openExternal).toHaveBeenCalledWith('https://basescan.org/tx/0xabcdef1234')
   })

@@ -27,6 +27,7 @@ import structlog
 
 from agentos import __version__
 from agentos.trading import guardrails
+from agentos.trading.aggregator import AGGREGATOR_BASE, AggregatorClient, AggregatorProvider
 from agentos.trading.chains import (
     CHAINS,
     NATIVE_ADDRESS,
@@ -48,7 +49,6 @@ from agentos.trading.evm import (
     receipt_succeeded,
     receipt_transfers,
 )
-from agentos.trading.kyber import KyberClient, KyberProvider
 from agentos.trading.ledger import (
     ORDER_FINAL_STATUSES,
     Ledger,
@@ -65,9 +65,9 @@ from agentos.trading.pnl import (
 )
 from agentos.trading.prices import PriceInfo, PriceService, TokenMeta, native_token
 from agentos.trading.providers import (
+    DEFAULT_PROVIDER_ID,
     PROVIDER_IDS,
     ProbeResult,
-    ProviderBlockedError,
     ProviderError,
     ProviderQuote,
     SwapProvider,
@@ -96,6 +96,16 @@ RECEIPT_TIMEOUT_S = 180.0
 SUBMITTED_GIVE_UP_S = 6 * 3600.0
 # One receipt poll per housekeeping pass for recovered orders.
 RECOVER_POLL_S = 5.0
+# A load-balanced RPC endpoint does not answer from one node. Measured on
+# Base on 2026-09-19: a receipt came back from a node that had the block
+# while the very next eth_getBalance and eth_call were served by one that
+# did not — an allowance that is provably on chain simulated as "transfer
+# amount exceeds allowance", and a settled swap booked as having received
+# only its gas back. These bound how long the engine waits for the endpoint
+# to agree with itself before it believes a read (``_native_after``,
+# ``_await_allowance``).
+CHAIN_CATCHUP_ATTEMPTS = 6
+CHAIN_CATCHUP_POLL_S = 1.0
 # Pause between wallets in a batch so a multi-wallet swap stays under the
 # Trading API's per-endpoint rate limit.
 BATCH_PAUSE_S = 0.35
@@ -175,8 +185,6 @@ def _err(exc: Exception) -> TradingError:
         return TradingError("trading.no_api_key", str(exc))
     if isinstance(exc, UniswapError):
         return TradingError(exc.code, str(exc), details={"errorCode": exc.error_code})
-    if isinstance(exc, ProviderBlockedError):
-        return TradingError(exc.code, str(exc), details={"provider": exc.provider, "blocked": True})
     if isinstance(exc, ProviderError):
         return TradingError(exc.code, str(exc), details=exc.details)
     if isinstance(exc, UnsupportedChainError):
@@ -224,7 +232,7 @@ class TradingService:
         http: httpx.AsyncClient | None = None,
         evm_factory: Callable[[ChainSpec], EvmClient] | None = None,
         uniswap_factory: Callable[[str], UniswapClient] | None = None,
-        kyber_factory: Callable[[str], KyberClient] | None = None,
+        aggregator_factory: Callable[[str], AggregatorClient] | None = None,
         broadcast: Broadcast | None = None,
         now: Callable[[], float] = time.time,
         sign_tx: Callable[[dict[str, Any], bytes], str] = _sign_tx,
@@ -241,9 +249,9 @@ class TradingService:
         )
         self._evm_factory = evm_factory
         self._uniswap_factory = uniswap_factory
-        self._kyber_factory = kyber_factory
-        self._kyber: KyberClient | None = None
-        self._kyber_client_id = ""
+        self._aggregator_factory = aggregator_factory
+        self._aggregator: AggregatorClient | None = None
+        self._aggregator_base = ""
         self._broadcast = broadcast or _default_broadcast
         self._now = now
         self._sign_tx = sign_tx
@@ -317,30 +325,34 @@ class TradingService:
             self._uniswap_key = key
         return self._uniswap
 
-    def kyber(self) -> KyberClient:
-        client_id = str(getattr(self.config, "kyber_client_id", "") or "agentos")
-        if self._kyber is None or self._kyber_client_id != client_id:
-            self._kyber = (
-                self._kyber_factory(client_id)
-                if self._kyber_factory is not None
-                else KyberClient(client_id=client_id, http=self._http)
+    def aggregator(self) -> AggregatorClient:
+        base = str(getattr(self.config, "aggregator_base_url", "") or AGGREGATOR_BASE).strip()
+        if self._aggregator is None or self._aggregator_base != base:
+            self._aggregator = (
+                self._aggregator_factory(base)
+                if self._aggregator_factory is not None
+                else AggregatorClient(base_url=base, http=self._http)
             )
-            self._kyber_client_id = client_id
-        return self._kyber
+            self._aggregator_base = base
+        return self._aggregator
 
     def provider_id(self) -> str:
-        value = str(getattr(self.config, "provider", "uniswap") or "uniswap").strip().lower()
-        return value if value in PROVIDER_IDS else "uniswap"
+        value = (
+            str(getattr(self.config, "provider", DEFAULT_PROVIDER_ID) or DEFAULT_PROVIDER_ID)
+            .strip()
+            .lower()
+        )
+        return value if value in PROVIDER_IDS else DEFAULT_PROVIDER_ID
 
     def provider(
         self, provider_id: str | None = None, *, api_key: str | None = None
     ) -> SwapProvider:
         """The swap provider to use for this call (read from config every time)."""
         chosen = (provider_id or "").strip().lower() or self.provider_id()
+        if chosen == "aggregator":
+            return AggregatorProvider(self.aggregator())
         if chosen == "uniswap":
             return UniswapProvider(self.uniswap(api_key))
-        if chosen == "kyber":
-            return KyberProvider(self.kyber())
         raise TradingError("trading.invalid", f"unknown swap provider {chosen!r}")
 
     def ensure_unlocked(self) -> bool:
@@ -454,7 +466,6 @@ class TradingService:
                 "label": provider_label(pid),
                 "needsKey": needs_key,
                 "keyConfigured": bool(self.api_key()) if needs_key else True,
-                "blocked": None,
                 "healthy": None,
                 "active": pid == self.provider_id(),
             }
@@ -463,7 +474,6 @@ class TradingService:
                     result = await self.provider(pid).probe(chain=self.chains()[0])
                 except TradingError:
                     result = ProbeResult(ok=False, latency_ms=None, error="not configured")
-                prow["blocked"] = result.blocked
                 prow["healthy"] = result.ok
             providers.append(prow)
         return {
@@ -558,7 +568,6 @@ class TradingService:
                     "ok": False,
                     "latencyMs": None,
                     "error": "No Uniswap API key configured",
-                    "blocked": False,
                 }
             result = await self.provider("uniswap", api_key=key).probe(chain=self.chains()[0])
         else:
@@ -1525,6 +1534,47 @@ class TradingService:
             return None
         return float(to_human(amount_raw, token.decimals)) * price
 
+    async def _priced(
+        self,
+        provider: SwapProvider,
+        *,
+        chain: ChainSpec,
+        swapper: str,
+        meta_in: TokenMeta,
+        meta_out: TokenMeta,
+        amount_raw: int,
+        slippage_pct: float | None,
+        decision_origin: DecisionOrigin,
+    ) -> ProviderQuote:
+        """Quote through a provider, then fill in what that provider left blank.
+
+        The aggregator publishes no price-impact percentage, and prices gas in
+        the chain's own coin rather than dollars. Both are completed here from
+        the engine's own price feed rather than inside the provider, so the
+        agent guardrails and the ledger read the same numbers whichever
+        provider routed the swap — in particular, ``agent_max_price_impact_pct``
+        keeps biting when the route is thin.
+        """
+        quote = await provider.quote(
+            chain=chain,
+            swapper=swapper,
+            token_in=NATIVE_ADDRESS if meta_in.native else meta_in.address,
+            token_out=NATIVE_ADDRESS if meta_out.native else meta_out.address,
+            amount_raw=amount_raw,
+            slippage_pct=slippage_pct,
+            decision_origin=decision_origin,
+        )
+        if quote.gas_usd is None and quote.gas_native is not None:
+            native_price = await self.prices.price(chain, NATIVE_ADDRESS)
+            if native_price:
+                quote.gas_usd = float(quote.gas_native) * float(native_price)
+        if quote.price_impact_pct is None:
+            in_usd = await self._value_usd(chain, meta_in, quote.amount_in_raw)
+            out_usd = await self._value_usd(chain, meta_out, quote.amount_out_raw)
+            if in_usd and out_usd is not None and in_usd > 0:
+                quote.price_impact_pct = max(0.0, (1 - out_usd / in_usd) * 100.0)
+        return quote
+
     async def _raw_for_usd(self, chain: ChainSpec, token: TokenMeta, amount_usd: float) -> int:
         """How much of ``token`` is worth ``amount_usd`` right now, in raw units.
 
@@ -1574,11 +1624,12 @@ class TradingService:
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
         self._check_agent_slippage(initiator, slippage)
         try:
-            quote = await self.provider().quote(
+            quote = await self._priced(
+                self.provider(),
                 chain=chain,
                 swapper=record.address,
-                token_in=meta_in.address if not meta_in.native else NATIVE_ADDRESS,
-                token_out=meta_out.address if not meta_out.native else NATIVE_ADDRESS,
+                meta_in=meta_in,
+                meta_out=meta_out,
                 amount_raw=amount_raw,
                 slippage_pct=slippage,
                 decision_origin=_origin(initiator),
@@ -1667,8 +1718,8 @@ class TradingService:
             "explorerUrl": chain.tx_url(tx_hash) if chain and tx_hash else None,
             "expiresAt": int(float(row["expires_at"]) * 1000) if row.get("expires_at") else None,
             "deliveredToken": self._token_dict(chain_id, row.get("delivered_token")),
-            "provider": row.get("provider") or "uniswap",
-            "providerLabel": provider_label(row.get("provider") or "uniswap"),
+            "provider": row.get("provider") or DEFAULT_PROVIDER_ID,
+            "providerLabel": provider_label(row.get("provider") or DEFAULT_PROVIDER_ID),
         }
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -1857,11 +1908,12 @@ class TradingService:
                 f"{format_amount(amount_raw, meta_in.decimals)}",
             )
         provider = self.provider(str(row.get("provider") or ""))
-        quote = await provider.quote(
+        quote = await self._priced(
+            provider,
             chain=chain,
             swapper=record.address,
-            token_in=meta_in.address,
-            token_out=meta_out.address,
+            meta_in=meta_in,
+            meta_out=meta_out,
             amount_raw=amount_raw,
             slippage_pct=row.get("slippage_pct"),
             decision_origin=_origin(str(row["initiator"])),
@@ -1930,11 +1982,12 @@ class TradingService:
         async with self._wallet_lock(record.key):
             # 1. ERC-20 allowance for the provider's spender.
             if quote is None or not quote.fresh:
-                quote = await provider.quote(
+                quote = await self._priced(
+                    provider,
                     chain=chain,
                     swapper=record.address,
-                    token_in=meta_in.address,
-                    token_out=meta_out.address,
+                    meta_in=meta_in,
+                    meta_out=meta_out,
                     amount_raw=amount_raw,
                     slippage_pct=row.get("slippage_pct"),
                     decision_origin=origin,
@@ -1964,14 +2017,22 @@ class TradingService:
                     await self._record_gas(
                         chain, record, receipt, kind="approval", order_id=order_id
                     )
+                    await self._await_allowance(
+                        evm,
+                        token=meta_in.address,
+                        owner=record.address,
+                        spenders=provider.trusted_spenders(chain, quote),
+                        amount_raw=amount_raw,
+                    )
 
             # 2. Fresh quote (the approval may have taken a while).
             if not quote.fresh:
-                quote = await provider.quote(
+                quote = await self._priced(
+                    provider,
                     chain=chain,
                     swapper=record.address,
-                    token_in=meta_in.address,
-                    token_out=meta_out.address,
+                    meta_in=meta_in,
+                    meta_out=meta_out,
                     amount_raw=amount_raw,
                     slippage_pct=row.get("slippage_pct"),
                     decision_origin=origin,
@@ -2125,7 +2186,19 @@ class TradingService:
         to = str(tx.get("to") or "")
         data = str(tx.get("data") or "0x")
         if not to or data in ("", "0x"):
-            raise TradingError("trading.tx_failed", "transaction from Uniswap is incomplete")
+            raise TradingError("trading.tx_failed", "transaction from the provider is incomplete")
+        # eth-account refuses to sign a ``to`` that is not EIP-55 checksummed,
+        # and providers disagree about case: Uniswap answers checksummed, the
+        # aggregator lowercase, and our own token addresses are normalised to
+        # lowercase. Re-checksum here, once, for every provider and both legs
+        # (approval and swap) — the alternative is a signer error at the very
+        # last step, after the approval has already been mined.
+        try:
+            to = checksum_address(to)
+        except ValueError as exc:
+            raise TradingError(
+                "trading.tx_failed", f"transaction 'to' is not an address: {to}"
+            ) from exc
         value = int(str(tx.get("value") or "0"), 0) if tx.get("value") else 0
         base_tx: dict[str, Any] = {"from": record.address, "to": to, "data": data, "value": value}
         native = await evm.get_balance(record.address)
@@ -2258,6 +2331,75 @@ class TradingService:
         finally:
             self._settling.discard(order_id)
 
+    @staticmethod
+    async def _await_allowance(
+        evm: EvmClient,
+        *,
+        token: str,
+        owner: str,
+        spenders: frozenset[str],
+        amount_raw: int,
+    ) -> None:
+        """Wait until the endpoint can see the allowance we just mined.
+
+        The approval's receipt proves it is on chain; it does not prove that
+        the node answering the *next* ``eth_call`` has applied it. Measured
+        on Base: the swap simulated as "ERC20: transfer amount exceeds
+        allowance" against an allowance the same endpoint reported as
+        present a moment later. Simulation happens before the send, so the
+        cost of not waiting is a failed order rather than burnt gas — but it
+        is a failure with no cause the user could act on.
+
+        Never fatal: if the allowance stays invisible the swap goes on to
+        simulate and fails there, with the chain's own reason attached.
+        """
+        for attempt in range(CHAIN_CATCHUP_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(CHAIN_CATCHUP_POLL_S)
+            for spender in spenders:
+                try:
+                    if await evm.erc20_allowance(token, owner, spender) >= amount_raw:
+                        return
+                except (EvmRpcError, EvmTransportError):
+                    continue
+        log.warning("trading.allowance_not_visible", token=token, spenders=sorted(spenders))
+
+    @staticmethod
+    async def _native_after(
+        evm: EvmClient, address: str, receipt: dict[str, Any], *, pre: int | None = None
+    ) -> int:
+        """The sender's native balance once the node has actually seen the swap.
+
+        A swap into the gas coin has no Transfer log to fall back on — the
+        router unwraps WETH and forwards ETH internally — so whatever this
+        returns is booked verbatim. Behind a load balancer that is a trap:
+        the receipt comes from a node that has the block while the balance
+        comes from one that does not, and dRPC answers the stale read
+        *without an error*, block tag or no block tag. Measured on Base on
+        2026-09-19 across two live swaps: ``receivedOut`` came back as the
+        gas cost alone, because post and pre were the same number.
+
+        So the read is pinned to the receipt's own block **and** checked:
+        the sender of a mined transaction has paid for its gas, so a balance
+        equal to ``pre`` is proof the node is behind rather than proof that
+        nothing arrived. That case is retried rather than believed.
+        """
+        block = str(receipt.get("blockNumber") or "")
+        tags = [tag for tag in (block, "latest") if tag]
+        latest = pre if pre is not None else 0
+        for attempt in range(CHAIN_CATCHUP_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(CHAIN_CATCHUP_POLL_S)
+            for tag in tags:
+                try:
+                    latest = await evm.get_balance(address, tag)
+                except (EvmRpcError, EvmTransportError):
+                    continue
+                if pre is None or latest != pre:
+                    return latest
+            log.debug("trading.balance_lagging", address=address, block=block)
+        return latest
+
     async def _settle(
         self,
         order_id: str,
@@ -2297,7 +2439,9 @@ class TradingService:
             return
         post_in = await self._balance_raw(chain, record, meta_in)
         post_out = await self._balance_raw(chain, record, meta_out)
-        post_native = await evm.get_balance(record.address)
+        post_native = await self._native_after(
+            evm, record.address, receipt, pre=pre["native"] or None
+        )
         transfers = receipt_transfers(receipt)
         # ERC-20 legs come from the receipt's Transfer logs: a load-balanced
         # RPC can still answer "latest" balances from a node that has not

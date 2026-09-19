@@ -119,6 +119,12 @@ LEGACY_MAX_SKILLS_PROMPT_CHARS = 8000
 
 OPENROUTER_PROVIDER_ID = "openrouter"
 
+#: ``agentos.trading.providers.DEFAULT_PROVIDER_ID``, repeated rather than
+#: imported: config migration runs at boot, before the trading package (and
+#: its HTTP stack) has any reason to be loaded. ``test_trading_migration``
+#: asserts the two stay equal.
+DEFAULT_SWAP_PROVIDER = "aggregator"
+
 GATEWAY_PROVIDER_ID = "bankr"
 # Historical aliases ("capgateway" / "opencap-gateway") are intentionally not
 # rewritten. Canonical ``opencap`` is a supported provider again, so existing
@@ -665,6 +671,24 @@ def migrate_config_payload(data: dict[str, Any]) -> ConfigMigrationResult:
         if deprecated_subagents:
             builder.removed_fields.extend(sorted(deprecated_subagents))
             handle_deprecated_subagents_fields(deprecated_subagents, "config_migration")
+
+    # 2026-09: the KyberSwap provider was removed and the AgentOS Aggregator
+    # became the default. TradingConfig forbids extras, so an existing
+    # agentos.toml carrying `kyber_client_id` would fail validation at boot;
+    # and `provider = "kyber"` now names a provider that no longer exists.
+    # Both are rewritten rather than rejected, so an upgrade keeps trading.
+    trading_section = builder.payload.get("trading")
+    if isinstance(trading_section, dict):
+        if "kyber_client_id" in trading_section:
+            trading_section.pop("kyber_client_id")
+            builder.removed_fields.append("trading.kyber_client_id")
+        if str(trading_section.get("provider") or "").strip().lower() == "kyber":
+            trading_section["provider"] = DEFAULT_SWAP_PROVIDER
+            builder.changes.append(f"trading.provider: kyber -> {DEFAULT_SWAP_PROVIDER}")
+            builder.warnings.append(
+                "The KyberSwap provider was removed; swaps now route through the "
+                "AgentOS Aggregator, which needs no API key"
+            )
 
     # 2026-07: the skills-block budget default rose from 8000 to 24000 once the
     # block stopped emitting a filesystem path per skill. 8000 could not fit the

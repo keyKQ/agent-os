@@ -398,7 +398,9 @@ async def _trading_set_provider(params: dict | None, ctx: RpcContext) -> dict[st
     p = _params(params)
     provider = (_str(p, "provider", required=True) or "").lower()
     if provider not in PROVIDER_IDS:
-        raise ValueError("params.provider must be 'uniswap' or 'kyber'")
+        raise ValueError(
+            "params.provider must be one of: " + ", ".join(repr(p) for p in PROVIDER_IDS)
+        )
     result = await get_dispatcher().dispatch(
         "trading.setProvider",
         "config.set",

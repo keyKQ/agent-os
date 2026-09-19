@@ -30,7 +30,7 @@ available without `uv tool list` or `pip show`.
 | `agentos sessions` | List, inspect, rename, resume, abort, delete, or export sessions. |
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
-| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through Uniswap or KyberSwap; orders, approvals, history, PnL. |
+| `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL. |
 | `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
@@ -794,9 +794,9 @@ agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --y
 agentos wallet balances [<addr>] [--chain base|robinhood] [--refresh] [--hidden] [--json]   # ledger view; --refresh re-reads the chain first (throttled to once per 10 s per wallet); --hidden lists junk tokens too
 
 agentos trade status                        # provider, API key, chains, limits, vault state
-agentos trade provider                      # show the swap provider (uniswap | kyber)
-agentos trade provider kyber                # switch it (= config set trading.provider kyber)
-agentos trade probe [--provider uniswap|kyber] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok)
+agentos trade provider                      # show the swap provider (aggregator | uniswap)
+agentos trade provider uniswap              # switch it (= config set trading.provider uniswap)
+agentos trade probe [--provider aggregator|uniswap] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok)
 agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
 agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet <addr>] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
@@ -830,20 +830,27 @@ always asks the vault password. Passwords are read from a hidden prompt or
 keystore) — never from the command line.
 
 Swaps run on Base (8453) and Robinhood Chain (4663) through one of two
-providers. **Uniswap** (the default, `trading.provider = "uniswap"`) uses
-the Uniswap Trading API and needs a key: `agentos config set
-trading.uniswap_api_key <key>` or Settings › Trading in the desktop app.
-**KyberSwap** (`agentos trade provider kyber`) needs no key, but its API is
-geo-restricted in some countries (Vietnam confirmed): calls then fail with
-the RPC error `trading.provider_blocked`, `agentos trade probe --provider
-kyber` reports `blocked: true`, and the fix is to switch back to Uniswap or
-use a VPN. `--in`/`--out` take `ETH`, an
-address, or a symbol; a symbol must resolve to exactly one *verified* token
-or the command exits 2 (`TOKEN_AMBIGUOUS`, `TOKEN_UNVERIFIED`,
-`TOKEN_NOT_FOUND`). Amounts are human units; `--pct` accepts fractions,
-and `--pct 100` on ETH keeps about 0.001 ETH back for gas. A quote does not
-check balance or gas — the swap does (`trading.insufficient_balance`) — and
-carries `expiresAt` (30 s for Uniswap, 8 s for Kyber).
+providers. The **AgentOS Aggregator** (the default,
+`trading.provider = "aggregator"`, served at `https://agg.404defi.capital`)
+needs no key and no account: one GET returns the price *and* the unsigned
+calldata, including the ERC-20 approval when one is needed. It never signs
+and never broadcasts — your wallet does both — and it charges 20 bps on the
+swap, reported back in the quote. **Uniswap** (`agentos trade provider
+uniswap`) is the fallback and needs a key: `agentos config set
+trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app.
+
+29 of the 34 listed tokens on Robinhood Chain (the tokenised stocks — AAPL,
+TSLA, SPY and the rest) cannot be routed at all: the aggregator answers
+`trading.token_not_tradeable`, a legal refusal upstream that no retry, size
+or time of day changes. ETH, WETH and USDG trade normally there.
+
+`--in`/`--out` take `ETH`, an address, or a symbol; a symbol must resolve to
+exactly one *verified* token or the command exits 2 (`TOKEN_AMBIGUOUS`,
+`TOKEN_UNVERIFIED`, `TOKEN_NOT_FOUND`). Amounts are human units; `--pct`
+accepts fractions, and `--pct 100` on ETH keeps about 0.001 ETH back for
+gas. A quote does not check balance or gas — the swap does
+(`trading.insufficient_balance`) — and carries `expiresAt` (about 20 s for
+the aggregator, 30 s for Uniswap).
 
 Guardrails apply to **agent-initiated** swaps, and the **gateway** decides
 who is an agent: a shell spawned by an agent turn carries an agent token
@@ -869,9 +876,10 @@ survives a gateway restart and is marked `failed` after 6 hours without a
 receipt.
 
 `[trading]` config keys (each also an environment variable with the
-`AGENTOS_TRADING_` prefix): `enabled`, `provider` (`uniswap` | `kyber`),
-`uniswap_api_key`, `uniswap_api_key_env` (default `UNISWAP_API_KEY`),
-`kyber_client_id`, `rpc_urls` (chain id → JSON-RPC URL),
+`AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |
+`uniswap`), `aggregator_base_url` (default
+`https://agg.404defi.capital`), `uniswap_api_key`, `uniswap_api_key_env`
+(default `UNISWAP_API_KEY`), `rpc_urls` (chain id → JSON-RPC URL),
 `approval_threshold_usd`, `daily_cap_usd` (0 = agent swaps off),
 `approval_ttl_seconds`, `agent_max_price_impact_pct`,
 `agent_max_slippage_pct`, `default_slippage_pct` (unset = provider auto),

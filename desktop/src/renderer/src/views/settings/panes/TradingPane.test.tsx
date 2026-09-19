@@ -160,42 +160,42 @@ describe('TradingPane · Test key', () => {
 describe('TradingPane · Swap provider', () => {
   it('switches the provider through config.patch with the revision and idles the Uniswap key', async () => {
     mount()
-    const kyber = await screen.findByRole('radio', { name: 'KyberSwap' })
-    expect(screen.getByRole('radio', { name: 'Uniswap' })).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByTestId('uniswap-key-hint')).not.toHaveTextContent('Only used while')
-    fireEvent.click(kyber)
+    // A config that names no provider is on the default: the aggregator. The
+    // Uniswap key is then kept but not in use, and the hint says so.
+    const aggregator = await screen.findByRole('radio', { name: 'AgentOS Aggregator' })
+    expect(aggregator).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByTestId('uniswap-key-hint')).toHaveTextContent('Only used while')
+    fireEvent.click(screen.getByRole('radio', { name: 'Uniswap' }))
     await waitFor(() =>
       expect(rpcCall).toHaveBeenCalledWith('config.patch', {
-        patch: { trading: { provider: 'kyber' } },
+        patch: { trading: { provider: 'uniswap' } },
         expectedRevision: 'r1',
       }),
     )
   })
 
-  it('greys the Uniswap key hint when Kyber is the provider', async () => {
+  it('greys the Uniswap key hint when the aggregator is the provider', async () => {
     rpcCall.mockImplementation(async (method: string) => {
       if (method === 'config.snapshot')
-        return { config: { trading: { provider: 'kyber' } }, revision: 'r1' }
+        return { config: { trading: { provider: 'aggregator' } }, revision: 'r1' }
       if (method === 'trading.status')
         return {
           enabled: true,
           apiKeyConfigured: false,
-          provider: 'kyber',
+          provider: 'aggregator',
           providers: [
+            {
+              id: 'aggregator',
+              label: 'AgentOS Aggregator',
+              needsKey: false,
+              keyConfigured: true,
+              healthy: null,
+            },
             {
               id: 'uniswap',
               label: 'Uniswap',
               needsKey: true,
               keyConfigured: false,
-              blocked: null,
-              healthy: null,
-            },
-            {
-              id: 'kyber',
-              label: 'KyberSwap',
-              needsKey: false,
-              keyConfigured: true,
-              blocked: null,
               healthy: null,
             },
           ],
@@ -218,7 +218,7 @@ describe('TradingPane · Swap provider', () => {
       return {}
     })
     mount()
-    expect(await screen.findByRole('radio', { name: 'KyberSwap' })).toHaveAttribute(
+    expect(await screen.findByRole('radio', { name: 'AgentOS Aggregator' })).toHaveAttribute(
       'aria-checked',
       'true',
     )
@@ -227,10 +227,10 @@ describe('TradingPane · Swap provider', () => {
     )
   })
 
-  it('tests the Kyber connection and shows the region block when the edge refuses', async () => {
+  it('tests the aggregator connection and says what it answered', async () => {
     rpcCall.mockImplementation(async (method: string, params?: { provider?: string }) => {
-      if (method === 'trading.probe' && params?.provider === 'kyber')
-        return { ok: false, latencyMs: 120, error: 'HTTP 403', blocked: true }
+      if (method === 'trading.probe' && params?.provider === 'aggregator')
+        return { ok: false, latencyMs: 120, error: 'Aggregator is misconfigured' }
       if (method === 'config.snapshot') return { config: { trading: {} }, revision: 'r1' }
       if (method === 'trading.status')
         return {
@@ -257,10 +257,11 @@ describe('TradingPane · Swap provider', () => {
       return {}
     })
     mount()
-    fireEvent.click(await screen.findByTestId('kyber-test'))
-    expect(await screen.findByTestId('kyber-blocked')).toHaveTextContent(
-      'KyberSwap is not available from your region. Switch to Uniswap or use a VPN.',
-    )
-    expect(rpcCall).toHaveBeenCalledWith('trading.probe', { provider: 'kyber' })
+    fireEvent.click(await screen.findByTestId('aggregator-test'))
+    const probe = await screen.findByTestId('aggregator-probe')
+    expect(probe).toHaveAttribute('data-verdict', 'bad')
+    expect(probe).toHaveTextContent('Not reachable:')
+    expect(probe).toHaveTextContent('Aggregator is misconfigured')
+    expect(rpcCall).toHaveBeenCalledWith('trading.probe', { provider: 'aggregator' })
   })
 })

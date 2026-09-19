@@ -14,6 +14,7 @@ from tests.test_trading.fakes import (
     ROUTER,
     USDC,
     WETH,
+    FakeAggregator,
     FakeChain,
     FakeIndexer,
     FakePrices,
@@ -67,6 +68,7 @@ def _wire_swap_effects(
             chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8, logs=logs)
         elif tx["to"].lower() == USDC:  # approval
             chain.native[wallet.lower()] -= gas_wei
+            chain.apply_approve(wallet, tx)
             chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8)
         else:
             chain.native[wallet.lower()] -= gas_wei
@@ -92,11 +94,16 @@ class TestStatusAndWallets:
         assert status["initialized"] is False and status["unlocked"] is False
 
     async def test_probe(self, service: TradingService, fake_uniswap: FakeUniswap) -> None:
+        # The default provider is the aggregator: no key, so nothing to reject.
         assert (await service.probe())["ok"] is True
-        bad = await service.probe("nope")
+        assert (await service.probe(provider_id="uniswap"))["ok"] is True
+        bad = await service.probe("nope", provider_id="uniswap")
         assert bad["ok"] is False and bad["error"]
         service.config.uniswap_api_key = ""
-        assert (await service.probe())["error"] == "No Uniswap API key configured"
+        no_key = await service.probe(provider_id="uniswap")
+        assert no_key["error"] == "No Uniswap API key configured"
+        # Losing the Uniswap key does not disturb the default route.
+        assert (await service.probe())["ok"] is True
 
     async def test_create_wallet_stamps_block_and_mirrors(
         self, service: TradingService, base_chain: FakeChain, robinhood_chain: FakeChain
@@ -349,18 +356,23 @@ class TestTokensAndBalances:
 
 class TestQuote:
     async def test_quote_shape_and_guard(
-        self, funded_service: TradingService, fake_uniswap: FakeUniswap
+        self, funded_service: TradingService, fake_aggregator: FakeAggregator
     ) -> None:
         service = funded_service
         quote = await service.quote(
             chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="10"
         )
+        assert quote["provider"] == "aggregator"
+        # Neither number comes from the aggregator: the engine derives both
+        # from its own price feed (see TradingService._priced).
+        assert quote["priceImpactPct"] == pytest.approx(0.0)
+        assert quote["gasUsd"] == pytest.approx(0.02)  # 0.00001 ETH at $2,000
         assert quote["amountIn"] == "10" and quote["amountInRaw"] == str(10 * 10**6)
-        assert quote["amountOut"] == "0.0005" and quote["valueUsd"] == pytest.approx(10.0)
+        assert quote["amountOut"] == "0.005" and quote["valueUsd"] == pytest.approx(10.0)
         # A rate is an amount, so it is a decimal string like every other one.
         # It used to be a float, which the desktop fed to a string formatter
         # and crashed on, and which lost digits on very small prices.
-        assert quote["rate"] == "0.00005"
+        assert quote["rate"] == "0.0005"
         assert quote["guard"]["decision"] == "allow"
         # "$5 of ETH": the engine reads the price (ETH = $2,000 in the fake) and sizes it.
         usd_quote = await service.quote(
@@ -401,7 +413,7 @@ class TestQuote:
             await service.quote(
                 chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="0"
             )
-        fake_uniswap.quote_error = (404, {"errorCode": "NoRouteFoundError"})
+        fake_aggregator.liquidity = False
         with pytest.raises(TradingError) as info:
             await service.quote(
                 chain=BASE, wallet=None, token_in="USDC", token_out="ETH", amount_in="1"
@@ -413,7 +425,12 @@ class TestSwapFlow:
     async def test_manual_swap_end_to_end(
         self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
     ) -> None:
+        """The Uniswap path, end to end — it is the fallback, not the default.
+
+        The aggregator's own end-to-end lives in ``test_aggregator.py``.
+        """
         service = funded_service
+        service.config.provider = "uniswap"
         wallet = service.test_wallet  # type: ignore[attr-defined]
         fake_uniswap.approval_needed = True
         _wire_swap_effects(base_chain, wallet)
@@ -474,7 +491,7 @@ class TestSwapFlow:
         assert finished and finished[-1]["order"]["status"] == "confirmed"
 
     async def test_confirm_reads_erc20_legs_from_receipt_logs_when_balances_lag(
-        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+        self, funded_service: TradingService, base_chain: FakeChain
     ) -> None:
         """A load-balanced RPC may answer post-swap balances from a node that has
         not seen the block yet; the Transfer logs in the receipt are the truth."""
@@ -513,6 +530,7 @@ class TestSwapFlow:
         self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
     ) -> None:
         service = funded_service
+        service.config.provider = "uniswap"  # this asserts Uniswap's own headers
         wallet = service.test_wallet  # type: ignore[attr-defined]
         _wire_swap_effects(base_chain, wallet)
         orders = await service.swap(
@@ -652,11 +670,14 @@ class TestSwapFlow:
         assert "trading.insufficient_balance" in by_wallet[empty["address"]]["reason"]
 
     async def test_amount_pct_and_native_gas_reserve(
-        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
     ) -> None:
         service = funded_service
         wallet = service.test_wallet  # type: ignore[attr-defined]
-        fake_uniswap.tx_value = str(10**18 - 10**15)
+        fake_aggregator.tx_value = str(10**18 - 10**15)
         _wire_swap_effects(base_chain, wallet, out_token=USDC, out_amount=1990 * 10**6)
         orders = await service.swap(
             chain=BASE,
@@ -793,6 +814,8 @@ class TestSwapFlow:
             await service.swap(
                 token_in="USDC", token_out="WETH", amount_in=None, amount_pct=150, **common
             )
+        # Only Uniswap needs a key; the default route has none to lose.
+        service.config.provider = "uniswap"
         service.config.uniswap_api_key = ""
         with pytest.raises(TradingError, match="No Uniswap API key"):
             await service.swap(
@@ -1081,10 +1104,12 @@ class TestSafetyRails:
         assert quote["guard"]["decision"] == "allow"
 
     async def test_price_impact_above_ceiling_parks_an_agent_order(
-        self, funded_service: TradingService, fake_uniswap: FakeUniswap
+        self, funded_service: TradingService, fake_aggregator: FakeAggregator
     ) -> None:
         service = funded_service
-        fake_uniswap.price_impact = 7.5
+        # The aggregator publishes no impact figure, so the engine derives it:
+        # $10 of USDC in, 0.004625 WETH ($9.25) out is a 7.5% haircut.
+        fake_aggregator.amount_out = 4_625_000_000_000_000
         orders = await service.swap(
             chain=BASE,
             wallets=None,
@@ -1121,6 +1146,10 @@ class TestSafetyRails:
         self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
     ) -> None:
         service = funded_service
+        # Uniswap's approval is a separate call, so a rogue spender reaches
+        # this service-level check. The aggregator refuses one layer earlier,
+        # in the provider — see test_aggregator.py.
+        service.config.provider = "uniswap"
         wallet = service.test_wallet  # type: ignore[attr-defined]
         _wire_swap_effects(base_chain, wallet)
         fake_uniswap.approval_needed = True
@@ -1166,13 +1195,16 @@ class TestSafetyRails:
             check({**ok, "data": "0xdeadbeef"}, token=USDC, amount_raw=10, spenders=spenders)
 
     async def test_swap_transaction_value_must_match_the_order(
-        self, funded_service: TradingService, base_chain: FakeChain, fake_uniswap: FakeUniswap
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
     ) -> None:
         service = funded_service
         wallet = service.test_wallet  # type: ignore[attr-defined]
         _wire_swap_effects(base_chain, wallet)
         # An ERC-20 sale whose transaction suddenly asks for ETH on top.
-        fake_uniswap.tx_value = str(10**17)
+        fake_aggregator.tx_value = str(10**17)
         orders = await service.swap(
             chain=BASE,
             wallets=None,

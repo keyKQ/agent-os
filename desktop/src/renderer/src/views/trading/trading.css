@@ -59,6 +59,11 @@
   padding: 12px 14px 14px;
   isolation: isolate;
 }
+/* One wallet, or the list put away: the head already says whose desk this is,
+   so the column goes to the ledger rather than standing empty. */
+.trd[data-rail='off'] {
+  grid-template-columns: minmax(0, 1fr) var(--trd-ticket);
+}
 
 /* Every column of the desk is the same instrument: a hairline, a surface one
    step above the canvas, and a 1 px highlight along the top edge. Nothing
@@ -183,7 +188,9 @@
 .trd-wallet {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  /* Mark, text, figure. The "all" row has no mark and leaves the column
+     empty, which puts its text on the same rule as every wallet under it. */
+  grid-template-columns: 20px minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
   column-gap: 8px;
   width: 100%;
@@ -203,7 +210,16 @@
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
+.trd-wallet__mark {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  align-self: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+}
 .trd-wallet__name {
+  grid-column: 2;
   display: flex;
   min-width: 0;
   align-items: center;
@@ -221,14 +237,19 @@
   color: var(--primary);
 }
 .trd-wallet__addr {
-  grid-column: 1;
+  grid-column: 2;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--dim);
+  /* A dust wallet's total runs long ("$0.00004276"); the address beside it
+     must give way on its own line rather than wrap into a second one. */
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .trd-wallet__value {
   grid-row: 1 / span 2;
-  grid-column: 2;
+  grid-column: 3;
   align-self: center;
   font-family: var(--font-display);
   font-stretch: 85%;
@@ -338,6 +359,29 @@
   font-weight: 500;
   color: var(--foreground);
 }
+/* Out of the rail and into the ledger column: one line, meter between the
+   label and the words, so a guardrail costs a band rather than a block. */
+.trd-budget--strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  padding: 7px 12px;
+  background: var(--surface);
+}
+.trd-budget--strip .trd-budget__label {
+  flex-shrink: 0;
+  gap: 8px;
+}
+.trd-budget--strip .trd-budget__meter {
+  flex: 1;
+  min-width: 60px;
+  margin: 0;
+}
+.trd-budget--strip .trd-budget__text {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
 /* ── Ledger column ─────────────────────────────────────────────────────────── */
 
@@ -410,18 +454,125 @@
 .trd-hero > * {
   position: relative;
 }
-.trd-hero__bar {
-  display: flex;
-  flex-wrap: wrap;
+/* ── Head: whose wallet this is ────────────────────────────────────────────
+   The mark, the address, the name under it, the actions on the right. It
+   reads like the top of a wallet app on purpose: identity first, then the
+   figure. */
+/* Grid, not flex: the identity takes the whole remaining column, so the
+   address ellipsizes only when it truly does not fit rather than whenever a
+   flex item guesses its content size short. */
+.trd-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px 16px;
+  gap: 16px;
 }
+.trd-head__who {
+  position: relative;
+  min-width: 0;
+}
+/* The whole identity block is the switcher's trigger: a 40 px target that
+   happens to also be the thing it changes. */
+.trd-head__id {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  margin: -4px 0 -4px -6px;
+  padding: 4px 8px 4px 6px;
+  border-radius: var(--radius-control);
+  text-align: left;
+  color: var(--foreground);
+  transition: background-color 80ms ease-out;
+}
+.trd-head__id:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-head__id:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+/* One wallet: the block is a label, not a control — no hover, no pointer. */
+.trd-head__id:disabled {
+  cursor: default;
+}
+.trd-head__mark {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #fff 10%, transparent);
+}
+/* Every wallet at once has no one mark, so it gets the first three, fanned. */
+.trd-head__stack {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  width: 40px;
+  height: 40px;
+  padding-left: 4px;
+}
+.trd-head__stack img {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.trd-head__stack img + img {
+  margin-left: -11px;
+}
+.trd-head__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.trd-head__line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.trd-head__line > b {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-head__line > svg {
+  flex-shrink: 0;
+  color: var(--dim);
+}
+.trd-head__star {
+  flex-shrink: 0;
+  color: var(--primary);
+}
+.trd-head__sub {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.trd-head__acts {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.trd-head__menu {
+  position: relative;
+}
+
 .trd-hero__tools {
   display: flex;
   flex-shrink: 0;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 /* The venue is a fact about where orders go, so it reads as a plate with a
    live lamp — not as the lime CTA colour spent on a label. */
@@ -1983,8 +2134,10 @@ tr:focus-within .trd-row__actions {
   outline: none;
   overflow: hidden;
 }
+/* 540, not 480: the wallet manager's action row carries five labelled buttons
+   (443px of them), and at 480 the last one wrapped to a line of its own. */
 .trd-modal--wide {
-  max-width: 480px;
+  max-width: 540px;
 }
 /* The catalogue is a grid of cards, not a column of fields: at the column
    width a card title wraps and every hint runs to three lines. */
@@ -2099,6 +2252,38 @@ tr:focus-within .trd-row__actions {
 }
 /* Full, selectable, and on its own line. A wrapped address is still readable;
    an ellipsised one is not, and is exactly what sent people looking. */
+/* Receive: the QR keeps its own white field with a little more white around
+   it — that margin is the symbol's quiet zone, not padding, and a scanner
+   needs it. Everything else on the sheet stays dark. */
+.trd-qr {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.trd-qr__code {
+  display: block;
+  padding: 10px;
+  border-radius: var(--radius-control);
+  background: #fff;
+}
+.trd-qr__addr {
+  overflow-wrap: anywhere;
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  user-select: text;
+}
+.trd-qr__note {
+  max-width: 34ch;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .trd-wman__addr {
   display: flex;
   align-items: center;
@@ -2160,23 +2345,31 @@ tr:focus-within .trd-row__actions {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
+/* Five actions on a narrow row: they wrap as whole buttons, never inside a
+   label. A broken "Make / primary" reads as two controls that are not there. */
 .trd-wman__acts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 4px 4px;
   padding-top: 2px;
   border-top: 1px solid var(--hairline);
   margin-top: 1px;
 }
-.trd-wman__spacer {
-  flex: 1;
+/* Destructive action to the end of its row, wrapped or not: an auto margin
+   eats the free space wherever the row happens to break, which a spacer
+   element could only do on the first line. */
+.trd-wman__act--danger {
+  margin-left: auto;
 }
 .trd-wman__act {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 5px;
   height: 26px;
   padding: 0 8px;
+  white-space: nowrap;
   border-radius: var(--radius-control);
   font-size: 11.5px;
   font-weight: 500;
@@ -2480,6 +2673,10 @@ tr:focus-within .trd-row__actions {
     grid-template-columns: minmax(0, 1fr) var(--trd-ticket);
     grid-template-rows: auto minmax(0, 1fr);
   }
+  /* No strip to reserve a band for: the ledger takes the whole height. */
+  .trd[data-rail='off'] {
+    grid-template-rows: minmax(0, 1fr);
+  }
   /* One horizontal row, content height, nothing centred vertically — still
      the same card, just laid on its side. */
   .trd-rail {
@@ -2542,6 +2739,17 @@ tr:focus-within .trd-row__actions {
   }
   .trd-hero__figure > b {
     font-size: 30px;
+  }
+  .trd-head__mark,
+  .trd-head__stack {
+    width: 32px;
+    height: 32px;
+  }
+  .trd-head__mark {
+    border-radius: 9px;
+  }
+  .trd-head__line {
+    font-size: 15px;
   }
   .trd-hero__stats {
     gap: 8px 12px;

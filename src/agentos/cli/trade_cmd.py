@@ -30,10 +30,10 @@ from agentos.cli.wallet_cmd import (
     token_symbol,
 )
 
-app = typer.Typer(help="Swap tokens through Uniswap, track orders, history and PnL.")
+app = typer.Typer(help="Swap tokens, track orders, history and PnL.")
 
 AGENT_ENV_MARKERS = ("AGENTOS_SESSION_KEY", "AGENTOS_AGENT")
-PROVIDERS: dict[str, str] = {"uniswap": "Uniswap", "kyber": "KyberSwap"}
+PROVIDERS: dict[str, str] = {"aggregator": "AgentOS Aggregator", "uniswap": "Uniswap"}
 # Statuses that still move on their own after ``trading.swap`` returns.
 _PENDING_STATUSES = frozenset({"awaiting_approval", "approved", "submitted", "quoted"})
 
@@ -47,11 +47,11 @@ class TokenResolutionError(Exception):
 
 
 def provider_id_from_arg(value: str) -> str:
-    """Normalise ``uniswap``/``kyber`` (case-insensitive, ``kyberswap`` accepted)."""
+    """Normalise ``aggregator``/``uniswap`` (case-insensitive; ``agg`` accepted)."""
 
     key = value.strip().lower()
-    if key == "kyberswap":
-        key = "kyber"
+    if key in ("agg", "404", "agentos"):
+        key = "aggregator"
     if key not in PROVIDERS:
         choices = ", ".join(PROVIDERS)
         raise typer.BadParameter(f"unknown provider {value!r}; expected one of: {choices}")
@@ -242,14 +242,8 @@ def trade_status(
         for entry in providers:
             if not isinstance(entry, dict):
                 continue
-            blocked = entry.get("blocked")
             healthy = entry.get("healthy")
-            if blocked:
-                reachable = "blocked in your region"
-            elif healthy is None:
-                reachable = "—"
-            else:
-                reachable = "yes" if healthy else "no"
+            reachable = "—" if healthy is None else ("yes" if healthy else "no")
             if entry.get("needsKey"):
                 key_state = "configured" if entry.get("keyConfigured") else "missing"
             else:
@@ -284,7 +278,7 @@ def trade_status(
 @app.command("probe")
 def trade_probe(
     provider: str | None = typer.Option(
-        None, "--provider", help="uniswap or kyber (default: the configured provider)"
+        None, "--provider", help="aggregator or uniswap (default: the configured provider)"
     ),
     api_key: str | None = typer.Option(
         None, "--api-key", help="Test this Uniswap key instead of the configured one"
@@ -310,13 +304,6 @@ def trade_probe(
         return
     result = _dict(result)
     name = provider_label(result.get("provider") or params.get("provider"))
-    if result.get("blocked"):
-        console.print(
-            f"[red]{name} is not reachable from your region[/] (HTTP 403 at the provider's "
-            "edge). This is a geo-restriction, not a fault in AgentOS: switch back with "
-            "`agentos trade provider uniswap`, or route through a VPN."
-        )
-        raise typer.Exit(1)
     if result.get("ok"):
         latency = result.get("latencyMs")
         suffix = f" ({latency} ms)" if latency is not None else ""
@@ -328,10 +315,12 @@ def trade_probe(
 
 @app.command("provider")
 def trade_provider(
-    name: str | None = typer.Argument(None, help="uniswap or kyber (omit to show the current one)"),
+    name: str | None = typer.Argument(
+        None, help="aggregator or uniswap (omit to show the current one)"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
-    """Show or switch the swap provider (Uniswap needs an API key; KyberSwap needs none)."""
+    """Show or switch the swap provider (the aggregator needs no key; Uniswap needs one)."""
 
     if name is None:
 
@@ -356,10 +345,10 @@ def trade_provider(
         print_json({"provider": provider, **result})
         return
     console.print(f"Swap provider is now [{ACCENT}]{provider_label(provider)}[/].")
-    if provider == "kyber":
+    if provider == "uniswap":
         console.print(
-            "KyberSwap needs no API key but is geo-restricted in some countries (Vietnam "
-            "confirmed). Run `agentos trade probe --provider kyber` to check from here."
+            "Uniswap needs an API key in `trading.uniswap_api_key` (or UNISWAP_API_KEY). "
+            "Run `agentos trade probe --provider uniswap` to check it from here."
         )
     elif result.get("restartRequired"):
         console.print("Restart the gateway to apply.")

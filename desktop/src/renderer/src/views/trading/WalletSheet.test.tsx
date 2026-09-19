@@ -208,6 +208,20 @@ describe('WalletSheet · manage', () => {
     expect(screen.getAllByTestId('manage-remove')).toHaveLength(2)
   })
 
+  it('opens a QR of the address, drawn here rather than fetched', async () => {
+    mockVault()
+    renderDesk(<WalletSheet mode={{ kind: 'manage' }} onClose={vi.fn()} />)
+    await screen.findAllByTestId('manage-address')
+
+    fireEvent.click(screen.getAllByTestId('manage-qr')[0]!)
+
+    expect(screen.getByTestId('receive-address').textContent).toBe(WALLET.address)
+    const qr = screen.getByRole('img', { name: /QR code/i })
+    // A `data:` image: nothing was asked of a QR web service, which would have
+    // disclosed the address and been blocked by the window's CSP anyway.
+    expect(qr.getAttribute('src')).toMatch(/^data:image\/svg\+xml;base64,/)
+  })
+
   it('returns to the manager when a flow it opened is closed', async () => {
     mockVault()
     const onClose = vi.fn()
