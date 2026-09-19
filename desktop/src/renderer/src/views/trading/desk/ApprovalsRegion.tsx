@@ -17,6 +17,7 @@ export function ApprovalsRegion({
   onApprove,
   onReject,
   focusOrderId,
+  onDismiss,
 }: {
   pending: Order[]
   settled: Order[]
@@ -26,6 +27,8 @@ export function ApprovalsRegion({
   onReject: (order: Order, reason: string) => void
   /** From a notification: scroll this order's card into view. */
   focusOrderId: string | null
+  /** Close a settled stamp before its own clock runs out. */
+  onDismiss?: (orderId: string) => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   // Reject gets focus once, on the first card that appears — never on every render.
@@ -68,6 +71,7 @@ export function ApprovalsRegion({
             onApprove={() => {}}
             onReject={() => {}}
             focusOnMount={false}
+            onDismiss={onDismiss ? () => onDismiss(order.orderId) : undefined}
           />
         </div>
       ))}

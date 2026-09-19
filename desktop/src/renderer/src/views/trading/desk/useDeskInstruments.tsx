@@ -130,6 +130,12 @@ export function useDeskInstruments(
   }, [pendingOrders.length, desk])
   const [mountedAt] = useState(() => Date.now())
   const now = useNow(30_000)
+  // Stamps you have read: closed by hand, they never come back this session.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set())
+  const onDismissStamp = useCallback(
+    (orderId: string) => setDismissed((prev) => new Set(prev).add(orderId)),
+    [],
+  )
   const settled = useMemo(
     () =>
       sessionOrders.filter(
@@ -137,9 +143,10 @@ export function useDeskInstruments(
           !isAwaitingApproval(o) &&
           o.initiator === 'agent' &&
           o.createdAt >= mountedAt &&
-          now - o.updatedAt < STAMP_TTL_MS,
+          now - o.updatedAt < STAMP_TTL_MS &&
+          !dismissed.has(o.orderId),
       ),
-    [sessionOrders, now, mountedAt],
+    [sessionOrders, now, mountedAt, dismissed],
   )
   const decide = useOrderDecision()
   const onApprove = useCallback(
@@ -275,6 +282,7 @@ export function useDeskInstruments(
         onApprove={onApprove}
         onReject={onReject}
         focusOrderId={focusOrderId}
+        onDismiss={onDismissStamp}
       />
     ),
     dockAbove: (

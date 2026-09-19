@@ -1,4 +1,4 @@
-import { ExternalLink, ShieldAlert } from 'lucide-react'
+import { ExternalLink, ShieldAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -38,6 +38,7 @@ export function ApprovalCard({
   onApprove,
   onReject,
   focusOnMount,
+  onDismiss,
 }: {
   order: Order
   wallets: readonly Wallet[]
@@ -45,6 +46,8 @@ export function ApprovalCard({
   onApprove: (order: Order) => void
   onReject: (order: Order, reason: string) => void
   focusOnMount: boolean
+  /** Settled cards only: close this one now instead of waiting it out. */
+  onDismiss?: () => void
 }) {
   const risk = riskStamp(order)
   const facts = approvalFacts(order, wallets, FACT_LABELS)
@@ -112,6 +115,18 @@ export function ApprovalCard({
             </span>
           ) : null}
           {!live ? <StatusPill status={order.status} /> : null}
+          {onDismiss ? (
+            <button
+              type="button"
+              className="trd-card__dismiss app-no-drag"
+              onClick={onDismiss}
+              aria-label={t('trading.card.dismiss')}
+              title={t('trading.card.dismiss')}
+              data-testid="card-dismiss"
+            >
+              <X className="size-3" strokeWidth={2} aria-hidden />
+            </button>
+          ) : null}
         </span>
       </header>
 

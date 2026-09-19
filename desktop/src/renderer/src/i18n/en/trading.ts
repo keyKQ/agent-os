@@ -423,6 +423,7 @@ export const trading = {
   'trading.card.by.external': 'External',
   'trading.card.approveAgain': 'Click again to approve and execute',
   'trading.card.rejectSend': 'Reject with note',
+  'trading.card.dismiss': 'Dismiss this receipt',
   'trading.card.reasonPlaceholder': 'Why? (the agent reads this)',
 
   'trading.ledger.running': 'Running…',

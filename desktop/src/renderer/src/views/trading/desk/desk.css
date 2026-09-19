@@ -635,6 +635,29 @@
   align-items: center;
   gap: 6px;
 }
+/* Closes a settled receipt by hand. Only ever on a settled card: an ask is
+   answered with Approve or Reject, never waved away. */
+.trd-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: -4px;
+  border-radius: var(--radius-compact);
+  color: var(--dim);
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
+}
+.trd-card__dismiss:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.trd-card__dismiss:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
 .trd-stamp {
   display: inline-flex;
   align-items: center;

@@ -173,4 +173,25 @@ describe('ApprovalsRegion', () => {
     expect(cards[0]).toHaveAttribute('data-order', 'p1')
     expect(screen.getByTestId('approval-stamp')).toHaveTextContent('Rejected')
   })
+
+  it('closes a settled stamp by hand, and never offers that on a pending ask', () => {
+    const onDismiss = vi.fn()
+    renderDesk(
+      <ApprovalsRegion
+        pending={[order({ orderId: 'p1' })]}
+        settled={[order({ orderId: 's1', status: 'confirmed' })]}
+        wallets={[WALLET]}
+        deciding={null}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOrderId={null}
+        onDismiss={onDismiss}
+      />,
+    )
+    const dismiss = screen.getAllByTestId('card-dismiss')
+    expect(dismiss).toHaveLength(1)
+    expect(screen.getByTestId('approval-stamp')).toContainElement(dismiss[0]!)
+    fireEvent.click(dismiss[0]!)
+    expect(onDismiss).toHaveBeenCalledWith('s1')
+  })
 })
