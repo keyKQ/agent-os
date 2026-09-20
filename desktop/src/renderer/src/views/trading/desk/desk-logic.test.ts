@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { order, WALLET } from '../test-utils'
 import {
   approvalFacts,
+  askRisk,
+  batchFacts,
   bookConcession,
+  composeSendPrompt,
+  groupAsks,
+  parseRecipientLines,
+  SEND_TAG,
+  validateSend,
+  type SendForm,
   composeMissionPrompt,
   composerPlaceholder,
   formatExpiryWhole,
@@ -428,5 +436,211 @@ describe('composerPlaceholder', () => {
         steering: 'steer',
       }),
     ).toBe(PLACEHOLDERS[1])
+  })
+})
+
+describe('sends and batches', () => {
+  const send = (extra: Parameters<typeof order>[0] = {}) =>
+    order({
+      kind: 'send',
+      tokenOut: order().tokenIn,
+      expectedOut: null,
+      minOut: null,
+      priceImpactPct: null,
+      recipient: '0x2222222222222222222222222222222222222222',
+      recipientLabel: null,
+      amountIn: '0.1',
+      valueUsd: 250,
+      ...extra,
+    })
+
+  it('folds the legs of a multisend into one ask with a total', () => {
+    const legs = [
+      send({ orderId: 'a', batchId: 'bat_1', amountIn: '0.1', valueUsd: 250 }),
+      send({ orderId: 'b', batchId: 'bat_1', amountIn: '0.25', valueUsd: 625 }),
+      order({ orderId: 'c' }),
+      send({ orderId: 'd', amountIn: '1', valueUsd: null }),
+    ]
+    const asks = groupAsks(legs)
+    expect(asks.map((a) => a.key)).toEqual(['bat_1', 'c', 'd'])
+    expect(asks[0]).toMatchObject({ kind: 'send', batch: true, totalUsd: 875, totalAmount: '0.35' })
+    expect(asks[0]!.orders.map((o) => o.orderId)).toEqual(['a', 'b'])
+    expect(asks[1]).toMatchObject({ kind: 'swap', batch: false })
+    expect(asks[2]).toMatchObject({ batch: false, totalUsd: null })
+    // Any unpriced leg leaves the batch unpriced too.
+    const mixed = groupAsks([
+      send({ orderId: 'x', batchId: 'b2', valueUsd: 1 }),
+      send({ orderId: 'y', batchId: 'b2', valueUsd: null }),
+    ])
+    expect(mixed[0]!.totalUsd).toBeNull()
+  })
+
+  it('stamps risk on the batch total and on an unpriced send', () => {
+    expect(riskStamp(send({ valueUsd: 100 }))).toBe('normal')
+    expect(riskStamp(send({ valueUsd: null }))).toBe('high')
+    const ask = groupAsks([
+      send({ orderId: 'a', batchId: 'b', valueUsd: 300 }),
+      send({ orderId: 'b', batchId: 'b', valueUsd: 300 }),
+    ])[0]!
+    expect(askRisk(ask)).toBe('high')
+  })
+
+  it('binds send and revoke facts, and batch facts on the whole', () => {
+    const labels = { to: 'To', send: 'Send', spender: 'Spender', allowance: 'Allowance' }
+    const facts = approvalFacts(send({ gasUsd: 0.01 }), [WALLET], labels)
+    const keys = facts.map((f) => f.key)
+    expect(keys).toEqual(['wallet', 'chain', 'to', 'send', 'value', 'gas', 'order', 'expires'])
+    expect(facts.find((f) => f.key === 'to')!.value).toBe(
+      '0x2222222222222222222222222222222222222222',
+    )
+    expect(facts.find((f) => f.key === 'send')!.value).toBe('0.1 ETH')
+    const revoke = approvalFacts(
+      send({
+        kind: 'revoke',
+        amountIn: 'unlimited',
+        recipientLabel: 'Permit2',
+        gasUsd: null,
+        valueUsd: 0,
+      }),
+      [WALLET],
+      labels,
+    )
+    expect(revoke.map((f) => f.key)).toEqual([
+      'wallet',
+      'chain',
+      'token',
+      'spender',
+      'allowance',
+      'order',
+      'expires',
+    ])
+    expect(revoke.find((f) => f.key === 'spender')!.value).toBe('Permit2 · 0x2222…2222')
+    expect(revoke.find((f) => f.key === 'allowance')).toMatchObject({
+      value: 'unlimited',
+      tone: 'danger',
+    })
+    const ask = groupAsks([
+      send({ orderId: 'a', batchId: 'bat_9', gasUsd: 0.01 }),
+      send({ orderId: 'b', batchId: 'bat_9', gasUsd: 0.02 }),
+    ])[0]!
+    const batch = batchFacts(ask, [WALLET], { recipients: 'Recipients', total: 'Total' })
+    expect(batch.map((f) => f.key)).toEqual([
+      'wallet',
+      'chain',
+      'recipients',
+      'total',
+      'value',
+      'gas',
+      'batch',
+      'expires',
+    ])
+    expect(batch.find((f) => f.key === 'recipients')!.value).toBe('2')
+    expect(batch.find((f) => f.key === 'total')!.value).toBe('0.2 ETH')
+    expect(batch.find((f) => f.key === 'gas')!.value).toBe('$0.03')
+  })
+
+  it('names the batch when a leg is rejected', () => {
+    expect(rejectionMessage(send({ batchId: 'bat_1' }), 'wrong list', 3)).toBe(
+      'Rejected batch bat_1 (3 sends): wrong list',
+    )
+    expect(rejectionMessage(send(), '')).toBe(
+      'Rejected send o1. Do not retry it without asking first.',
+    )
+    expect(rejectionMessage(order(), 'no')).toBe('Rejected order o1: no')
+  })
+})
+
+describe('send form', () => {
+  const base: SendForm = {
+    chainId: 8453,
+    wallet: WALLET.address,
+    token: 'USDC',
+    recipients: [],
+    amount: '',
+    usd: '',
+    note: '',
+  }
+  const A = '0x2222222222222222222222222222222222222222'
+  const B = '0x3333333333333333333333333333333333333333'
+
+  it('parses pasted lines in every shape people use', () => {
+    expect(parseRecipientLines(`${A}\n${B}=25\n# note\n\n${A} 3\n${B},4`)).toEqual([
+      { address: A, amount: '' },
+      { address: B, amount: '25' },
+      { address: A, amount: '3' },
+      { address: B, amount: '4' },
+    ])
+    expect(parseRecipientLines('vitalik.eth')).toEqual([{ address: 'vitalik.eth', amount: '' }])
+  })
+
+  it('validates addresses, duplicates and sizing', () => {
+    expect(validateSend(base)).toMatchObject({ ok: false, error: 'recipients' })
+    expect(validateSend({ ...base, token: '' })).toMatchObject({ ok: false, error: 'token' })
+    expect(
+      validateSend({ ...base, recipients: [{ address: 'nope', amount: '' }], amount: '1' }),
+    ).toMatchObject({ ok: false, error: 'address', index: 0 })
+    expect(
+      validateSend({
+        ...base,
+        recipients: [
+          { address: A, amount: '' },
+          { address: A.toUpperCase().replace('0X', '0x'), amount: '' },
+        ],
+        amount: '1',
+      }),
+    ).toMatchObject({ ok: false, error: 'duplicate', index: 1 })
+    expect(validateSend({ ...base, recipients: [{ address: A, amount: '' }] })).toMatchObject({
+      ok: false,
+      error: 'amount',
+      index: 0,
+    })
+    expect(validateSend({ ...base, recipients: [{ address: A, amount: 'x' }] })).toMatchObject({
+      ok: false,
+      error: 'amount',
+    })
+    expect(validateSend({ ...base, recipients: [{ address: A, amount: '5' }] })).toEqual({
+      ok: true,
+    })
+    expect(
+      validateSend({
+        ...base,
+        recipients: [
+          { address: A, amount: '' },
+          { address: B, amount: '2' },
+        ],
+        usd: '5',
+      }),
+    ).toEqual({ ok: true })
+  })
+
+  it('composes a deterministic prompt with exact addresses and amounts', () => {
+    const prompt = composeSendPrompt(
+      {
+        ...base,
+        recipients: [
+          { address: A, amount: '' },
+          { address: B, amount: '2.5' },
+        ],
+        usd: '5',
+        note: 'payroll',
+      },
+      { wallets: [WALLET] },
+    )
+    const lines = prompt.split('\n')
+    expect(lines[0]).toBe(`${SEND_TAG} Multisend to 2 recipients`)
+    expect(lines[1]).toBe('Chain: Base · Token: USDC')
+    expect(lines[2]).toBe('From: Main · 0x1111…1111')
+    expect(lines[4]).toBe(`- ${A} → $5.00 worth of USDC`)
+    expect(lines[5]).toBe(`- ${B} → 2.5 USDC`)
+    expect(lines[6]).toBe('Note: payroll')
+    expect(prompt).toContain('`agentos trade send` once')
+    expect(prompt).toContain('wait for my approval')
+    const single = composeSendPrompt(
+      { ...base, wallet: null, recipients: [{ address: A, amount: '' }], amount: '10' },
+      { wallets: [] },
+    )
+    expect(single).toContain(`${SEND_TAG} Send`)
+    expect(single).toContain('From: the primary wallet')
+    expect(single).toContain(`- ${A} → 10 USDC`)
   })
 })

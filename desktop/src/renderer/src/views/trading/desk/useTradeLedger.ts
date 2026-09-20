@@ -83,6 +83,8 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
     case 'swap':
     case 'quote':
       return '⇄'
+    case 'send':
+      return '→'
     case 'balances':
     case 'portfolio':
     case 'wallet':
@@ -92,6 +94,13 @@ function glyphFor(call: TradeCall, outcome: TradeOutcome | null): string {
     case 'approve':
     case 'reject':
       return '☐'
+    case 'allowances':
+    case 'revoke':
+      return '⛨'
+    case 'decode':
+      return '⌕'
+    case 'network':
+      return '◉'
     default:
       return '›'
   }

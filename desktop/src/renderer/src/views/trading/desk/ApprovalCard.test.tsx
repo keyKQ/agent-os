@@ -195,3 +195,138 @@ describe('ApprovalsRegion', () => {
     expect(onDismiss).toHaveBeenCalledWith('s1')
   })
 })
+
+describe('ApprovalCard for sends, batches and revokes', () => {
+  const A = '0x2222222222222222222222222222222222222222'
+  const B = '0x3333333333333333333333333333333333333333'
+  const send = (extra: Parameters<typeof order>[0] = {}) =>
+    order({
+      kind: 'send',
+      tokenOut: order().tokenIn,
+      expectedOut: null,
+      minOut: null,
+      priceImpactPct: null,
+      recipient: A,
+      recipientLabel: null,
+      amountIn: '0.1',
+      valueUsd: 250,
+      note: null,
+      ...extra,
+    })
+
+  it('names a single send, prints the recipient in full and marks it irreversible', () => {
+    renderDesk(
+      <ApprovalCard
+        order={send()}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const card = screen.getByTestId('approval-card')
+    expect(card).toHaveAttribute('data-kind', 'send')
+    expect(card).toHaveTextContent('Approval needed · Send')
+    expect(screen.getByTestId('stamp-irreversible')).toBeInTheDocument()
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('0.1 ETH')
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('0x2222…2222')
+    expect(card).toHaveTextContent(A)
+    expect(screen.queryByTestId('card-legs-list')).toBeNull()
+  })
+
+  it('shows a multisend as one card with every leg and one Approve for the batch', () => {
+    const onApprove = vi.fn()
+    const legs = [
+      send({ orderId: 'a', batchId: 'bat_1', amountIn: '0.1', valueUsd: 250 }),
+      send({ orderId: 'b', batchId: 'bat_1', amountIn: '0.15', valueUsd: 375, recipient: B }),
+    ]
+    renderDesk(
+      <ApprovalsRegion
+        pending={legs}
+        settled={[]}
+        wallets={[WALLET]}
+        deciding={null}
+        onApprove={onApprove}
+        onReject={vi.fn()}
+        focusOrderId={null}
+      />,
+    )
+    const cards = screen.getAllByTestId('approval-card')
+    expect(cards).toHaveLength(1)
+    const card = cards[0]!
+    expect(card).toHaveAttribute('data-batch', 'true')
+    expect(card).toHaveTextContent('Approval needed · Multisend')
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('0.25 ETH')
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('2 recipients')
+    const list = screen.getByTestId('card-legs-list')
+    expect(list).toHaveTextContent(A)
+    expect(list).toHaveTextContent(B)
+    expect(card).toHaveTextContent('$625.00')
+    // 625 USD is over the high-risk line: the batch total decides, not a leg.
+    expect(screen.getByTestId('risk-high')).toBeInTheDocument()
+    const approve = screen.getByTestId('card-approve')
+    fireEvent.click(approve)
+    fireEvent.click(approve)
+    expect(onApprove).toHaveBeenCalledTimes(1)
+    expect(onApprove.mock.calls[0]![0]).toMatchObject({ orderId: 'a' })
+  })
+
+  it('settles a batch as one stamp that shows the worst leg and each tx', () => {
+    renderDesk(
+      <ApprovalsRegion
+        pending={[]}
+        settled={[
+          send({
+            orderId: 'a',
+            batchId: 'bat_2',
+            status: 'confirmed',
+            txHash: '0xaaaa1111',
+            explorerUrl: 'https://basescan.org/tx/0xaaaa1111',
+          }),
+          send({
+            orderId: 'b',
+            batchId: 'bat_2',
+            status: 'failed',
+            reason: 'trading.tx_failed: nope',
+            recipient: B,
+          }),
+        ]}
+        wallets={[WALLET]}
+        deciding={null}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOrderId={null}
+      />,
+    )
+    const stamps = screen.getAllByTestId('approval-stamp')
+    expect(stamps).toHaveLength(1)
+    expect(stamps[0]).toHaveTextContent('Multisend')
+    expect(stamps[0]).toHaveTextContent('Failed')
+    expect(screen.queryByTestId('card-approve')).toBeNull()
+  })
+
+  it('names a revoke by token and spender', () => {
+    renderDesk(
+      <ApprovalCard
+        order={send({
+          kind: 'revoke',
+          amountIn: 'unlimited',
+          valueUsd: 0,
+          recipientLabel: 'Permit2',
+        })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const card = screen.getByTestId('approval-card')
+    expect(card).toHaveTextContent('Approval needed · Revoke')
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('ETH')
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('Permit2')
+    expect(card).toHaveTextContent('unlimited')
+    expect(screen.queryByTestId('stamp-irreversible')).toBeNull()
+  })
+})

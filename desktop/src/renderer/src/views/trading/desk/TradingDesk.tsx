@@ -5,7 +5,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { Button } from '~/components/ui/button'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
-import { useTradingUi } from '~/stores/trading-ui'
+import { useTradingUi, type BookTab } from '~/stores/trading-ui'
 import {
   useLimits,
   usePendingApprovals,
@@ -144,7 +144,7 @@ export function useDeskFrame(input: {
   const concession = bookConcession(frameWidth || 9999, bookWidth, bookOpen)
 
   const openBookTab = useCallback(
-    (tab: 'portfolio' | 'orders') => {
+    (tab: BookTab) => {
       setBookTab(tab)
       setBookOpen(true)
     },

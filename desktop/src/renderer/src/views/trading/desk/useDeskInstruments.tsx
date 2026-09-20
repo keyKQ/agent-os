@@ -10,6 +10,7 @@ import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { invalidateTrading, useOrderDecision, useOrders, useTradingStatus } from '~/stores/trading'
+import { useTradingUi, type BookTab } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { Notice } from '~/views/settings/parts'
 import { errorText, isAwaitingApproval, sameAddress } from '../logic'
@@ -31,6 +32,10 @@ import { MissionControls, MissionStrip, missionWord } from './MissionControls'
 import { MissionPicker } from './MissionPicker'
 import type { MissionsApi } from './missions'
 import type { MissionPreset } from './presets'
+import { SendSheet } from './SendSheet'
+import { AllowancesSheet, NetworkSheet } from './ToolSheets'
+import { ToolsPicker } from './ToolsPicker'
+import { DecodeSheet } from '../DecodeSheet'
 
 const ROTATE_MS = 6000
 const NO_JOBS: RawJob[] = []
@@ -59,7 +64,7 @@ export interface DeskProps {
   onFirstSend: () => void
   /** Start over in a fresh desk chat. */
   onStartFresh: () => void
-  onOpenBookTab: (tab: 'portfolio' | 'orders') => void
+  onOpenBookTab: (tab: BookTab) => void
   onStreaming: (busy: boolean) => void
   onSessionPending: (count: number) => void
 }
@@ -173,8 +178,12 @@ export function useDeskInstruments(
       rpc.call('trading.orders.reject', { orderId: order.orderId, reason: reason || 'user' }),
     onSuccess: (_res, { order, reason }) => {
       toast.success(t('trading.approvals.rejected'), { id: `trd-order-${order.orderId}` })
-      // The agent reads the reason where it asked.
-      sendText(rejectionMessage(order, reason))
+      // The agent reads the reason where it asked. Rejecting one leg of a
+      // multisend rejects the batch, and the message says so.
+      const legs = order.batchId
+        ? pendingOrders.filter((o) => o.batchId === order.batchId).length
+        : 1
+      sendText(rejectionMessage(order, reason, legs))
     },
     onError: (err, { order }) =>
       toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
@@ -227,6 +236,10 @@ export function useDeskInstruments(
   // The composer's wallet chip is the one wallet affordance that is always on
   // screen in Trading, so it opens the manager rather than nudging a tab.
   const [walletSheet, setWalletSheet] = useState<WalletSheetMode | null>(null)
+  // The Send sheet posts into this chat, so the chat owns it; the BOOK's
+  // Tools tab and the composer chip both open it through the store.
+  const sheet = useTradingUi((s) => s.sheet)
+  const openSheet = useTradingUi((s) => s.openSheet)
   const missionLine = useMemo(() => {
     const first = missionJobs[0]
     if (!first) return null
@@ -335,11 +348,40 @@ export function useDeskInstruments(
           onSwitchProvider={switchProvider.switchTo}
           onOpenWallets={() => setWalletSheet({ kind: 'manage' })}
           onQuick={(kind) => setContract({ mode: 'form', kind, preset: null })}
+          onSend={() => openSheet('send')}
+          onOpenTools={() => openSheet('pick')}
         />
       </div>
     ),
     modal: walletSheet ? (
       <WalletSheet mode={walletSheet} onClose={() => setWalletSheet(null)} />
+    ) : sheet === 'pick' ? (
+      <ToolsPicker
+        wallet={primaryWallet?.address}
+        onPick={(tool) => openSheet(tool)}
+        onClose={() => openSheet(null)}
+      />
+    ) : sheet === 'allowances' ? (
+      <AllowancesSheet
+        wallet={primaryWallet?.address}
+        onBack={() => openSheet('pick')}
+        onClose={() => openSheet(null)}
+      />
+    ) : sheet === 'inspect' ? (
+      <DecodeSheet chainId={8453} onClose={() => openSheet(null)} />
+    ) : sheet === 'network' ? (
+      <NetworkSheet onBack={() => openSheet('pick')} onClose={() => openSheet(null)} />
+    ) : sheet === 'send' || sheet === 'multisend' ? (
+      <SendSheet
+        wallets={desk.wallets}
+        primary={desk.primary}
+        multi={sheet === 'multisend'}
+        onClose={() => openSheet(null)}
+        onAsk={(prompt) => {
+          submitText(prompt)
+          openSheet(null)
+        }}
+      />
     ) : contract?.mode === 'pick' ? (
       <MissionPicker
         onPick={(preset) => setContract({ mode: 'form', kind: 'custom', preset })}

@@ -7,6 +7,7 @@ import {
   ListChecks,
   TrendingDown,
   TrendingUp,
+  Wrench,
 } from 'lucide-react'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -23,8 +24,10 @@ import {
   useTradingStatus,
   useWalletMutation,
 } from '~/stores/trading'
+import { DecodeSheet } from '../DecodeSheet'
 import { History } from '../History'
 import { Holdings } from '../Holdings'
+import { NetworkPips } from '../NetworkPips'
 import {
   allocationSegments,
   EMPTY_TOTALS,
@@ -42,12 +45,14 @@ import type { Holding, Order, ProviderId, Totals, Wallet } from '../types'
 import { WalletHead } from '../WalletHead'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
 import { BOOK_MAX, BOOK_MIN } from './desk-logic'
+import { ToolsPanel } from './ToolsPanel'
 
 const TABS: readonly { id: BookTab; icon: typeof BookOpen }[] = [
   { id: 'portfolio', icon: BookOpen },
   { id: 'swap', icon: ArrowLeftRight },
   { id: 'orders', icon: ListChecks },
   { id: 'history', icon: HistoryIcon },
+  { id: 'tools', icon: Wrench },
 ]
 
 /**
@@ -85,10 +90,12 @@ export function Book({
 }) {
   const tab = useTradingUi((s) => s.bookTab)
   const setTab = useTradingUi((s) => s.setBookTab)
+  const openSheet = useTradingUi((s) => s.openSheet)
   const [walletSel, setWalletSel] = useState<string | 'all'>('all')
   const [picked, setPicked] = useState<Holding | null>(null)
   const [prefill, setPrefill] = useState<SwapPrefill | null>(null)
   const [sheet, setSheet] = useState<WalletSheetMode | null>(null)
+  const [inspect, setInspect] = useState<{ chainId: number; hash?: string } | null>(null)
   const now = useNow(30_000)
   const decide = useOrderDecision()
   const walletWrite = useWalletMutation()
@@ -211,6 +218,7 @@ export function Book({
       className="trd-book"
       style={{ width }}
       aria-label={t('trading.book.title')}
+      data-narrow={width < 440 || undefined}
       data-testid="book"
     >
       <div
@@ -234,6 +242,7 @@ export function Book({
               aria-selected={tab === id}
               className="trd-book__tab app-no-drag"
               onClick={() => setTab(id)}
+              title={t(`trading.book.tab.${id}`)}
               data-testid={`book-tab-${id}`}
             >
               <Icon className="size-3.5" strokeWidth={1.75} aria-hidden />
@@ -244,6 +253,7 @@ export function Book({
             </button>
           ))}
         </div>
+        <NetworkPips enabled={!collapsed} />
         <Button
           variant="ghost"
           size="icon"
@@ -368,13 +378,22 @@ export function Book({
             onSent={() => setTab('orders')}
           />
         ) : tab === 'orders' ? (
-          <Orders
-            orders={orders.orders}
-            approvalsOnly={false}
-            deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
-            onDecide={onDecide}
-            showWallet={wallets.length > 1}
-            highlight={highlightOrder}
+          <>
+            <Orders
+              orders={orders.orders}
+              approvalsOnly={false}
+              deciding={decide.isPending ? (decide.variables?.orderId ?? null) : null}
+              onDecide={onDecide}
+              showWallet={wallets.length > 1}
+              highlight={highlightOrder}
+              onInspect={(o) => o.txHash && setInspect({ chainId: o.chainId, hash: o.txHash })}
+            />
+          </>
+        ) : tab === 'tools' ? (
+          <ToolsPanel
+            wallet={walletAddress ?? primary ?? undefined}
+            onSend={() => openSheet('send')}
+            onInspect={() => openSheet('inspect')}
           />
         ) : (
           <History
@@ -386,6 +405,13 @@ export function Book({
         )}
       </div>
       {sheet ? <WalletSheet mode={sheet} onClose={() => setSheet(null)} /> : null}
+      {inspect ? (
+        <DecodeSheet
+          chainId={inspect.chainId}
+          hash={inspect.hash}
+          onClose={() => setInspect(null)}
+        />
+      ) : null}
     </aside>
   )
 }

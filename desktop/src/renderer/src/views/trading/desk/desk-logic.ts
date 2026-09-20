@@ -1,6 +1,15 @@
 import type { RawJob, RawRun } from '@/views/cron/logic'
-import { chainName, formatAmount, formatPct, formatUsd, sameAddress, shortAddress } from '../logic'
-import { CHAINS, providerLabel, type Order, type Wallet } from '../types'
+import {
+  chainName,
+  formatAmount,
+  formatPct,
+  formatUsd,
+  fromRaw,
+  sameAddress,
+  shortAddress,
+  toRaw,
+} from '../logic'
+import { CHAINS, providerLabel, type Order, type OrderKind, type Wallet } from '../types'
 import { TRADING_AGENT_ID } from './agent'
 
 /**
@@ -33,10 +42,97 @@ export const HIGH_RISK_IMPACT_PCT = 3
 
 export type Risk = 'high' | 'normal'
 
-export function riskStamp(order: Pick<Order, 'valueUsd' | 'priceImpactPct'>): Risk {
+/** Older engines send no `kind`; every order they know is a swap. */
+export function orderKind(order: Pick<Order, 'kind'>): OrderKind {
+  return order.kind ?? 'swap'
+}
+
+export function riskStamp(order: Pick<Order, 'valueUsd' | 'priceImpactPct' | 'kind'>): Risk {
   if (order.valueUsd !== null && order.valueUsd >= HIGH_RISK_USD) return 'high'
   if (order.priceImpactPct !== null && order.priceImpactPct >= HIGH_RISK_IMPACT_PCT) return 'high'
+  // A send nobody could price is not "small": it is unknown, and gone once it mines.
+  if (orderKind(order) === 'send' && order.valueUsd === null) return 'high'
   return 'normal'
+}
+
+/* ── Asks: one card per decision ─────────────────────────────────────────── */
+
+/**
+ * What one card decides: a swap, a send, a revoke — or every leg of a
+ * multisend, which the engine approves and rejects as one. `lead` is the
+ * first leg; its status, expiry and session stand for the batch.
+ */
+export interface Ask {
+  key: string
+  kind: OrderKind
+  lead: Order
+  orders: Order[]
+  batch: boolean
+  /** Sum of the legs' USD values; null when any leg is unpriced. */
+  totalUsd: number | null
+  /** Sum of the legs' amounts in the token, as a decimal string. */
+  totalAmount: string
+}
+
+function sumUsd(orders: readonly Order[]): number | null {
+  let total = 0
+  for (const o of orders) {
+    if (o.valueUsd === null) return null
+    total += o.valueUsd
+  }
+  return total
+}
+
+/** Decimal-string sum of the legs' `amountIn`, in the token's own decimals. */
+export function sumAmounts(orders: readonly Order[]): string {
+  const decimals = orders[0]?.tokenIn.decimals ?? 18
+  let total = 0n
+  // A malformed amount parses to 0n and adds nothing.
+  for (const o of orders) total += toRaw(o.amountIn, decimals)
+  return fromRaw(total, decimals)
+}
+
+/** Group orders into asks, keeping first-seen order; legs of a batch fold into one. */
+export function groupAsks(orders: readonly Order[]): Ask[] {
+  const asks: Ask[] = []
+  const byKey = new Map<string, Ask>()
+  for (const order of orders) {
+    const key = order.batchId || order.orderId
+    const existing = byKey.get(key)
+    if (existing) {
+      existing.orders.push(order)
+      continue
+    }
+    const ask: Ask = {
+      key,
+      kind: orderKind(order),
+      lead: order,
+      orders: [order],
+      batch: Boolean(order.batchId),
+      totalUsd: order.valueUsd,
+      totalAmount: order.amountIn,
+    }
+    byKey.set(key, ask)
+    asks.push(ask)
+  }
+  for (const ask of asks) {
+    if (ask.orders.length > 1) {
+      ask.totalUsd = sumUsd(ask.orders)
+      ask.totalAmount = sumAmounts(ask.orders)
+    }
+  }
+  return asks
+}
+
+export function askRisk(ask: Pick<Ask, 'kind' | 'lead' | 'totalUsd'>): Risk {
+  if (ask.totalUsd !== null && ask.totalUsd >= HIGH_RISK_USD) return 'high'
+  return riskStamp({ ...ask.lead, valueUsd: ask.totalUsd })
+}
+
+export function recipientDisplay(order: Pick<Order, 'recipient' | 'recipientLabel'>): string {
+  const address = order.recipient ?? ''
+  if (!address) return ''
+  return order.recipientLabel ? `${order.recipientLabel} · ${shortAddress(address)}` : address
 }
 
 export interface Fact {
@@ -83,6 +179,31 @@ export function approvalFacts(
   }
   push('wallet', walletDisplay(order.wallet, wallets))
   push('chain', chainName(order.chainId))
+  const kind = orderKind(order)
+  if (kind === 'send') {
+    push('to', recipientDisplay(order))
+    push('send', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
+    if (order.valueUsd !== null) push('value', formatUsd(order.valueUsd))
+    if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
+    push('order', order.orderId)
+    if (order.expiresAt) push('expires', formatExpiryWhole(order.expiresAt, locale))
+    return facts
+  }
+  if (kind === 'revoke') {
+    push('token', order.tokenIn.symbol || shortAddress(order.tokenIn.address))
+    push('spender', recipientDisplay(order))
+    push(
+      'allowance',
+      order.amountIn === 'unlimited'
+        ? 'unlimited'
+        : `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`,
+      order.amountIn === 'unlimited' ? 'danger' : undefined,
+    )
+    if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
+    push('order', order.orderId)
+    if (order.expiresAt) push('expires', formatExpiryWhole(order.expiresAt, locale))
+    return facts
+  }
   push('pay', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
   if (order.expectedOut)
     push('receive', `${formatAmount(order.expectedOut)} ${order.tokenOut.symbol}`)
@@ -115,6 +236,34 @@ export function approvalFacts(
   return facts
 }
 
+/**
+ * Bound facts for a multisend card: the batch as a whole, not any one leg.
+ * The recipients themselves are listed by the card, one line each.
+ */
+export function batchFacts(
+  ask: Ask,
+  wallets: readonly Wallet[],
+  labels: Record<string, string>,
+  locale?: string,
+): Fact[] {
+  const facts: Fact[] = []
+  const push = (key: string, value: string | null | undefined, tone?: Fact['tone']) => {
+    if (value === null || value === undefined || value === '') return
+    facts.push({ key, label: labels[key] ?? key, value, ...(tone ? { tone } : {}) })
+  }
+  const lead = ask.lead
+  push('wallet', walletDisplay(lead.wallet, wallets))
+  push('chain', chainName(lead.chainId))
+  push('recipients', String(ask.orders.length))
+  push('total', `${formatAmount(ask.totalAmount)} ${lead.tokenIn.symbol}`)
+  if (ask.totalUsd !== null) push('value', formatUsd(ask.totalUsd))
+  const gas = ask.orders.reduce((s, o) => s + (o.gasUsd ?? 0), 0)
+  if (gas > 0) push('gas', formatUsd(gas))
+  push('batch', ask.key)
+  if (lead.expiresAt) push('expires', formatExpiryWhole(lead.expiresAt, locale))
+  return facts
+}
+
 export function ordersForSession<T extends Pick<Order, 'sessionKey'>>(
   orders: readonly T[],
   sessionKey: string,
@@ -123,11 +272,114 @@ export function ordersForSession<T extends Pick<Order, 'sessionKey'>>(
 }
 
 /** The chat message a rejection leaves for the agent, so it can re-plan. */
-export function rejectionMessage(order: Pick<Order, 'orderId'>, reason: string): string {
+export function rejectionMessage(
+  order: Pick<Order, 'orderId' | 'batchId' | 'kind'>,
+  reason: string,
+  legs = 1,
+): string {
   const clean = reason.trim()
+  const what =
+    order.batchId && legs > 1
+      ? `batch ${order.batchId} (${legs} sends)`
+      : `${orderKind(order) === 'swap' ? 'order' : orderKind(order)} ${order.orderId}`
   return clean
-    ? `Rejected order ${order.orderId}: ${clean}`
-    : `Rejected order ${order.orderId}. Do not retry it without asking first.`
+    ? `Rejected ${what}: ${clean}`
+    : `Rejected ${what}. Do not retry it without asking first.`
+}
+
+/* ── Send prompt ─────────────────────────────────────────────────────────── */
+
+export interface SendRecipientForm {
+  address: string
+  /** Own amount; empty means "the shared amount". */
+  amount: string
+}
+
+export interface SendForm {
+  chainId: number
+  wallet: string | null
+  /** Symbol or address, as typed or picked. */
+  token: string
+  recipients: SendRecipientForm[]
+  /** Shared sizing for recipients without their own amount. */
+  amount: string
+  usd: string
+  note: string
+}
+
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
+const AMOUNT_RE = /^\d+(\.\d+)?$/
+
+export type SendError = 'token' | 'recipients' | 'address' | 'amount' | 'duplicate'
+
+export function validateSend(form: SendForm): { ok: boolean; error?: SendError; index?: number } {
+  if (!form.token.trim()) return { ok: false, error: 'token' }
+  const rows = form.recipients.filter((r) => r.address.trim() || r.amount.trim())
+  if (rows.length === 0) return { ok: false, error: 'recipients' }
+  const shared = form.amount.trim() || form.usd.trim()
+  const seen = new Set<string>()
+  for (const [index, row] of rows.entries()) {
+    const address = row.address.trim()
+    if (!ADDRESS_RE.test(address)) return { ok: false, error: 'address', index }
+    if (seen.has(address.toLowerCase())) return { ok: false, error: 'duplicate', index }
+    seen.add(address.toLowerCase())
+    const own = row.amount.trim()
+    if (own && !(AMOUNT_RE.test(own) && Number(own) > 0))
+      return { ok: false, error: 'amount', index }
+    if (!own && !shared) return { ok: false, error: 'amount', index }
+  }
+  if (form.amount.trim() && !(AMOUNT_RE.test(form.amount.trim()) && Number(form.amount) > 0))
+    return { ok: false, error: 'amount' }
+  if (form.usd.trim() && !(Number(form.usd) > 0)) return { ok: false, error: 'amount' }
+  return { ok: true }
+}
+
+/** Lines pasted into the recipients box: "ADDR", "ADDR=AMOUNT", "ADDR,AMOUNT" or "ADDR AMOUNT". */
+export function parseRecipientLines(text: string): SendRecipientForm[] {
+  const out: SendRecipientForm[] = []
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.split('#', 1)[0]!.trim()
+    if (!line) continue
+    const m = /^(0x[0-9a-fA-F]{40})\s*(?:[=,\s]\s*(\S+))?$/.exec(line)
+    if (m) out.push({ address: m[1]!, amount: m[2] ?? '' })
+    else out.push({ address: line, amount: '' })
+  }
+  return out
+}
+
+export const SEND_TAG = '[Trading desk send]'
+
+/**
+ * The prompt a Send sheet posts into the chat when the desk is asked to do
+ * it: exact addresses, exact amounts, the chain, and the rule that the
+ * engine will park it for the user. Deterministic, so the preview is what
+ * the agent reads.
+ */
+export function composeSendPrompt(form: SendForm, ctx: { wallets: readonly Wallet[] }): string {
+  const rows = form.recipients.filter((r) => r.address.trim())
+  const shared = form.amount.trim()
+    ? `${form.amount.trim()} ${form.token.trim()}`
+    : form.usd.trim()
+      ? `${formatUsd(Number(form.usd))} worth of ${form.token.trim()}`
+      : ''
+  const lines: string[] = []
+  lines.push(`${SEND_TAG} ${rows.length === 1 ? 'Send' : `Multisend to ${rows.length} recipients`}`)
+  lines.push(`Chain: ${chainName(form.chainId)} · Token: ${form.token.trim()}`)
+  lines.push(
+    `From: ${form.wallet ? walletDisplay(form.wallet, ctx.wallets) : 'the primary wallet'}`,
+  )
+  lines.push('Recipients:')
+  for (const row of rows) {
+    const own = row.amount.trim()
+    lines.push(`- ${row.address.trim()} → ${own ? `${own} ${form.token.trim()}` : shared}`)
+  }
+  if (form.note.trim()) lines.push(`Note: ${form.note.trim()}`)
+  lines.push(
+    'Rules: use `agentos trade send` once, with every recipient in that one command (it is one batch). ' +
+      'Use exactly these addresses and amounts; do not resolve names or change anything. ' +
+      'It will wait for my approval here; wait for it with `--wait --wait-seconds 600` and report each leg with its tx link.',
+  )
+  return lines.join('\n')
 }
 
 /* ── Missions ────────────────────────────────────────────────────────────── */

@@ -5,7 +5,7 @@ import pytest
 
 from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.evm import EvmClient
-from agentos.trading.ledger import Ledger, local_day
+from agentos.trading.ledger import SCHEMA_VERSION, Ledger, local_day
 from agentos.trading.prices import PriceService, TokenMeta, native_token
 from agentos.trading.sync import WalletSyncer, summarize_transfers
 from agentos.trading.vault import WalletRecord
@@ -718,8 +718,95 @@ class TestLedgerMigration:
         reopened = Ledger(path)
         row = reopened.get_token(8453, USDC)
         assert row and row["hidden"] == 0 and row["touched"] == 0
-        assert reopened._conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        version = reopened._conn.execute("SELECT version FROM schema_version").fetchone()[0]
+        assert version == SCHEMA_VERSION
         reopened.close()
+
+    def test_version_three_gains_order_kinds(self, tmp_path) -> None:
+        """A pre-send ledger's swap orders read back as kind='swap' with no recipient."""
+        path = tmp_path / "trading.sqlite"
+        first = Ledger(path)
+        first.insert_order(
+            {
+                "order_id": "o1",
+                "created_at": 1,
+                "updated_at": 1,
+                "chain_id": 8453,
+                "wallet": WALLET,
+                "token_in": USDC,
+                "token_out": WETH,
+                "amount_raw": "1",
+                "amount_human": "0.000001",
+                "status": "confirmed",
+                "initiator": "agent",
+            }
+        )
+        first._conn.execute("DROP INDEX idx_orders_batch")
+        for column in ("kind", "recipient", "batch_id"):
+            first._conn.execute(f"ALTER TABLE orders DROP COLUMN {column}")  # noqa: S608
+        first._conn.execute("DROP TABLE allowances")
+        first._conn.execute("DROP TABLE allowance_scan")
+        first._conn.execute("UPDATE schema_version SET version = 3")
+        first.close()
+        reopened = Ledger(path)
+        row = reopened.get_order("o1")
+        assert row and row["kind"] == "swap" and row["recipient"] is None
+        assert row["batch_id"] is None
+        reopened.upsert_allowance(8453, WALLET, USDC, OTHER, block=5, tx_hash="0xaa")
+        assert [a["spender"] for a in reopened.allowances(8453, WALLET)] == [OTHER]
+        reopened.close()
+
+    def test_batches_and_allowance_cache(self, ledger: Ledger) -> None:
+        base = {
+            "chain_id": 8453,
+            "wallet": WALLET,
+            "token_in": USDC,
+            "token_out": USDC,
+            "amount_raw": "1",
+            "amount_human": "0.000001",
+            "initiator": "agent",
+            "kind": "send",
+            "status": "awaiting_approval",
+        }
+        for n in (1, 2, 3):
+            ledger.insert_order(
+                {
+                    **base,
+                    "order_id": f"s{n}",
+                    "created_at": n,
+                    "updated_at": n,
+                    "recipient": OTHER,
+                    "batch_id": "bat_1",
+                }
+            )
+        ledger.insert_order(
+            {**base, "order_id": "solo", "created_at": 9, "updated_at": 9, "recipient": OTHER}
+        )
+        # Three legs of one batch plus one lone send are two decisions, not four.
+        assert ledger.count_orders("awaiting_approval") == 2
+        assert [o["order_id"] for o in ledger.batch_orders("bat_1")] == ["s1", "s2", "s3"]
+        assert [o["order_id"] for o in ledger.list_orders(kind="send")] == [
+            "solo",
+            "s3",
+            "s2",
+            "s1",
+        ]
+        assert ledger.list_orders(kind="swap") == []
+
+        ledger.upsert_allowance(8453, WALLET, USDC, OTHER, block=10, tx_hash="0xaa")
+        ledger.upsert_allowance(8453, WALLET, USDC, OTHER, block=12, tx_hash="0xbb")
+        # An older log never rolls the cache back.
+        ledger.upsert_allowance(8453, WALLET, USDC, OTHER, block=8, tx_hash="0xcc")
+        rows = ledger.allowances(8453, WALLET)
+        assert len(rows) == 1
+        assert rows[0]["first_block"] == 10 and rows[0]["last_block"] == 12
+        assert rows[0]["last_tx_hash"] == "0xbb"
+        assert ledger.allowance_scan(8453, WALLET) is None
+        ledger.set_allowance_scan(8453, WALLET, last_block=12)
+        scan = ledger.allowance_scan(8453, WALLET)
+        assert scan and scan["last_block"] == 12
+        ledger.delete_allowance(8453, WALLET, USDC, OTHER)
+        assert ledger.allowances(8453, WALLET) == []
 
     def test_hidden_helpers(self, ledger: Ledger) -> None:
         ledger.upsert_token(8453, USDC, symbol="USDC", name="USD Coin", decimals=6)

@@ -32,6 +32,13 @@ class ChainSpec:
     block_time_s: float = 2.0
     # Largest eth_getLogs span the public RPC tolerates per call.
     max_log_span: int = 2000
+    # Span for a *sparse* topic filter (one wallet's Approval logs), where
+    # the answer is a handful of rows however wide the window. Measured on
+    # dRPC 2026-09-20: Base takes 100k blocks in ~7 s and refuses 1M with an
+    # HTTP 500; Robinhood Chain (0.1 s blocks) caps at "200000 addresses ×
+    # blocks", which with no address filter is 40k. The scanner halves on a
+    # refusal, so these are ceilings, not promises.
+    approval_log_span: int = 20_000
     aliases: tuple[str, ...] = field(default_factory=tuple)
     # A Blockscout instance indexing this chain, used only to *discover* which
     # ERC-20s a wallet holds; every balance is then read from the RPC.
@@ -71,6 +78,7 @@ BASE = ChainSpec(
     coingecko_platform="base",
     block_time_s=2.0,
     max_log_span=2000,
+    approval_log_span=100_000,
     aliases=("base-mainnet", "8453"),
     blockscout_url="https://base.blockscout.com",
 )
@@ -92,6 +100,7 @@ ROBINHOOD = ChainSpec(
     coingecko_platform="robinhood",
     block_time_s=0.1,
     max_log_span=2000,
+    approval_log_span=40_000,
     aliases=("robinhood-chain", "hood", "4663"),
     # robinhoodchain.blockscout.com answers every non-browser request with a
     # Cloudflare challenge (403, checked 2026-09-15, any User-Agent), so there

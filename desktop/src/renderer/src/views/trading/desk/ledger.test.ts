@@ -196,3 +196,142 @@ describe('ledgerRuns', () => {
     expect(ledgerRuns([true, false, true])).toEqual([])
   })
 })
+
+describe('sends, allowances, decode and network rows', () => {
+  const A = '0x2222222222222222222222222222222222222222'
+  const B = '0x3333333333333333333333333333333333333333'
+
+  it('recognises the new commands and summarises their arguments', () => {
+    expect(
+      parseTradeCommand(
+        `agentos trade send --chain base --token USDC --to ${A} --amount 25 --json`,
+      ),
+    ).toMatchObject({ kind: 'send', title: 'Send', detail: '25 USDC → 0x2222…2222 · Base' })
+    expect(
+      parseTradeCommand(
+        `agentos trade send --chain base --token ETH --to ${A}=0.1 --to ${B}=0.2 --json`,
+      ),
+    ).toMatchObject({ kind: 'send', detail: 'ETH → 2 recipients · Base' })
+    expect(
+      parseTradeCommand(
+        'agentos trade send --chain robinhood --token USDG --file list.txt --usd 5',
+      ),
+    ).toMatchObject({ kind: 'send', detail: '$5 of USDG → a list · Robinhood' })
+    expect(parseTradeCommand('agentos trade allowances --json')).toMatchObject({
+      kind: 'allowances',
+      title: 'Allowances',
+    })
+    expect(
+      parseTradeCommand(`agentos trade revoke --chain base --token ${A} --spender ${B} --json`),
+    ).toMatchObject({ kind: 'revoke', detail: '0x2222…2222 for 0x3333…3333 · Base' })
+    expect(
+      parseTradeCommand(`agentos trade decode --chain base 0x${'ab'.repeat(32)} --json`),
+    ).toMatchObject({ kind: 'decode', detail: '0xabababab… · Base' })
+    expect(parseTradeCommand('agentos trade decode --chain base --data 0xa9 --json')).toMatchObject(
+      { kind: 'decode', detail: 'calldata · Base' },
+    )
+    expect(parseTradeCommand('agentos trade network --json')).toMatchObject({ kind: 'network' })
+  })
+
+  it('reads a send order and a multisend batch', () => {
+    const send = parseTradeCommand(`agentos trade send --chain base --token USDC --to ${A}`)!
+    const single = parseTradeResult(
+      send,
+      JSON.stringify({
+        orders: [
+          {
+            orderId: 's1',
+            kind: 'send',
+            status: 'awaiting_approval',
+            amountIn: '25',
+            tokenIn: { symbol: 'USDC' },
+            tokenOut: { symbol: 'USDC' },
+            recipient: A,
+          },
+        ],
+        batchId: null,
+      }),
+    )
+    expect(single.summary).toBe('25 USDC → 0x2222…2222 · awaiting approval')
+    expect(single.awaiting).toBe(true)
+    expect(single.orderId).toBe('s1')
+    const batch = parseTradeResult(
+      send,
+      JSON.stringify({
+        orders: [
+          { orderId: 'a', kind: 'send', status: 'confirmed', txHash: '0x1', amountIn: '1' },
+          { orderId: 'b', kind: 'send', status: 'awaiting_approval', amountIn: '2' },
+          { orderId: 'c', kind: 'send', status: 'awaiting_approval', amountIn: '3' },
+        ],
+        batchId: 'bat_1',
+      }),
+    )
+    expect(batch.summary).toBe('3 recipients · 1 confirmed, 2 awaiting approval')
+    expect(batch.awaiting).toBe(true)
+    expect(batch.confirmed).toBe(false)
+    // The stamp jumps to the first leg still waiting.
+    expect(batch.orderId).toBe('b')
+  })
+
+  it('reads a revoke, an allowance review, a decode and a network probe', () => {
+    const revoke = parseTradeCommand('agentos trade revoke --chain base --token x --spender y')!
+    expect(
+      parseTradeResult(
+        revoke,
+        JSON.stringify({
+          order: {
+            orderId: 'r1',
+            kind: 'revoke',
+            status: 'awaiting_approval',
+            amountIn: 'unlimited',
+            tokenIn: { symbol: 'USDC' },
+            recipient: A,
+            recipientLabel: 'Permit2',
+          },
+        }),
+      ).summary,
+    ).toBe('revoke USDC for Permit2 · awaiting approval')
+    const allowances = parseTradeCommand('agentos trade allowances --json')!
+    expect(
+      parseTradeResult(
+        allowances,
+        JSON.stringify({
+          allowances: [
+            { unlimited: true, exposureUsd: 1000 },
+            { unlimited: false, exposureUsd: 12.5 },
+          ],
+          unlimitedCount: 1,
+        }),
+      ).summary,
+    ).toBe('2 live · 1 unlimited · $1,012.50 at stake')
+    const decode = parseTradeCommand('agentos trade decode --chain base 0xabc')!
+    const known = parseTradeResult(
+      decode,
+      JSON.stringify({
+        call: { function: 'transfer', selector: '0xa9059cbb', known: true },
+        tx: { status: 'success', hash: '0x' + 'ab'.repeat(32) },
+        transfers: [{}],
+      }),
+    )
+    expect(known.summary).toBe('transfer · success · 1 transfer')
+    expect(known.txHash).toBe('0x' + 'ab'.repeat(32))
+    expect(
+      parseTradeResult(
+        decode,
+        JSON.stringify({ call: { function: null, selector: '0xdeadbeef', known: false } }),
+      ).summary,
+    ).toBe('0xdeadbeef (unknown)')
+    const network = parseTradeCommand('agentos trade network --json')!
+    const probe = parseTradeResult(
+      network,
+      JSON.stringify({
+        chains: [
+          { name: 'Base', healthy: true, blockAgeS: 2 },
+          { name: 'Robinhood Chain', healthy: false, blockAgeS: 90 },
+        ],
+      }),
+    )
+    expect(probe.summary).toBe('Base ✓ 2s · Robinhood Chain ✗ 90s')
+    expect(probe.error).toBe('1 chain unhealthy')
+  })
+})

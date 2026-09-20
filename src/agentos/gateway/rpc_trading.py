@@ -519,6 +519,169 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     return {"orders": orders}
 
 
+def _recipients(p: dict[str, Any]) -> list[dict[str, Any]]:
+    """Recipients from either shape: ``recipients: [{to, amount|amountUsd}]``
+    or the one-address ``to`` + ``amount``/``amountUsd`` form."""
+    listed = p.get("recipients")
+    if listed is not None:
+        if not isinstance(listed, list) or not listed:
+            raise ValueError("params.recipients must be a non-empty list")
+        out: list[dict[str, Any]] = []
+        for item in listed:
+            if not isinstance(item, dict):
+                raise ValueError("params.recipients entries must be objects")
+            entry: dict[str, Any] = {"to": _str(item, "to", required=True)}
+            amount = item.get("amount")
+            if amount is not None and amount != "":
+                if not isinstance(amount, str | int | float) or isinstance(amount, bool):
+                    raise ValueError("recipient amount must be a decimal string")
+                entry["amount"] = str(amount)
+            usd = _number(item, "amountUsd")
+            if usd is not None:
+                entry["amountUsd"] = usd
+            out.append(entry)
+        return out
+    to = _str(p, "to", required=True) or ""
+    entry = {"to": to}
+    amount = p.get("amount")
+    if amount is not None and amount != "":
+        if not isinstance(amount, str | int | float) or isinstance(amount, bool):
+            raise ValueError("params.amount must be a decimal string")
+        entry["amount"] = str(amount)
+    usd = _number(p, "amountUsd")
+    if usd is not None:
+        entry["amountUsd"] = usd
+    return [entry]
+
+
+@_d.method("trading.send")
+async def _trading_send(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Send one token to one or many addresses. An agent's send always parks for approval."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    initiator, session_key = _initiator(ctx, p)
+    recipients = _recipients(p)
+    service = _service(ctx)
+    try:
+        orders = await service.send(
+            chain=chain,
+            wallet=_str(p, "wallet"),
+            token=_str(p, "token", required=True) or "",
+            recipients=recipients,
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_str(p, "note"),
+            wait=bool(p.get("wait")),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"orders": orders, "batchId": orders[0].get("batchId") if orders else None}
+
+
+@_d.method("trading.orders.batch")
+async def _trading_orders_batch(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    p = _params(params)
+    batch_id = _str(p, "batchId", required=True) or ""
+    service = _service(ctx)
+    try:
+        return {"orders": service.batch(batch_id), "batchId": batch_id}
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.allowances.list")
+async def _trading_allowances_list(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """What a wallet has approved others to spend, per chain (all chains when none given)."""
+    p = _params(params)
+    chain = _chain(p, required=False)
+    service = _service(ctx)
+    service.ensure_unlocked()
+    full = bool(p.get("full"))
+    wait = bool(p.get("wait"))
+    wallet = _str(p, "wallet")
+    try:
+        if chain is not None:
+            return await service.allowances(chain, wallet, full=full, wait=wait)
+        results = [
+            await service.allowances(c, wallet, full=full, wait=wait) for c in service.chains()
+        ]
+    except Exception as exc:
+        raise _raise(exc) from exc
+    rows = [a for r in results for a in r["allowances"]]
+    return {
+        "wallet": results[0]["wallet"] if results else wallet,
+        "chainId": None,
+        "allowances": rows,
+        "count": len(rows),
+        "unlimitedCount": sum(int(r["unlimitedCount"]) for r in results),
+        "scanning": any(bool(r["scanning"]) for r in results),
+        "chains": [
+            {
+                "chainId": r["chainId"],
+                "count": r["count"],
+                "scanning": r["scanning"],
+                "scannedTo": r["scannedTo"],
+                "scanFrom": r["scanFrom"],
+                "head": r["head"],
+            }
+            for r in results
+        ],
+    }
+
+
+@_d.method("trading.allowances.revoke")
+async def _trading_allowances_revoke(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Set an allowance to zero. From an agent this parks an order; from the user it runs."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    initiator, session_key = _initiator(ctx, p)
+    service = _service(ctx)
+    try:
+        order = await service.revoke(
+            chain=chain,
+            wallet=_str(p, "wallet"),
+            token=_str(p, "token", required=True) or "",
+            spender=_str(p, "spender", required=True) or "",
+            initiator=initiator,  # type: ignore[arg-type]
+            session_key=session_key,
+            note=_str(p, "note"),
+            wait=bool(p.get("wait")),
+        )
+    except Exception as exc:
+        raise _raise(exc) from exc
+    return {"order": order}
+
+
+@_d.method("trading.decode")
+async def _trading_decode(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Explain a transaction hash, or raw calldata (with an optional ``to``)."""
+    p = _params(params)
+    chain = _chain(p)
+    assert chain is not None
+    tx_hash = _str(p, "txHash")
+    data = _str(p, "data")
+    if not tx_hash and data is None:
+        raise ValueError("params.txHash or params.data is required")
+    service = _service(ctx)
+    try:
+        return await service.decode(chain, tx_hash=tx_hash, data=data, to=_str(p, "to"))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
+@_d.method("trading.network")
+async def _trading_network(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Head block, block age, gas and RPC latency per chain (cached for a few seconds)."""
+    p = _params(params)
+    service = _service(ctx)
+    try:
+        return await service.network(fresh=bool(p.get("fresh")))
+    except Exception as exc:
+        raise _raise(exc) from exc
+
+
 @_d.method("trading.unwrap")
 async def _trading_unwrap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     p = _params(params)
@@ -537,7 +700,10 @@ async def _trading_orders_list(params: dict | None, ctx: RpcContext) -> dict[str
     service = _service(ctx)
     try:
         return service.list_orders(
-            status=_str(p, "status"), wallet=_str(p, "wallet"), limit=_int(p, "limit", 50)
+            status=_str(p, "status"),
+            wallet=_str(p, "wallet"),
+            limit=_int(p, "limit", 50),
+            kind=_str(p, "kind"),
         )
     except Exception as exc:
         raise _raise(exc) from exc

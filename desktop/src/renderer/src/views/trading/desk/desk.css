@@ -2032,3 +2032,614 @@ body[data-dragging] .trd-book__handle {
     display: none;
   }
 }
+
+/* ── Sends, revokes, batches on the card ─────────────────────────────────── */
+
+.trd-card[data-kind='send'] .trd-card__title,
+.trd-card[data-kind='revoke'] .trd-card__title {
+  color: var(--warn);
+}
+.trd-card[data-kind='send'][data-risk='high'] .trd-card__title {
+  color: var(--danger);
+}
+.trd-stamp[data-tone='warn'] {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+/* Every leg of a multisend, address in full: the one thing to read. */
+.trd-card__legs-list {
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.trd-card__legs-list > summary {
+  cursor: default;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-card__legs-list ol {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: leg;
+}
+.trd-card__legs-list li {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  border-bottom: 1px solid var(--hairline);
+  counter-increment: leg;
+}
+.trd-card__legs-list li::before {
+  content: counter(leg);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.trd-card__legs-list li[data-status='failed'] {
+  color: var(--danger);
+}
+.trd-card__addr {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--foreground);
+}
+.trd-card__legfail {
+  font-size: 11px;
+  color: var(--danger);
+}
+.trd-asks__stamp .trd-card__legs-list {
+  display: none;
+}
+
+/* ── Send sheet / decode sheet ───────────────────────────────────────────── */
+
+.trd-send,
+.trd-decode {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.trd-send__row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.trd-send__field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.trd-send__field--wide {
+  grid-column: 1 / -1;
+}
+.trd-send__field > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-foreground);
+}
+.trd-send__field > small {
+  color: var(--dim);
+}
+.trd-send__field[data-error] .mac-input {
+  box-shadow: 0 0 0 1px var(--danger);
+}
+.trd-send__count {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--foreground);
+}
+.trd-send__list {
+  min-height: 72px;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.trd-send__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.trd-send__warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+}
+.trd-send__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-send__toggle:hover {
+  color: var(--foreground);
+}
+.trd-send__prompt {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-compact);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-modal__foot .mac-button[data-armed] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.trd-decode__empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+.trd-decode__result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.trd-decode__desc {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+.trd-decode__legs,
+.trd-decode__move {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 12.5px;
+}
+.trd-decode__moves h4 {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-decode__moves ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-decode__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+[data-tone='danger'] {
+  color: var(--danger);
+}
+
+/* ── Allowances ──────────────────────────────────────────────────────────── */
+
+.trd-allow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.trd-allow__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.trd-allow__lead {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-allow__warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+}
+.trd-allow__loading {
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+.trd-allow__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-allow__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.trd-allow__row[data-unlimited] {
+  box-shadow: inset 3px 0 0 var(--danger);
+  padding-left: 8px;
+}
+.trd-allow__spender {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  font-size: 12px;
+}
+.trd-allow__spender b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trd-allow__addr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-allow__addr:hover {
+  color: var(--foreground);
+}
+.trd-allow__amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 12px;
+  text-align: right;
+}
+.trd-allow__amount small {
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+}
+.trd-allow .mac-button[data-armed] {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+@container (max-width: 380px) {
+  .trd-allow__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .trd-allow__spender {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ── Network pips (BOOK header) ──────────────────────────────────────────── */
+
+.trd-pips {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+.trd-pip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.trd-pip:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-pip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.trd-pip[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #34c759) 25%, transparent);
+}
+.trd-pip[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-pip[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+
+/* A row of small tools above a BOOK tab's list. */
+.trd-book__tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 10px 0;
+}
+.trd-book__tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+}
+.trd-book__tool:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-allow__scanning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+/* Five tabs and the network pips do not fit a narrow BOOK: the tabs drop to
+   their icons (the title carries the word) and the pips to their dots. */
+.trd-book[data-narrow] .trd-book__tab > span:not(.trd-book__count) {
+  display: none;
+}
+.trd-book[data-narrow] .trd-book__tab {
+  padding: 0 7px;
+}
+/* A pip that is not green says why in words, not just in colour. */
+.trd-pip[data-state='stale'],
+.trd-pip[data-state='down'] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.trd-pip[data-state='down'] {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+/* ── Tools tab ───────────────────────────────────────────────────────────── */
+
+.trd-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 14px;
+}
+.trd-tools__lead {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+.trd-tools__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  margin-bottom: 2px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.trd-tools__back:hover {
+  color: var(--foreground);
+}
+/* One card per tool: the same plate as the hero's stat tiles, with a
+   left-aligned icon, a name, and the one line that says whether it needs you. */
+.trd-tool {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 56px;
+  padding: 10px 12px;
+  border-radius: var(--radius-surface);
+  text-align: left;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition:
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+button.trd-tool:hover {
+  background: color-mix(in srgb, var(--primary) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, var(--border));
+}
+button.trd-tool:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.trd-tool[data-tone='warn'] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border)),
+    inset 3px 0 0 var(--warn);
+}
+.trd-tool__icon {
+  width: 18px;
+  height: 18px;
+  color: var(--muted-foreground);
+}
+.trd-tool[data-tone='warn'] .trd-tool__icon {
+  color: var(--warn);
+}
+.trd-tool__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+.trd-tool__text b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.trd-tool__text span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.trd-tool[data-tone='warn'] .trd-tool__text span {
+  color: var(--warn);
+}
+.trd-tool__go {
+  width: 14px;
+  height: 14px;
+  color: var(--dim);
+}
+.trd-tool--static {
+  cursor: default;
+}
+.trd-tool__refresh {
+  width: 14px;
+  height: 14px;
+}
+.trd-tool__chains {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  padding: 6px 0 0;
+  border-top: 1px solid var(--hairline);
+  list-style: none;
+}
+.trd-tool__chains li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.trd-tool__chains li b {
+  min-width: 2.2em;
+  color: var(--foreground);
+}
+.trd-tool__chains li[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+}
+.trd-tool__chains li[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-tool__chains li[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+.trd-tool__chains li span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Tools catalogue (same cut as the mission catalogue) ─────────────────── */
+
+.trd-picker__card[data-tone='warn'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+.trd-picker__live {
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+.trd-picker__live[data-tone='ok'] {
+  color: var(--ok, #34c759);
+}
+.trd-picker__live[data-tone='warn'] {
+  color: var(--warn);
+}
+
+/* Network sheet: one row per chain, the four numbers under the name. */
+.trd-netlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.trd-netlist__row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.trd-netlist__row b {
+  font-size: 13px;
+}
+.trd-netlist__state {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-netlist__row[data-state='ok'] .trd-netlist__state {
+  color: var(--ok, #34c759);
+}
+.trd-netlist__row[data-state='stale'] .trd-netlist__state {
+  color: var(--warn);
+}
+.trd-netlist__row[data-state='down'] .trd-netlist__state {
+  color: var(--danger);
+}
+.trd-netlist__row[data-state='ok'] .trd-pip__dot {
+  background: var(--ok, #34c759);
+}
+.trd-netlist__row[data-state='stale'] .trd-pip__dot {
+  background: var(--warn);
+}
+.trd-netlist__row[data-state='down'] .trd-pip__dot {
+  background: var(--danger);
+}
+.trd-netlist__facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+}
+.trd-netlist__facts dt {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+.trd-netlist__facts dd {
+  margin: 0;
+  color: var(--foreground);
+}
+.trd-netlist__error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+.trd-netlist__rpc {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dim);
+}

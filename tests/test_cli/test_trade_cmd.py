@@ -738,3 +738,388 @@ def test_argument_errors_are_json_when_asked(client: _FakeClient) -> None:
     )
     assert result.exit_code == 0, result.output
     assert client.calls_to("trading.swap")[0]["amountPct"] == 0.5
+
+
+# ── send / allowances / revoke / decode / network ───────────────────────────
+
+
+def _send_order(**extra: Any) -> dict[str, Any]:
+    base = _order(
+        kind="send",
+        tokenOut=TOKENS["USDC"],
+        recipient=WALLET_B,
+        recipientLabel=None,
+        batchId=None,
+        expectedOut=None,
+    )
+    base.update(extra)
+    return base
+
+
+def test_send_single_recipient_manual(client: _FakeClient) -> None:
+    client.payloads["trading.send"] = {"orders": [_send_order()], "batchId": None}
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "send",
+            "--chain",
+            "base",
+            "--token",
+            "USDC",
+            "--to",
+            WALLET_B,
+            "--amount",
+            "10",
+            "--note",
+            "rent",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.send") == [
+        {
+            "chainId": 8453,
+            "token": USDC,
+            "recipients": [{"to": WALLET_B, "amount": "10"}],
+            "initiator": "manual",
+            "note": "rent",
+        }
+    ]
+    assert "Send (manual)" in result.output
+    assert "0x2222…2222" in result.output and "submitted" in result.output
+
+
+def test_send_multisend_sizing_and_file(client: _FakeClient, tmp_path, monkeypatch) -> None:
+    listing = tmp_path / "list.txt"
+    listing.write_text(
+        f"# payroll\n{WALLET}=1.5\n{WALLET_B}\n\n0x3333333333333333333333333333333333333333, 2\n"
+    )
+    monkeypatch.setenv("AGENTOS_SESSION_KEY", "agent:main:webchat:x")
+    client.payloads["trading.send"] = {
+        "orders": [
+            _send_order(orderId="ord-1", status="awaiting_approval", batchId="bat_1"),
+            _send_order(orderId="ord-2", status="awaiting_approval", batchId="bat_1"),
+        ],
+        "batchId": "bat_1",
+    }
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "send",
+            "--chain",
+            "base",
+            "--token",
+            "ETH",
+            "--to",
+            f"{FAKE_AAPL}=0.2",
+            "--file",
+            str(listing),
+            "--amount",
+            "0.1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    params = client.calls_to("trading.send")[0]
+    assert params["token"] == NATIVE_ADDRESS and params["initiator"] == "agent"
+    assert params["sessionKey"] == "agent:main:webchat:x"
+    assert params["recipients"] == [
+        {"to": FAKE_AAPL, "amount": "0.2"},
+        {"to": WALLET, "amount": "1.5"},
+        {"to": WALLET_B, "amount": "0.1"},
+        {"to": "0x3333333333333333333333333333333333333333", "amount": "2"},
+    ]
+    assert "Multisend (agent)" in result.output
+    assert "one approval covers the whole batch" in result.output
+
+
+def test_send_usd_sizing_and_wait(client: _FakeClient) -> None:
+    client.payloads["trading.send"] = {
+        "orders": [
+            _send_order(orderId="ord-1", status="submitted"),
+            _send_order(orderId="ord-2", status="failed", reason="x"),
+        ],
+        "batchId": "bat_1",
+    }
+    client.payloads["trading.orders.wait"] = {"order": _send_order(status="confirmed")}
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "send",
+            "--chain",
+            "base",
+            "--token",
+            "USDC",
+            "--to",
+            WALLET_B,
+            "--to",
+            WALLET,
+            "--usd",
+            "5",
+            "--wait",
+            "--wait-seconds",
+            "20",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.send")[0]["recipients"] == [
+        {"to": WALLET_B, "amountUsd": 5.0},
+        {"to": WALLET, "amountUsd": 5.0},
+    ]
+    assert client.calls_to("trading.orders.wait") == [{"orderId": "ord-1", "timeoutSeconds": 20}]
+    payload = json.loads(result.stdout)
+    assert [o["status"] for o in payload["orders"]] == ["confirmed", "failed"]
+    assert payload["batchId"] == "bat_1"
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [
+        (["--to", WALLET_B], "has no amount"),
+        (["--to", WALLET_B, "--amount", "1", "--usd", "2"], "not both"),
+        (["--to", f"{WALLET_B}=1", "--usd", "2"], "cannot also size"),
+        (["--to", "vitalik.eth", "--amount", "1"], "not an address"),
+        (["--to", f"{WALLET_B}=abc"], "not an amount"),
+        (["--amount", "1"], "at least one --to"),
+        (["--file", "/nonexistent/list.txt", "--amount", "1"], "cannot read"),
+    ],
+)
+def test_send_argument_validation(client: _FakeClient, args: list[str], message: str) -> None:
+    result = runner.invoke(
+        trade_cmd.app, ["send", "--chain", "base", "--token", "USDC", *args, "--json"]
+    )
+    assert result.exit_code == 2, result.output
+    assert result.stdout == ""
+    assert "INVALID_ARGUMENT" in result.output and message in result.output
+    assert client.calls_to("trading.send") == []
+
+
+def test_allowances_renders_and_warns(client: _FakeClient) -> None:
+    client.payloads["trading.allowances.list"] = {
+        "wallet": WALLET,
+        "chainId": None,
+        "count": 2,
+        "unlimitedCount": 1,
+        "allowances": [
+            {
+                "chainId": 8453,
+                "token": TOKENS["USDC"],
+                "spender": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+                "spenderLabel": "Permit2",
+                "allowance": "unlimited",
+                "unlimited": True,
+                "readFailed": False,
+                "balance": "1000",
+                "exposureUsd": 1000.0,
+                "lastTxHash": "0xaaaa",
+            },
+            {
+                "chainId": 4663,
+                "token": TOKENS["WETH"],
+                "spender": WALLET_B,
+                "spenderLabel": None,
+                "allowance": "0.5",
+                "unlimited": False,
+                "readFailed": False,
+                "balance": "1",
+                "exposureUsd": 1000.0,
+                "lastTxHash": None,
+            },
+        ],
+        "chains": [],
+    }
+    result = runner.invoke(trade_cmd.app, ["allowances", "--wallet", WALLET, "--full"])
+    assert result.exit_code == 0, result.output
+    assert client.calls == [("trading.allowances.list", {"wallet": WALLET, "full": True})]
+    assert "Permit2" in result.output and "unlimited" in result.output
+    assert "$1,000.00" in result.output and "robinhood" in result.output
+    assert "1 unlimited allowance" in result.output and "agentos trade revoke" in result.output
+    scoped = runner.invoke(trade_cmd.app, ["allowances", "--chain", "robinhood", "--json"])
+    assert scoped.exit_code == 0
+    assert client.calls[-1] == ("trading.allowances.list", {"chainId": 4663})
+
+
+def test_allowances_polls_while_the_engine_scans(client: _FakeClient, monkeypatch) -> None:
+    answers = iter(
+        [
+            {"wallet": WALLET, "allowances": [], "count": 0, "unlimitedCount": 0, "scanning": True},
+            {"wallet": WALLET, "allowances": [], "count": 0, "unlimitedCount": 0, "scanning": True},
+            {
+                "wallet": WALLET,
+                "allowances": [],
+                "count": 0,
+                "unlimitedCount": 0,
+                "scanning": False,
+            },
+        ]
+    )
+    original = client.call
+
+    async def call(method: str, params: dict | None = None):
+        if method == "trading.allowances.list":
+            client.calls.append((method, dict(params or {})))
+            return next(answers)
+        return await original(method, params)
+
+    monkeypatch.setattr(client, "call", call)
+    monkeypatch.setattr(trade_cmd.asyncio, "sleep", _no_sleep)
+    result = runner.invoke(trade_cmd.app, ["allowances", "--full", "--json"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["scanning"] is False
+    # The first call carries --full; the polls must not restart the scan.
+    assert client.calls_to("trading.allowances.list") == [
+        {"full": True},
+        {},
+        {},
+    ]
+    monkeypatch.setattr(client, "call", original)
+    client.payloads["trading.allowances.list"] = {
+        "wallet": WALLET,
+        "allowances": [],
+        "count": 0,
+        "unlimitedCount": 0,
+        "scanning": True,
+    }
+    partial = runner.invoke(trade_cmd.app, ["allowances", "--no-wait"])
+    assert partial.exit_code == 0, partial.output
+    assert client.calls[-1] == ("trading.allowances.list", {})
+    assert "still scanning" in partial.output
+
+
+def test_revoke_resolves_token_and_hints_approval(client: _FakeClient) -> None:
+    client.payloads["trading.allowances.revoke"] = {
+        "order": _order(
+            kind="revoke",
+            status="awaiting_approval",
+            recipient=WALLET_B,
+            recipientLabel="Permit2",
+            amountIn="unlimited",
+            expectedOut=None,
+        )
+    }
+    result = runner.invoke(
+        trade_cmd.app,
+        ["revoke", "--chain", "base", "--token", "USDC", "--spender", WALLET_B, "--note", "x"],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.allowances.revoke") == [
+        {"chainId": 8453, "token": USDC, "spender": WALLET_B, "initiator": "manual", "note": "x"}
+    ]
+    assert "revoke" in result.output and "Permit2" in result.output
+    assert "agentos trade approve ord-1" in result.output
+    bad = runner.invoke(
+        trade_cmd.app, ["revoke", "--chain", "base", "--token", "USDC", "--spender", "nope"]
+    )
+    assert bad.exit_code == 2
+    client.payloads["trading.orders.wait"] = {"order": _order(kind="revoke", status="confirmed")}
+    waited = runner.invoke(
+        trade_cmd.app,
+        ["revoke", "--chain", "base", "--token", "USDC", "--spender", WALLET_B, "--wait", "--json"],
+    )
+    assert waited.exit_code == 0, waited.output
+    assert json.loads(waited.stdout)["order"]["status"] == "confirmed"
+
+
+def test_decode_hash_and_data(client: _FakeClient) -> None:
+    client.payloads["trading.decode"] = {
+        "chainId": 8453,
+        "call": {"selector": "0xa9059cbb", "function": "transfer", "known": True, "args": []},
+        "description": "transfer 10000000 units of usdc to 0x22",
+        "to": USDC,
+        "toLabel": None,
+        "toToken": TOKENS["USDC"],
+        "decoded": {
+            "function": "transfer",
+            "token": TOKENS["USDC"],
+            "counterparty": WALLET_B,
+            "counterpartyLabel": None,
+            "amount": "10",
+        },
+        "tx": {
+            "status": "success",
+            "from": WALLET,
+            "blockNumber": 7,
+            "valueWei": "0",
+            "gasUsed": 5,
+        },
+        "transfers": [{"token": TOKENS["USDC"], "amount": "10", "from": WALLET, "to": WALLET_B}],
+        "approvals": [
+            {
+                "token": TOKENS["USDC"],
+                "owner": WALLET,
+                "spender": WALLET_B,
+                "spenderLabel": "Permit2",
+                "amount": "unlimited",
+                "unlimited": True,
+            }
+        ],
+        "wallets": [WALLET],
+        "explorerUrl": "https://basescan.org/tx/0xabc",
+    }
+    result = runner.invoke(trade_cmd.app, ["decode", "--chain", "base", "0xabc"])
+    assert result.exit_code == 0, result.output
+    assert client.calls == [("trading.decode", {"chainId": 8453, "txHash": "0xabc"})]
+    assert "transfer 10000000 units" in result.output and "success" in result.output
+    assert (
+        "Transfers" in result.output and "Approvals" in result.output and "Permit2" in result.output
+    )
+    assert "Involves your wallet" in result.output
+    data = runner.invoke(
+        trade_cmd.app, ["decode", "--chain", "base", "--data", "0xdead", "--to", USDC, "--json"]
+    )
+    assert data.exit_code == 0
+    assert client.calls[-1] == ("trading.decode", {"chainId": 8453, "data": "0xdead", "to": USDC})
+    neither = runner.invoke(trade_cmd.app, ["decode", "--chain", "base", "--json"])
+    assert neither.exit_code == 2
+    both = runner.invoke(trade_cmd.app, ["decode", "--chain", "base", "0xabc", "--data", "0x"])
+    assert both.exit_code == 2
+
+
+def test_network_renders(client: _FakeClient) -> None:
+    client.payloads["trading.network"] = {
+        "checkedAt": 1,
+        "chains": [
+            {
+                "chainId": 8453,
+                "name": "Base",
+                "rpcUrl": "https://lb.drpc.org/…",
+                "blockNumber": 123,
+                "blockAgeS": 2,
+                "baseFeeGwei": 0.0123,
+                "priorityFeeGwei": 0.001,
+                "latencyMs": 80,
+                "healthy": True,
+                "error": None,
+            },
+            {
+                "chainId": 4663,
+                "name": "Robinhood Chain",
+                "rpcUrl": "https://rpc.mainnet.chain.robinhood.com",
+                "blockNumber": None,
+                "blockAgeS": None,
+                "baseFeeGwei": None,
+                "priorityFeeGwei": None,
+                "latencyMs": None,
+                "healthy": False,
+                "error": "HTTP 502",
+            },
+        ],
+    }
+    result = runner.invoke(trade_cmd.app, ["network", "--fresh"])
+    assert result.exit_code == 0, result.output
+    assert client.calls == [("trading.network", {"fresh": True})]
+    assert "123" in result.output and "80 ms" in result.output and "0.0123 gwei" in result.output
+    assert "HTTP 502" in result.output
+    plain = runner.invoke(trade_cmd.app, ["network", "--json"])
+    assert plain.exit_code == 0 and client.calls[-1] == ("trading.network", {})
+
+
+def test_orders_kind_filter(client: _FakeClient) -> None:
+    result = runner.invoke(trade_cmd.app, ["orders", "--kind", "send", "--json"])
+    assert result.exit_code == 0
+    assert client.calls == [("trading.orders.list", {"limit": 50, "kind": "send"})]
+    bad = runner.invoke(trade_cmd.app, ["orders", "--kind", "nope", "--json"])
+    assert bad.exit_code == 2
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None

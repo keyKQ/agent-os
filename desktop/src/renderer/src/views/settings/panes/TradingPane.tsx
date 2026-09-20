@@ -41,7 +41,13 @@ function isProviderId(value: unknown): value is ProviderId {
 }
 
 /** The keyless default: one button says whether it answers from here. */
-function AggregatorRow({ status, active }: { status: ProviderStatus | undefined; active: boolean }) {
+function AggregatorRow({
+  status,
+  active,
+}: {
+  status: ProviderStatus | undefined
+  active: boolean
+}) {
   const probe = useProbe()
   const result = probe.data
   const verdict: 'idle' | 'checking' | 'ok' | 'bad' = probe.isPending

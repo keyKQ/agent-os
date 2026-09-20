@@ -34,8 +34,13 @@ SEL_SYMBOL = "0x95d89b41"
 SEL_NAME = "0x06fdde03"
 SEL_ALLOWANCE = "0xdd62ed3e"
 SEL_APPROVE = "0x095ea7b3"
+SEL_TRANSFER = "0xa9059cbb"
+SEL_TRANSFER_FROM = "0x23b872dd"
 
 UINT256_MAX = (1 << 256) - 1
+# Anything at or above this is an "unlimited" allowance in practice: wallets
+# and routers set 2**256-1, some tokens clamp to 2**255 or 2**96-1 (UNI).
+UNLIMITED_ALLOWANCE_FLOOR = 1 << 95
 
 
 class EvmRpcError(RuntimeError):
@@ -66,6 +71,20 @@ def pad_uint(value: int) -> str:
 
 def encode_call(selector: str, *words: str) -> str:
     return selector + "".join(words)
+
+
+def encode_transfer(recipient: str, amount: int) -> str:
+    """``transfer(address,uint256)`` calldata."""
+    return encode_call(SEL_TRANSFER, pad_address(recipient), pad_uint(amount))
+
+
+def encode_approve(spender: str, amount: int) -> str:
+    """``approve(address,uint256)`` calldata."""
+    return encode_call(SEL_APPROVE, pad_address(spender), pad_uint(amount))
+
+
+def is_unlimited(allowance: int) -> bool:
+    return allowance >= UNLIMITED_ALLOWANCE_FLOOR
 
 
 _TX_QUANTITY_KEYS = frozenset(
@@ -147,6 +166,40 @@ def parse_transfer_log(log: dict[str, Any]) -> TransferLog | None:
             token=str(log["address"]).lower(),
             sender=topic_address(str(topics[1])),
             recipient=topic_address(str(topics[2])),
+            amount=decode_uint(str(log.get("data") or "0x0")),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+@dataclass(frozen=True)
+class ApprovalLog:
+    tx_hash: str
+    log_index: int
+    block_number: int
+    token: str
+    owner: str
+    spender: str
+    amount: int
+
+    @property
+    def key(self) -> tuple[str, int]:
+        return (self.tx_hash, self.log_index)
+
+
+def parse_approval_log(log: dict[str, Any]) -> ApprovalLog | None:
+    """An ERC-20 ``Approval(owner, spender, value)`` log; None for anything else."""
+    topics = log.get("topics") or []
+    if len(topics) != 3 or str(topics[0]).lower() != APPROVAL_TOPIC:
+        return None
+    try:
+        return ApprovalLog(
+            tx_hash=str(log["transactionHash"]).lower(),
+            log_index=int(str(log.get("logIndex", "0x0")), 16),
+            block_number=int(str(log.get("blockNumber", "0x0")), 16),
+            token=str(log["address"]).lower(),
+            owner=topic_address(str(topics[1])),
+            spender=topic_address(str(topics[2])),
             amount=decode_uint(str(log.get("data") or "0x0")),
         )
     except (KeyError, ValueError, TypeError):
@@ -388,6 +441,41 @@ class EvmClient:
         data = encode_call(SEL_ALLOWANCE, pad_address(owner), pad_address(spender))
         return decode_uint(await self.eth_call(token, data))
 
+    async def erc20_allowances(
+        self, owner: str, pairs: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], int | None]:
+        """``allowance(owner, spender)`` for every ``(token, spender)`` pair in one batch.
+
+        A pair whose read failed maps to ``None``: an allowance the node
+        could not answer is unknown, and "unknown" must not read as revoked.
+        """
+        keys = [(t.lower(), s.lower()) for t, s in pairs]
+        if not keys:
+            return {}
+        calls: list[tuple[str, Sequence[Any]]] = [
+            (
+                "eth_call",
+                [
+                    {
+                        "to": token,
+                        "data": encode_call(
+                            SEL_ALLOWANCE, pad_address(owner), pad_address(spender)
+                        ),
+                    },
+                    "latest",
+                ],
+            )
+            for token, spender in keys
+        ]
+        out: dict[tuple[str, str], int | None] = {}
+        results = await self._batch_lenient(calls)
+        for key, result in zip(keys, results, strict=True):
+            try:
+                out[key] = decode_uint(result) if isinstance(result, str) else None
+            except ValueError:
+                out[key] = None
+        return out
+
     async def get_code(self, address: str) -> str:
         return str(await self.call("eth_getCode", [address, "latest"]) or "0x")
 
@@ -455,7 +543,62 @@ class EvmClient:
                 await asyncio.sleep(pause_s)
         return sorted(seen.values(), key=lambda t: (t.block_number, t.log_index))
 
+    async def approval_logs(
+        self,
+        owner: str,
+        *,
+        from_block: int,
+        to_block: int,
+        max_span: int | None = None,
+        pause_s: float = 0.0,
+    ) -> list[ApprovalLog]:
+        """Every ERC-20 Approval granted *by* ``owner`` in the block range.
+
+        Same chunking and halving as :meth:`transfer_logs`, with one more
+        case: a load-balanced gateway (dRPC) answers an oversized range with
+        an HTTP 500 and a sentence, not a JSON-RPC error, so a transport
+        error also halves the span — down to ``self.max_log_span``, which
+        every node accepts; below that the error is a real outage and is
+        raised. Only the grant side is scanned: what this wallet let others
+        spend is the question an allowance review asks.
+        """
+        if to_block < from_block:
+            return []
+        padded = "0x" + pad_address(owner)
+        span = max(1, int(max_span or self.max_log_span))
+        floor = max(1, min(span, self.max_log_span))
+        seen: dict[tuple[str, int], ApprovalLog] = {}
+        start = from_block
+        while start <= to_block:
+            end = min(to_block, start + span - 1)
+            try:
+                logs = await self.get_logs(
+                    from_block=start, to_block=end, topics=[APPROVAL_TOPIC, padded]
+                )
+            except EvmRpcError:
+                if span == 1:
+                    raise
+                span = max(1, span // 2)
+                continue
+            except EvmTransportError:
+                if span <= floor:
+                    raise
+                span = max(floor, span // 2)
+                continue
+            for log in logs:
+                parsed = parse_approval_log(log)
+                if parsed is not None:
+                    seen[parsed.key] = parsed
+            start = end + 1
+            if pause_s > 0 and start <= to_block:
+                await asyncio.sleep(pause_s)
+        return sorted(seen.values(), key=lambda a: (a.block_number, a.log_index))
+
     # ── transactions ───────────────────────────────────────────────────
+
+    async def get_transaction(self, tx_hash: str) -> dict[str, Any] | None:
+        result = await self.call("eth_getTransactionByHash", [tx_hash])
+        return result if isinstance(result, dict) else None
 
     async def nonce(self, address: str, block: str = "pending") -> int:
         return decode_uint(await self.call("eth_getTransactionCount", [address, block]))
@@ -537,6 +680,21 @@ def receipt_transfers(receipt: dict[str, Any]) -> list[TransferLog]:
         entry.setdefault("transactionHash", receipt.get("transactionHash"))
         entry.setdefault("blockNumber", receipt.get("blockNumber"))
         parsed = parse_transfer_log(entry)
+        if parsed is not None:
+            out.append(parsed)
+    return out
+
+
+def receipt_approvals(receipt: dict[str, Any]) -> list[ApprovalLog]:
+    logs = receipt.get("logs") or []
+    out: list[ApprovalLog] = []
+    for log in logs:
+        if not isinstance(log, dict):
+            continue
+        entry = dict(log)
+        entry.setdefault("transactionHash", receipt.get("transactionHash"))
+        entry.setdefault("blockNumber", receipt.get("blockNumber"))
+        parsed = parse_approval_log(entry)
         if parsed is not None:
             out.append(parsed)
     return out

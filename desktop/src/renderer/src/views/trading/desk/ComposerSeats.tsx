@@ -3,8 +3,10 @@ import {
   ChevronDown,
   Lock,
   Rocket,
+  SendHorizontal,
   Settings2,
   Wallet as WalletIcon,
+  Wrench,
   Zap,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -51,6 +53,8 @@ export function ComposerSeats({
   onSwitchProvider,
   onStartMission,
   onQuick,
+  onSend,
+  onOpenTools,
 }: {
   limits: Limits | null
   provider: ProviderId
@@ -66,6 +70,10 @@ export function ComposerSeats({
   /** Opens the mission contract; rendered as the first chip so it lines up with the capsule. */
   onStartMission?: () => void
   onQuick: (kind: MissionKind) => void
+  /** Opens the Send sheet: one or many recipients, asked of the desk or sent now. */
+  onSend?: () => void
+  /** Opens the BOOK's Tools tab: every tool of the desk, on one page. */
+  onOpenTools?: () => void
 }) {
   return (
     <div className="trd-seats" data-typing={typing || undefined} data-testid="composer-seats">
@@ -132,6 +140,31 @@ export function ComposerSeats({
             {t(key)}
           </button>
         ))}
+        {onSend ? (
+          <button
+            type="button"
+            className="trd-quick__chip app-no-drag"
+            onClick={onSend}
+            data-testid="quick-send"
+            tabIndex={typing ? -1 : 0}
+          >
+            <SendHorizontal className="size-3" strokeWidth={2} aria-hidden />
+            {t('trading.quick.send')}
+          </button>
+        ) : null}
+        {onOpenTools ? (
+          <button
+            type="button"
+            className="trd-quick__chip app-no-drag"
+            onClick={onOpenTools}
+            title={t('trading.tools.title')}
+            data-testid="quick-tools"
+            tabIndex={typing ? -1 : 0}
+          >
+            <Wrench className="size-3" strokeWidth={2} aria-hidden />
+            {t('trading.tools.chip')}
+          </button>
+        ) : null}
       </div>
     </div>
   )

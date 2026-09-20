@@ -43,7 +43,10 @@ function save(key: string, value: string): void {
   }
 }
 
-export type BookTab = 'portfolio' | 'swap' | 'orders' | 'history'
+export type BookTab = 'portfolio' | 'swap' | 'orders' | 'history' | 'tools'
+
+/** A sheet the BOOK asks the chat to open: Send posts into the chat, so it lives there. */
+export type DeskSheet = 'pick' | 'send' | 'multisend' | 'allowances' | 'inspect' | 'network' | null
 
 interface TradingUiStore {
   bookWidth: number
@@ -51,11 +54,13 @@ interface TradingUiStore {
   bookTab: BookTab
   /** The full-width desk instead of chat + BOOK. */
   deskMode: boolean
+  sheet: DeskSheet
   setBookWidth(width: number): void
   toggleBook(): void
   setBookOpen(open: boolean): void
   setBookTab(tab: BookTab): void
   setDeskMode(on: boolean): void
+  openSheet(sheet: DeskSheet): void
 }
 
 export const useTradingUi = create<TradingUiStore>((set) => ({
@@ -63,6 +68,7 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   bookOpen: loadOpen(),
   bookTab: 'portfolio',
   deskMode: false,
+  sheet: null,
   setBookWidth(width) {
     const clamped = Math.round(Math.min(BOOK_MAX, Math.max(BOOK_MIN, width)))
     save(WIDTH_KEY, String(clamped))
@@ -84,6 +90,9 @@ export const useTradingUi = create<TradingUiStore>((set) => ({
   },
   setDeskMode(on) {
     set({ deskMode: on })
+  },
+  openSheet(sheet) {
+    set({ sheet })
   },
 }))
 

@@ -67,12 +67,23 @@ export type OrderStatus =
 
 export type Initiator = 'manual' | 'agent' | 'external'
 
+/** A swap trades through a provider; a send moves one token to an address;
+ *  a revoke sets an ERC-20 allowance to zero. Older engines omit `kind`. */
+export type OrderKind = 'swap' | 'send' | 'revoke'
+
 export interface Order {
   orderId: string
   createdAt: number
   updatedAt: number
   chainId: number
   wallet: string
+  kind?: OrderKind
+  /** send: where the tokens go; revoke: the spender losing its allowance. */
+  recipient?: string | null
+  /** "Permit2", "Uniswap Universal Router" … when the engine knows the address. */
+  recipientLabel?: string | null
+  /** The legs of one multisend share this; decided and reported as one. */
+  batchId?: string | null
   tokenIn: Token
   tokenOut: Token
   amountIn: string
@@ -292,6 +303,142 @@ export interface Limits {
   spentTodayUsd: number
   thresholdUsd: number
   approvalTtlSeconds: number
+}
+
+/** One ERC-20 allowance a wallet has granted, with the amount read live. */
+export interface Allowance {
+  chainId: number
+  wallet: string
+  token: Token
+  spender: string
+  spenderLabel: string | null
+  spenderUrl: string | null
+  allowanceRaw: string | null
+  /** "unlimited", a human amount, or null when the read failed. */
+  allowance: string | null
+  unlimited: boolean
+  readFailed: boolean
+  balanceRaw: string | null
+  balance: string | null
+  /** What the spender could take right now: min(allowance, balance), in USD. */
+  exposureUsd: number | null
+  lastBlock: number
+  lastTxHash: string | null
+  explorerUrl: string | null
+}
+
+export interface AllowanceList {
+  wallet: string
+  chainId: number | null
+  allowances: Allowance[]
+  count: number
+  unlimitedCount: number
+  /** The engine is still walking older blocks; the list may grow. */
+  scanning?: boolean
+  scannedTo?: number | null
+  scanFrom?: number | null
+  head?: number
+  chains?: {
+    chainId: number
+    count: number
+    scanning?: boolean
+    scannedTo: number | null
+    scanFrom?: number | null
+    head?: number
+  }[]
+}
+
+/** One chain's head as the engine's RPC saw it a moment ago. */
+export interface NetworkChain {
+  chainId: number
+  key: string
+  name: string
+  native: string
+  rpcUrl: string
+  healthy: boolean
+  latencyMs: number | null
+  blockNumber: number | null
+  blockAgeS: number | null
+  blockTimeS: number
+  baseFeeGwei: number | null
+  priorityFeeGwei: number | null
+  error: string | null
+}
+
+export interface NetworkStatus {
+  chains: NetworkChain[]
+  checkedAt: number
+}
+
+export interface DecodedArg {
+  type: string
+  value: unknown
+  unlimited?: boolean
+}
+
+export interface DecodedCall {
+  selector: string
+  function: string | null
+  args: DecodedArg[]
+  known: boolean
+  words: number
+}
+
+export interface DecodedMovement {
+  token: Token
+  from: string
+  to: string
+  amountRaw: string
+  amount: string
+  logIndex: number
+}
+
+export interface DecodedGrant {
+  token: Token
+  owner: string
+  spender: string
+  spenderLabel: string | null
+  amountRaw: string
+  amount: string
+  unlimited: boolean
+  logIndex: number
+}
+
+export interface DecodedTx {
+  hash: string | null
+  from: string | null
+  to: string | null
+  valueWei: string
+  nonce: number | null
+  blockNumber: number | null
+  status: 'pending' | 'success' | 'reverted'
+  gasUsed: number | null
+  gasPriceWei: string | null
+  gasWei: string | null
+}
+
+export interface Decoded {
+  chainId: number
+  call: DecodedCall
+  description: string
+  to: string | null
+  toLabel: string | null
+  toToken: Token | null
+  decoded: {
+    function: string
+    token: Token
+    counterparty: string
+    counterpartyLabel: string | null
+    amountRaw: string
+    amount: string
+    unlimited: boolean
+  } | null
+  tx: DecodedTx | null
+  transfers: DecodedMovement[]
+  approvals: DecodedGrant[]
+  /** The vault's wallets that took part. */
+  wallets: string[]
+  explorerUrl: string | null
 }
 
 /** The zero address the API uses for the chain's native coin. */

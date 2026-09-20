@@ -39,11 +39,22 @@ from agentos.trading.chains import (
     redact_rpc_url,
     rpc_url_for,
 )
+from agentos.trading.decode import (
+    decode_calldata,
+    describe_call,
+    receipt_movements,
+    spender_label,
+    tx_summary,
+)
 from agentos.trading.discovery import BlockscoutDiscovery
 from agentos.trading.evm import (
     EvmClient,
     EvmRpcError,
     EvmTransportError,
+    decode_uint,
+    encode_approve,
+    encode_transfer,
+    is_unlimited,
     pad_uint,
     receipt_gas_wei,
     receipt_succeeded,
@@ -53,6 +64,7 @@ from agentos.trading.ledger import (
     ORDER_FINAL_STATUSES,
     Ledger,
     local_day,
+    new_batch_id,
     new_order_id,
 )
 from agentos.trading.pnl import (
@@ -117,6 +129,14 @@ MANUAL_SYNC_MIN_S = 10.0
 HIDDEN_RESCAN_S = 3600.0
 # WETH9 ``withdraw(uint256)``.
 SEL_WETH_WITHDRAW = "0x2e1a7d4d"
+# A multisend is one decision and one wallet lock; beyond this many legs it
+# is a script, not an order.
+MAX_SEND_RECIPIENTS = 200
+# ``network`` re-reads the chains at most this often; the strip polls faster.
+NETWORK_TTL_S = 10.0
+# A head block older than this means the endpoint is behind or the chain is
+# stalled; either way a read from it is not to be trusted.
+STALE_HEAD_S = 60.0
 
 
 def _thin(points: list[dict[str, float]], limit: int) -> list[dict[str, float]]:
@@ -285,6 +305,11 @@ class TradingService:
         # When each wallet last had a chain read forced through wallet.balances,
         # so a client polling with refresh=true cannot turn into a load test.
         self._manual_sync_at: dict[str, float] = {}
+        self._network_cache: dict[str, Any] | None = None
+        self._network_cache_at = 0.0
+        # One Approval-log scan per wallet/chain at a time; a review call
+        # returns what is cached and reports that the scan is still running.
+        self._allowance_scans: dict[tuple[int, str], asyncio.Task[None]] = {}
 
     # ── infrastructure ─────────────────────────────────────────────────
 
@@ -381,6 +406,11 @@ class TradingService:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         self._confirm_tasks.clear()
+        for scan in list(self._allowance_scans.values()):
+            scan.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await scan
+        self._allowance_scans.clear()
 
     async def aclose(self) -> None:
         await self.stop()
@@ -1691,8 +1721,13 @@ class TradingService:
         expected = row.get("expected_out_raw")
         min_out = row.get("min_out_raw")
         received = row.get("received_out_raw")
+        recipient = row.get("recipient")
         return {
             "orderId": row["order_id"],
+            "kind": row.get("kind") or "swap",
+            "recipient": checksum_address(str(recipient)) if recipient else None,
+            "recipientLabel": spender_label(str(recipient)) if recipient else None,
+            "batchId": row.get("batch_id"),
             "createdAt": int(float(row["created_at"]) * 1000),
             "updatedAt": int(float(row["updated_at"]) * 1000),
             "chainId": chain_id,
@@ -1729,14 +1764,644 @@ class TradingService:
         return self._order_dict(row)
 
     def list_orders(
-        self, *, status: str | None = None, wallet: str | None = None, limit: int = 50
+        self,
+        *,
+        status: str | None = None,
+        wallet: str | None = None,
+        limit: int = 50,
+        kind: str | None = None,
     ) -> dict[str, Any]:
         key = self.vault.resolve(wallet).key if wallet else None
-        rows = self.ledger.list_orders(status=status, wallet=key, limit=limit)
+        rows = self.ledger.list_orders(status=status, wallet=key, limit=limit, kind=kind)
         return {
             "orders": [self._order_dict(r) for r in rows],
             "pendingApprovals": self.ledger.count_orders("awaiting_approval"),
         }
+
+    def batch(self, batch_id: str) -> list[dict[str, Any]]:
+        """Every leg of a multisend, oldest first."""
+        rows = self.ledger.batch_orders(batch_id)
+        if not rows:
+            raise TradingError("trading.invalid", f"no batch {batch_id}")
+        return [self._order_dict(r) for r in rows]
+
+    # ── sends ──────────────────────────────────────────────────────────
+
+    async def send(
+        self,
+        *,
+        chain: ChainSpec,
+        wallet: str | None,
+        token: str,
+        recipients: list[dict[str, Any]],
+        initiator: Initiator,
+        session_key: str | None,
+        note: str | None,
+        wait: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Send one token to one or many addresses from one wallet.
+
+        Every recipient becomes its own order; the orders of a multisend
+        share a ``batch_id`` and are judged, approved, rejected and executed
+        as one. The guardrail sees the batch's total: an agent cannot get a
+        transfer through by chopping it up, and a person approving it sees
+        one card, not twenty.
+        """
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
+        if initiator not in ("manual", "agent"):
+            raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        if not self.ensure_unlocked():
+            raise TradingError("wallet.locked", "Wallet vault is locked")
+        record = self.vault.resolve(wallet)
+        meta = await self.resolve_token(chain, token)
+        if not recipients:
+            raise TradingError("trading.invalid", "at least one recipient is required")
+        if len(recipients) > MAX_SEND_RECIPIENTS:
+            raise TradingError(
+                "trading.invalid", f"at most {MAX_SEND_RECIPIENTS} recipients per send"
+            )
+        legs: list[tuple[str, int]] = []
+        seen: set[str] = set()
+        for item in recipients:
+            if not isinstance(item, dict):
+                raise TradingError("trading.invalid", "each recipient must be an object")
+            try:
+                to = normalize_address(str(item.get("to") or ""))
+            except ValueError as exc:
+                raise TradingError("trading.invalid", str(exc)) from exc
+            if to == NATIVE_ADDRESS:
+                raise TradingError("trading.invalid", "recipient is the zero address")
+            if to == record.key:
+                raise TradingError("trading.invalid", "recipient is the sending wallet itself")
+            if to in seen:
+                raise TradingError(
+                    "trading.invalid", f"{checksum_address(to)} appears twice in the recipients"
+                )
+            seen.add(to)
+            amount = item.get("amount")
+            amount_usd = item.get("amountUsd")
+            if (amount is None) == (amount_usd is None):
+                raise TradingError(
+                    "trading.invalid", "each recipient needs exactly one of amount or amountUsd"
+                )
+            if amount is not None:
+                raw = to_raw(str(amount), meta.decimals)
+            else:
+                raw = await self._raw_for_usd(chain, meta, float(amount_usd or 0))
+            if raw <= 0:
+                raise TradingError("trading.invalid", "amount must be greater than zero")
+            legs.append((to, raw))
+        total = sum(raw for _, raw in legs)
+        evm = self.evm(chain)
+        balance = await self._balance_raw(chain, record, meta)
+        if balance < total:
+            raise TradingError(
+                "trading.insufficient_balance",
+                f"{record.label} holds {format_amount(balance, meta.decimals)} "
+                f"{meta.symbol or 'tokens'}, the send needs {format_amount(total, meta.decimals)}",
+            )
+        # A batch of native sends must also leave gas for every leg; each
+        # leg re-checks at signing time, but the whole batch should not be
+        # accepted only to fail from the third leg on.
+        if meta.native and len(legs) > 1:
+            try:
+                max_fee, _tip = await evm.fee_data()
+            except (EvmRpcError, EvmTransportError):
+                max_fee = 0
+            reserve = len(legs) * 21_000 * max_fee
+            if balance < total + reserve:
+                raise TradingError(
+                    "trading.insufficient_balance",
+                    f"not enough {chain.native_symbol} for {len(legs)} sends plus their gas "
+                    f"(need ~{format_amount(total + reserve, 18)})",
+                )
+        price = await self.prices.price(chain, meta.address)
+        values = [
+            float(to_human(raw, meta.decimals)) * price if price is not None else None
+            for _, raw in legs
+        ]
+        total_value = sum(v for v in values if v is not None) if price is not None else None
+        # Spend is read before the rows exist, so none of them count against themselves.
+        spent = self._spent_today(record)
+        batch_id = new_batch_id() if len(legs) > 1 else None
+        now = self._now()
+        order_ids: list[str] = []
+        for (to, raw), value in zip(legs, values, strict=True):
+            order_id = new_order_id()
+            self.ledger.insert_order(
+                {
+                    "order_id": order_id,
+                    "created_at": now,
+                    "updated_at": now,
+                    "chain_id": chain.chain_id,
+                    "wallet": record.key,
+                    "token_in": meta.address,
+                    "token_out": meta.address,
+                    "amount_raw": str(raw),
+                    "amount_human": format_amount(raw, meta.decimals),
+                    "value_usd": value,
+                    "status": "quoted",
+                    "initiator": initiator,
+                    "session_key": session_key,
+                    "note": note,
+                    "kind": "send",
+                    "recipient": to,
+                    "batch_id": batch_id,
+                }
+            )
+            order_ids.append(order_id)
+        verdict = guardrails.evaluate_transfer(
+            initiator=initiator,
+            value_usd=total_value,
+            daily_cap_usd=self.config.daily_cap_usd,
+            spent_today_usd=spent,
+        )
+        await self._decide_batch(order_ids, verdict, batch_id=batch_id, wait=wait)
+        await self._emit(
+            "trading.changed", {"reason": "order", "orderId": order_ids[0], "batchId": batch_id}
+        )
+        return [self.get_order(order_id) for order_id in order_ids]
+
+    async def _decide_batch(
+        self,
+        order_ids: list[str],
+        verdict: guardrails.GuardVerdict,
+        *,
+        batch_id: str | None,
+        wait: bool,
+    ) -> None:
+        """Park, refuse or run a set of freshly quoted orders on one verdict."""
+        if verdict.decision == "blocked_daily_cap":
+            for order_id in order_ids:
+                self.ledger.update_order(order_id, status="rejected", reason=verdict.reason)
+                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+            return
+        if verdict.decision == "needs_approval":
+            ttl = int(self.config.approval_ttl_seconds)
+            expires = self._now() + ttl
+            for order_id in order_ids:
+                self.ledger.update_order(
+                    order_id,
+                    status="awaiting_approval",
+                    reason=verdict.reason,
+                    expires_at=expires,
+                )
+            await self._emit(
+                "trading.approval.requested",
+                {
+                    "order": self.get_order(order_ids[0]),
+                    "batchId": batch_id,
+                    "orders": [self.get_order(o) for o in order_ids],
+                },
+            )
+            return
+        await self._run_legs(order_ids, wait=wait)
+
+    async def _run_legs(self, order_ids: list[str], *, wait: bool) -> None:
+        """Execute orders one after another; a leg that fails never stops the rest."""
+        for order_id in order_ids:
+            try:
+                await self._execute(order_id, None, wait=wait)
+            except Exception as exc:
+                error = _err(exc)
+                self.ledger.update_order(order_id, status="failed", reason=f"{error.code}: {error}")
+                log.warning("trading.order_failed", order=order_id, error=str(error))
+                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+            self._wake(order_id)
+
+    async def revoke(
+        self,
+        *,
+        chain: ChainSpec,
+        wallet: str | None,
+        token: str,
+        spender: str,
+        initiator: Initiator,
+        session_key: str | None,
+        note: str | None,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        """Set an ERC-20 allowance back to zero. An agent's revoke waits for a human."""
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
+        if not self.ensure_unlocked():
+            raise TradingError("wallet.locked", "Wallet vault is locked")
+        record = self.vault.resolve(wallet)
+        meta = await self.resolve_token(chain, token)
+        if meta.native:
+            raise TradingError("trading.invalid", "the gas coin has no allowances to revoke")
+        try:
+            spender_key = normalize_address(spender)
+        except ValueError as exc:
+            raise TradingError("trading.invalid", str(exc)) from exc
+        if spender_key == NATIVE_ADDRESS:
+            raise TradingError("trading.invalid", "spender is the zero address")
+        evm = self.evm(chain)
+        allowance = await evm.erc20_allowance(meta.address, record.address, spender_key)
+        if allowance <= 0:
+            raise TradingError(
+                "trading.invalid",
+                f"{checksum_address(spender_key)} has no allowance on "
+                f"{meta.symbol or meta.address}",
+            )
+        order_id = new_order_id()
+        now = self._now()
+        self.ledger.insert_order(
+            {
+                "order_id": order_id,
+                "created_at": now,
+                "updated_at": now,
+                "chain_id": chain.chain_id,
+                "wallet": record.key,
+                "token_in": meta.address,
+                "token_out": meta.address,
+                "amount_raw": str(allowance),
+                "amount_human": "unlimited"
+                if is_unlimited(allowance)
+                else format_amount(allowance, meta.decimals),
+                "value_usd": 0.0,
+                "status": "quoted",
+                "initiator": initiator,
+                "session_key": session_key,
+                "note": note,
+                "kind": "revoke",
+                "recipient": spender_key,
+            }
+        )
+        verdict = guardrails.evaluate_revoke(initiator=initiator)
+        await self._decide_batch([order_id], verdict, batch_id=None, wait=wait)
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+        return self.get_order(order_id)
+
+    # ── allowances ─────────────────────────────────────────────────────
+
+    async def allowances(
+        self,
+        chain: ChainSpec,
+        wallet: str | None,
+        *,
+        full: bool = False,
+        wait: bool = False,
+    ) -> dict[str, Any]:
+        """What this wallet has let others spend, with the live amounts.
+
+        The Approval logs are scanned incrementally from where the last scan
+        stopped (a new wallet starts at its creation block, an imported one
+        at the sync's look-back); the (token, spender) pairs are cached, and
+        each pair's allowance is read from the chain now. A pair that reads
+        as zero is dropped from the cache. ``full`` rescans from the start.
+
+        The scan runs in the background — a wallet's first pass on a 0.1 s
+        chain is millions of blocks — and saves its place after every
+        window, so this returns at once with what is known and
+        ``scanning: True``; ``wait`` blocks until the pass is done. Every
+        window that adds a pair, and the end of the pass, broadcast
+        ``trading.changed`` with ``reason: "allowances"``.
+        """
+        record = self.vault.resolve(wallet)
+        evm = self.evm(chain)
+        latest = await evm.block_number()
+        key = (chain.chain_id, record.key)
+        if full:
+            self.ledger.clear_allowance_scan(chain.chain_id, record.key)
+        scan = self.ledger.allowance_scan(chain.chain_id, record.key)
+        if scan is None:
+            created = record.created_block.get(str(chain.chain_id))
+            state = self.ledger.sync_state(chain.chain_id, record.key)
+            if created is not None:
+                start = int(created)
+            elif state is not None and state.get("oldest_block") is not None:
+                start = int(state["oldest_block"])
+            else:
+                start = max(0, latest - self.syncer.initial_lookback)
+        else:
+            start = int(scan["last_block"]) + 1
+        task = self._allowance_scans.get(key)
+        if start <= latest and (task is None or task.done()):
+            task = asyncio.get_running_loop().create_task(
+                self._scan_allowances(chain, record, start, latest),
+                name=f"trading-allowances-{chain.chain_id}-{record.key[:10]}",
+            )
+            self._allowance_scans[key] = task
+        if wait and task is not None and not task.done():
+            await task
+        # "Scanning" is a catch-up worth telling the user about — more than
+        # one window still to read. The few hundred blocks since the last
+        # look are read in one call and are not a reason to say "partial".
+        behind = latest - start + 1
+        scanning = task is not None and not task.done() and behind > int(chain.approval_log_span)
+        scan = self.ledger.allowance_scan(chain.chain_id, record.key)
+        rows = self.ledger.allowances(chain.chain_id, record.key)
+        pairs = [(str(r["token"]), str(r["spender"])) for r in rows]
+        live = await evm.erc20_allowances(record.address, pairs)
+        held = await evm.erc20_balances(record.address, {t for t, _ in pairs})
+        out: list[dict[str, Any]] = []
+        unlimited_count = 0
+        for row in rows:
+            token = str(row["token"])
+            spender = str(row["spender"])
+            amount = live.get((token, spender))
+            if amount == 0:
+                self.ledger.delete_allowance(chain.chain_id, record.key, token, spender)
+                continue
+            meta = await self.token_meta(chain, token)
+            balance = held.get(token)
+            price = await self.prices.price(chain, token)
+            exposed = min(amount, balance) if amount is not None and balance is not None else None
+            exposure_usd = (
+                float(to_human(exposed, meta.decimals)) * price
+                if exposed is not None and price is not None
+                else None
+            )
+            unlimited = amount is not None and is_unlimited(amount)
+            if unlimited:
+                unlimited_count += 1
+            out.append(
+                {
+                    "chainId": chain.chain_id,
+                    "wallet": record.address,
+                    "token": meta.to_dict(),
+                    "spender": checksum_address(spender),
+                    "spenderLabel": spender_label(spender),
+                    "spenderUrl": chain.address_url(checksum_address(spender)),
+                    "allowanceRaw": str(amount) if amount is not None else None,
+                    "allowance": None
+                    if amount is None
+                    else ("unlimited" if unlimited else format_amount(amount, meta.decimals)),
+                    "unlimited": unlimited,
+                    "readFailed": amount is None,
+                    "balanceRaw": str(balance) if balance is not None else None,
+                    "balance": format_amount(balance, meta.decimals)
+                    if balance is not None
+                    else None,
+                    "exposureUsd": exposure_usd,
+                    "lastBlock": int(row["last_block"]),
+                    "lastTxHash": row.get("last_tx_hash"),
+                    "explorerUrl": chain.tx_url(str(row["last_tx_hash"]))
+                    if row.get("last_tx_hash")
+                    else None,
+                }
+            )
+        # Unlimited first, then by how much is at stake, then most recent.
+        out.sort(
+            key=lambda a: (
+                not a["unlimited"],
+                -(a["exposureUsd"] or 0.0),
+                -int(a["lastBlock"]),
+            )
+        )
+        return {
+            "chainId": chain.chain_id,
+            "wallet": record.address,
+            "allowances": out,
+            "count": len(out),
+            "unlimitedCount": unlimited_count,
+            "scanning": scanning,
+            "scannedTo": int(scan["last_block"]) if scan else None,
+            "scanFrom": start if scanning else None,
+            "head": latest,
+        }
+
+    async def _scan_allowances(
+        self, chain: ChainSpec, record: WalletRecord, start: int, latest: int
+    ) -> None:
+        """Walk the Approval logs from ``start`` to ``latest`` one window at a time.
+
+        Progress is written after every window, so a gateway restart (or a
+        node outage half-way) resumes where it stopped instead of starting
+        over. A window that fails ends the pass; the next review call picks
+        it up from the last saved block.
+        """
+        evm = self.evm(chain)
+        window = max(1, int(chain.approval_log_span))
+        cursor = start
+        while cursor <= latest:
+            end = min(latest, cursor + window - 1)
+            try:
+                logs = await evm.approval_logs(
+                    record.address, from_block=cursor, to_block=end, max_span=window
+                )
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.warning(
+                    "trading.allowance_scan_failed",
+                    chain=chain.key,
+                    wallet=record.address,
+                    block=cursor,
+                    error=str(exc),
+                )
+                await self._emit(
+                    "trading.changed", {"reason": "allowances", "wallet": record.address}
+                )
+                return
+            added = 0
+            for entry in logs:
+                if entry.owner != record.key:
+                    continue
+                self.ledger.upsert_allowance(
+                    chain.chain_id,
+                    record.key,
+                    entry.token,
+                    entry.spender,
+                    block=entry.block_number,
+                    tx_hash=entry.tx_hash,
+                )
+                added += 1
+            self.ledger.set_allowance_scan(chain.chain_id, record.key, last_block=end)
+            if added:
+                await self._emit(
+                    "trading.changed", {"reason": "allowances", "wallet": record.address}
+                )
+            cursor = end + 1
+        await self._emit("trading.changed", {"reason": "allowances", "wallet": record.address})
+
+    # ── decode ─────────────────────────────────────────────────────────
+
+    async def decode(
+        self,
+        chain: ChainSpec,
+        *,
+        tx_hash: str | None = None,
+        data: str | None = None,
+        to: str | None = None,
+    ) -> dict[str, Any]:
+        """A transaction hash or raw calldata, explained.
+
+        With a hash the transaction and its receipt are read and every
+        Transfer/Approval in the receipt is named; with calldata only the
+        call itself is decoded. Unknown functions stay unknown.
+        """
+        evm = self.evm(chain)
+        tx: dict[str, Any] | None = None
+        receipt: dict[str, Any] | None = None
+        value_wei = 0
+        if tx_hash:
+            tx_hash = tx_hash.strip().lower()
+            if not tx_hash.startswith("0x") or len(tx_hash) != 66:
+                raise TradingError("trading.invalid", f"not a transaction hash: {tx_hash}")
+            tx = await evm.get_transaction(tx_hash)
+            if tx is None:
+                raise TradingError("trading.invalid", f"no transaction {tx_hash} on {chain.name}")
+            receipt = await evm.get_transaction_receipt(tx_hash)
+            data = str(tx.get("input") or tx.get("data") or "0x")
+            to = str(tx.get("to") or "") or None
+            value_wei = decode_uint(str(tx.get("value") or "0x0"))
+        elif data is None:
+            raise TradingError("trading.invalid", "txHash or data is required")
+        call = decode_calldata(data)
+        target = to.lower() if to else None
+        target_label: str | None = spender_label(target) if target else None
+        target_token: dict[str, Any] | None = None
+        if target and not target_label and self.ledger.get_token(chain.chain_id, target):
+            target_token = self._token_dict(chain.chain_id, target)
+        decoded: dict[str, Any] | None = None
+        if (
+            call.known
+            and call.function in ("transfer", "approve")
+            and len(call.args) == 2
+            and target
+        ):
+            try:
+                meta = await self.token_meta(chain, target)
+            except TradingError:
+                meta = None
+            if meta is not None:
+                amount = int(str(call.args[1]["value"]))
+                counterparty = str(call.args[0]["value"])
+                decoded = {
+                    "function": call.function,
+                    "token": meta.to_dict(),
+                    "counterparty": checksum_address(counterparty),
+                    "counterpartyLabel": spender_label(counterparty),
+                    "amountRaw": str(amount),
+                    "amount": "unlimited"
+                    if call.function == "approve" and is_unlimited(amount)
+                    else format_amount(amount, meta.decimals),
+                    "unlimited": call.function == "approve" and is_unlimited(amount),
+                }
+                target_token = meta.to_dict()
+        transfers, approvals = receipt_movements(receipt)
+        movements: list[dict[str, Any]] = []
+        for entry in transfers[:50]:
+            token = await self._safe_token_dict(chain, entry.token)
+            decimals = int(token.get("decimals", 18))
+            movements.append(
+                {
+                    "token": token,
+                    "from": checksum_address(entry.sender),
+                    "to": checksum_address(entry.recipient),
+                    "amountRaw": str(entry.amount),
+                    "amount": format_amount(entry.amount, decimals),
+                    "logIndex": entry.log_index,
+                }
+            )
+        grants: list[dict[str, Any]] = []
+        for grant in approvals[:50]:
+            token = await self._safe_token_dict(chain, grant.token)
+            decimals = int(token.get("decimals", 18))
+            grants.append(
+                {
+                    "token": token,
+                    "owner": checksum_address(grant.owner),
+                    "spender": checksum_address(grant.spender),
+                    "spenderLabel": spender_label(grant.spender),
+                    "amountRaw": str(grant.amount),
+                    "amount": "unlimited"
+                    if is_unlimited(grant.amount)
+                    else format_amount(grant.amount, decimals),
+                    "unlimited": is_unlimited(grant.amount),
+                    "logIndex": grant.log_index,
+                }
+            )
+        ours = {w.key for w in self.vault.list()} if self.vault.initialized else set()
+        parties = {str(tx.get("from") or "").lower(), target or ""} if tx else {target or ""}
+        for entry in transfers:
+            parties.update({entry.sender, entry.recipient})
+        involved = sorted(checksum_address(p) for p in parties if p and p in ours)
+        return {
+            "chainId": chain.chain_id,
+            "call": call.to_dict(),
+            "description": describe_call(call, to=target, value_wei=value_wei),
+            "to": checksum_address(target) if target else None,
+            "toLabel": target_label,
+            "toToken": target_token,
+            "decoded": decoded,
+            "tx": tx_summary(tx, receipt) if tx_hash else None,
+            "transfers": movements,
+            "approvals": grants,
+            "wallets": involved,
+            "explorerUrl": chain.tx_url(tx_hash) if tx_hash else None,
+        }
+
+    async def _safe_token_dict(self, chain: ChainSpec, address: str) -> dict[str, Any]:
+        try:
+            return (await self.token_meta(chain, address)).to_dict()
+        except (TradingError, EvmRpcError, EvmTransportError):
+            return TokenMeta(chain.chain_id, address.lower(), "", "", 18).to_dict()
+
+    # ── network ────────────────────────────────────────────────────────
+
+    async def network(self, *, fresh: bool = False) -> dict[str, Any]:
+        """Head block, its age, gas and latency for every chain; cached briefly.
+
+        The age is the number that matters: a load-balanced endpoint that
+        answers from a node a few blocks behind (see ``_native_after``) shows
+        up here as a head older than the chain's block time, which is what a
+        person needs to see before trusting a balance.
+        """
+        now = self._now()
+        if (
+            not fresh
+            and self._network_cache is not None
+            and now - self._network_cache_at < NETWORK_TTL_S
+        ):
+            return self._network_cache
+        chains: list[dict[str, Any]] = []
+        for chain in self.chains():
+            evm = self.evm(chain)
+            row: dict[str, Any] = {
+                "chainId": chain.chain_id,
+                "key": chain.key,
+                "name": chain.name,
+                "native": chain.native_symbol,
+                "rpcUrl": evm.display_url,
+                "healthy": False,
+                "latencyMs": None,
+                "blockNumber": None,
+                "blockAgeS": None,
+                "blockTimeS": chain.block_time_s,
+                "baseFeeGwei": None,
+                "priorityFeeGwei": None,
+                "error": None,
+            }
+            started = time.monotonic()
+            try:
+                block = await evm.get_block("latest")
+                row["latencyMs"] = int((time.monotonic() - started) * 1000)
+                if not block:
+                    raise EvmTransportError("no head block")
+                number = decode_uint(str(block.get("number") or "0x0"))
+                ts = decode_uint(str(block.get("timestamp") or "0x0"))
+                row["blockNumber"] = number
+                row["blockAgeS"] = max(0, int(now - ts)) if ts else None
+                base_fee = decode_uint(str(block.get("baseFeePerGas") or "0x0"))
+                try:
+                    max_fee, tip = await evm.fee_data()
+                except (EvmRpcError, EvmTransportError):
+                    max_fee, tip = 0, 0
+                if not base_fee and max_fee:
+                    base_fee = max(0, (max_fee - tip) // 2)
+                row["baseFeeGwei"] = base_fee / 1e9 if base_fee else None
+                row["priorityFeeGwei"] = tip / 1e9 if tip else None
+                age = row["blockAgeS"]
+                row["healthy"] = age is not None and age <= STALE_HEAD_S
+            except (EvmRpcError, EvmTransportError, ValueError, TypeError) as exc:
+                row["error"] = str(exc)[:160]
+            chains.append(row)
+        result = {"chains": chains, "checkedAt": int(now * 1000)}
+        self._network_cache = result
+        self._network_cache_at = now
+        return result
 
     async def swap(
         self,
@@ -1963,6 +2628,13 @@ class TradingService:
     async def _execute(self, order_id: str, quote: ProviderQuote | None, *, wait: bool) -> None:
         row = self.ledger.get_order(order_id)
         assert row is not None
+        kind = str(row.get("kind") or "swap")
+        if kind == "send":
+            await self._execute_send(row, wait=wait)
+            return
+        if kind == "revoke":
+            await self._execute_revoke(row, wait=wait)
+            return
         chain = CHAINS[int(row["chain_id"])]
         record = self.vault.get(str(row["wallet"]))
         meta_in = await self.token_meta(chain, str(row["token_in"]))
@@ -2096,16 +2768,89 @@ class TradingService:
             tx_hash = await self._send(chain, record, key, tx)
             self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
-        pre = {"in": pre_in, "out": pre_out, "native": pre_native}
+        await self._watch(
+            order_id, tx_hash, {"in": pre_in, "out": pre_out, "native": pre_native}, wait=wait
+        )
+
+    async def _watch(self, order_id: str, tx_hash: str, pre: dict[str, int], *, wait: bool) -> None:
+        """Settle the order from its receipt, now or in the background."""
         if wait:
             await self._confirm(order_id, tx_hash, pre)
-        else:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(
-                self._confirm(order_id, tx_hash, pre), name=f"trading-confirm-{order_id}"
-            )
-            self._confirm_tasks.add(task)
-            task.add_done_callback(self._confirm_tasks.discard)
+            return
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            self._confirm(order_id, tx_hash, pre), name=f"trading-confirm-{order_id}"
+        )
+        self._confirm_tasks.add(task)
+        task.add_done_callback(self._confirm_tasks.discard)
+
+    async def _execute_send(self, row: dict[str, Any], *, wait: bool) -> None:
+        """Sign and broadcast one leg of a send: ETH by value, an ERC-20 by ``transfer``."""
+        order_id = str(row["order_id"])
+        chain = CHAINS[int(row["chain_id"])]
+        record = self.vault.get(str(row["wallet"]))
+        meta = await self.token_meta(chain, str(row["token_in"]))
+        amount_raw = int(row["amount_raw"])
+        recipient = checksum_address(str(row["recipient"]))
+        key = self.vault.private_key(record.address)
+        evm = self.evm(chain)
+        for token in {NATIVE_ADDRESS, meta.address}:
+            await self.syncer.ensure_opening(record, chain, token, evm)
+        async with self._wallet_lock(record.key):
+            balance = await self._balance_raw(chain, record, meta)
+            if balance < amount_raw:
+                raise TradingError(
+                    "trading.insufficient_balance",
+                    f"{record.label} holds {format_amount(balance, meta.decimals)} "
+                    f"{meta.symbol or 'tokens'}, needs "
+                    f"{format_amount(amount_raw, meta.decimals)}",
+                )
+            if meta.native:
+                tx: dict[str, Any] = {
+                    "from": record.address,
+                    "to": recipient,
+                    "data": "0x",
+                    "value": amount_raw,
+                    "chainId": chain.chain_id,
+                }
+            else:
+                tx = {
+                    "from": record.address,
+                    "to": checksum_address(meta.address),
+                    "data": encode_transfer(recipient, amount_raw),
+                    "value": "0",
+                    "chainId": chain.chain_id,
+                }
+            pre_native = await evm.get_balance(record.address)
+            tx_hash = await self._send(chain, record, key, tx, plain=meta.native)
+            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+        await self._watch(
+            order_id, tx_hash, {"in": balance, "out": 0, "native": pre_native}, wait=wait
+        )
+
+    async def _execute_revoke(self, row: dict[str, Any], *, wait: bool) -> None:
+        """``approve(spender, 0)`` on the token; the allowance is gone once it mines."""
+        order_id = str(row["order_id"])
+        chain = CHAINS[int(row["chain_id"])]
+        record = self.vault.get(str(row["wallet"]))
+        meta = await self.token_meta(chain, str(row["token_in"]))
+        spender = str(row["recipient"])
+        key = self.vault.private_key(record.address)
+        evm = self.evm(chain)
+        async with self._wallet_lock(record.key):
+            tx = {
+                "from": record.address,
+                "to": checksum_address(meta.address),
+                "data": encode_approve(spender, 0),
+                "value": "0",
+                "chainId": chain.chain_id,
+            }
+            pre_native = await evm.get_balance(record.address)
+            tx_hash = await self._send(chain, record, key, tx)
+            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+        await self._watch(order_id, tx_hash, {"in": 0, "out": 0, "native": pre_native}, wait=wait)
 
     @staticmethod
     def _tx_value(tx: dict[str, Any]) -> int:
@@ -2180,12 +2925,24 @@ class TradingService:
             )
 
     async def _send(
-        self, chain: ChainSpec, record: WalletRecord, key: bytes, tx: dict[str, Any]
+        self,
+        chain: ChainSpec,
+        record: WalletRecord,
+        key: bytes,
+        tx: dict[str, Any],
+        *,
+        plain: bool = False,
     ) -> str:
+        """Simulate, price, sign and broadcast ``tx`` from ``record``.
+
+        ``plain`` admits empty calldata: a native send carries value and
+        nothing else, which for a provider's swap would mean it forgot the
+        swap.
+        """
         evm = self.evm(chain)
         to = str(tx.get("to") or "")
         data = str(tx.get("data") or "0x")
-        if not to or data in ("", "0x"):
+        if not to or (data in ("", "0x") and not plain):
             raise TradingError("trading.tx_failed", "transaction from the provider is incomplete")
         # eth-account refuses to sign a ``to`` that is not EIP-55 checksummed,
         # and providers disagree about case: Uniswap answers checksummed, the
@@ -2325,11 +3082,177 @@ class TradingService:
             return
         self._settling.add(order_id)
         try:
-            await self._settle(
-                order_id, row, tx_hash, receipt, pre, chain, record, meta_in, meta_out
-            )
+            kind = str(row.get("kind") or "swap")
+            if kind == "send":
+                await self._settle_send(
+                    order_id, row, tx_hash, receipt, pre, chain, record, meta_in
+                )
+            elif kind == "revoke":
+                await self._settle_revoke(order_id, row, tx_hash, receipt, chain, record, meta_in)
+            else:
+                await self._settle(
+                    order_id, row, tx_hash, receipt, pre, chain, record, meta_in, meta_out
+                )
         finally:
             self._settling.discard(order_id)
+
+    async def _gas_usd(self, chain: ChainSpec, gas_wei: int) -> float | None:
+        eth_price = await self.prices.price(chain, NATIVE_ADDRESS)
+        return float(to_human(gas_wei, 18)) * eth_price if eth_price is not None else None
+
+    async def _settle_reverted(
+        self,
+        order_id: str,
+        row: dict[str, Any],
+        tx_hash: str,
+        gas_wei: int,
+        gas_usd: float | None,
+        chain: ChainSpec,
+        record: WalletRecord,
+        *,
+        note: str,
+    ) -> None:
+        self.ledger.update_order(
+            order_id,
+            status="failed",
+            reason="transaction reverted on-chain",
+            gas_wei=str(gas_wei),
+        )
+        self.ledger.insert_entry(
+            ts=self._now(),
+            chain_id=chain.chain_id,
+            wallet=record.key,
+            kind="gas",
+            tx_hash=tx_hash,
+            log_index=0,
+            gas_usd=gas_usd,
+            initiator=str(row["initiator"]),
+            order_id=order_id,
+            note=note,
+        )
+        self._wake(order_id)
+        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+
+    async def _settle_send(
+        self,
+        order_id: str,
+        row: dict[str, Any],
+        tx_hash: str,
+        receipt: dict[str, Any],
+        pre: dict[str, int],
+        chain: ChainSpec,
+        record: WalletRecord,
+        meta: TokenMeta,
+    ) -> None:
+        """Book a mined send as a withdrawal and bring the balance cache along.
+
+        The amount is the order's own: a transfer moves exactly what it says
+        or reverts, so no balance diff is needed — which also means a lagging
+        node (``_native_after``) cannot mis-book it. The cache is set from
+        the pre-send snapshot for the same reason.
+        """
+        evm = self.evm(chain)
+        gas_wei = receipt_gas_wei(receipt)
+        gas_usd = await self._gas_usd(chain, gas_wei)
+        if not receipt_succeeded(receipt):
+            await self._settle_reverted(
+                order_id, row, tx_hash, gas_wei, gas_usd, chain, record, note="reverted send"
+            )
+            return
+        amount = int(row["amount_raw"])
+        recipient = str(row["recipient"])
+        log_index = 0
+        if not meta.native:
+            for t in receipt_transfers(receipt):
+                if t.token == meta.address and t.sender == record.key and t.recipient == recipient:
+                    log_index = t.log_index
+                    break
+        block_number = int(str(receipt.get("blockNumber") or "0x0"), 16)
+        ts = await evm.block_timestamp(block_number) if block_number else None
+        await self.syncer._book_withdraw(
+            record,
+            chain,
+            meta.address,
+            amount,
+            float(ts or self._now()),
+            tx_hash=tx_hash,
+            log_index=log_index,
+            note=row.get("note") or f"sent to {checksum_address(recipient)}",
+            initiator=str(row["initiator"]),
+            order_id=order_id,
+            session_key=row.get("session_key"),
+            gas_usd=gas_usd,
+        )
+        if pre.get("native"):
+            spent_native = amount + gas_wei if meta.native else gas_wei
+            post_native = max(0, pre["native"] - spent_native)
+        else:
+            post_native = await self._native_after(evm, record.address, receipt)
+        self.ledger.set_balance(chain.chain_id, record.key, NATIVE_ADDRESS, post_native)
+        if not meta.native:
+            post_token = max(0, pre["in"] - amount) if pre.get("in") else None
+            if post_token is None:
+                post_token = await self._balance_raw(chain, record, meta)
+            self.ledger.set_balance(chain.chain_id, record.key, meta.address, post_token)
+        settled = self.ledger.update_order(
+            order_id,
+            expect_status="submitted",
+            status="confirmed",
+            reason=None,
+            spent_in_raw=str(amount),
+            gas_wei=str(gas_wei),
+        )
+        if settled is not None and row["initiator"] == "agent" and row.get("value_usd"):
+            self.ledger.add_daily_spend(record.key, float(row["value_usd"]), local_day(self._now()))
+        self._wake(order_id)
+        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
+
+    async def _settle_revoke(
+        self,
+        order_id: str,
+        row: dict[str, Any],
+        tx_hash: str,
+        receipt: dict[str, Any],
+        chain: ChainSpec,
+        record: WalletRecord,
+        meta: TokenMeta,
+    ) -> None:
+        gas_wei = receipt_gas_wei(receipt)
+        gas_usd = await self._gas_usd(chain, gas_wei)
+        if not receipt_succeeded(receipt):
+            await self._settle_reverted(
+                order_id, row, tx_hash, gas_wei, gas_usd, chain, record, note="reverted revoke"
+            )
+            return
+        spender = str(row["recipient"])
+        self.ledger.insert_entry(
+            ts=self._now(),
+            chain_id=chain.chain_id,
+            wallet=record.key,
+            kind="approval",
+            tx_hash=tx_hash,
+            log_index=0,
+            token_in=meta.address,
+            amount_in_raw=0,
+            gas_usd=gas_usd,
+            initiator=str(row["initiator"]),
+            order_id=order_id,
+            session_key=row.get("session_key"),
+            note=row.get("note")
+            or f"revoked {spender_label(spender) or checksum_address(spender)}",
+        )
+        self.ledger.delete_allowance(chain.chain_id, record.key, meta.address, spender)
+        self.ledger.update_order(
+            order_id,
+            expect_status="submitted",
+            status="confirmed",
+            reason=None,
+            gas_wei=str(gas_wei),
+        )
+        self._wake(order_id)
+        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+        await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
 
     @staticmethod
     async def _await_allowance(
@@ -2532,57 +3455,78 @@ class TradingService:
         if event is not None:
             event.set()
 
-    async def approve(self, order_id: str, *, wait: bool = False) -> dict[str, Any]:
+    def _pending_group(self, order_id: str) -> tuple[dict[str, Any], list[str]]:
+        """The order and every order decided with it (its whole batch, when it has one)."""
         row = self.ledger.get_order(order_id)
         if row is None:
             raise TradingError("trading.invalid", f"no order {order_id}")
         if row["status"] != "awaiting_approval":
             raise TradingError("trading.invalid", f"order {order_id} is {row['status']}")
+        batch_id = row.get("batch_id")
+        if not batch_id:
+            return row, [order_id]
+        members = [
+            str(o["order_id"])
+            for o in self.ledger.batch_orders(str(batch_id))
+            if o["status"] == "awaiting_approval"
+        ]
+        return row, members or [order_id]
+
+    async def approve(self, order_id: str, *, wait: bool = False) -> dict[str, Any]:
+        """Run an order the agent parked. Approving one leg of a multisend approves them all."""
+        row, members = self._pending_group(order_id)
         if row.get("expires_at") and float(row["expires_at"]) <= self._now():
-            self.ledger.update_order(
-                order_id, expect_status="awaiting_approval", status="expired", reason="expired"
-            )
+            for member in members:
+                self.ledger.update_order(
+                    member, expect_status="awaiting_approval", status="expired", reason="expired"
+                )
             raise TradingError("trading.quote_expired", f"order {order_id} expired")
         # Compare-and-set: two approvals racing each other both passed the
         # status read above; only the one that flips the row may execute.
-        claimed = self.ledger.update_order(
-            order_id, expect_status="awaiting_approval", status="approved", reason=None
-        )
-        if claimed is None:
+        claimed = [
+            member
+            for member in members
+            if self.ledger.update_order(
+                member, expect_status="awaiting_approval", status="approved", reason=None
+            )
+            is not None
+        ]
+        if not claimed:
             raise TradingError(
                 "trading.invalid", f"order {order_id} is no longer awaiting approval"
             )
-        try:
-            await self._execute(order_id, None, wait=wait)
-        except Exception as exc:
-            error = _err(exc)
-            self.ledger.update_order(order_id, status="failed", reason=f"{error.code}: {error}")
-            await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
-        self._wake(order_id)
-        await self._emit("trading.changed", {"reason": "approval", "orderId": order_id})
+        await self._run_legs(claimed, wait=wait)
+        await self._emit(
+            "trading.changed",
+            {"reason": "approval", "orderId": order_id, "batchId": row.get("batch_id")},
+        )
         return self.get_order(order_id)
 
     async def reject(self, order_id: str, reason: str | None = None) -> dict[str, Any]:
-        row = self.ledger.get_order(order_id)
-        if row is None:
-            raise TradingError("trading.invalid", f"no order {order_id}")
-        if row["status"] != "awaiting_approval":
-            raise TradingError("trading.invalid", f"order {order_id} is {row['status']}")
-        if (
-            self.ledger.update_order(
-                order_id,
+        """Refuse a parked order; a multisend is refused whole."""
+        row, members = self._pending_group(order_id)
+        rejected = [
+            member
+            for member in members
+            if self.ledger.update_order(
+                member,
                 expect_status="awaiting_approval",
                 status="rejected",
                 reason=f"user: {reason}" if reason else "user",
             )
-            is None
-        ):
+            is not None
+        ]
+        if not rejected:
             raise TradingError(
                 "trading.invalid", f"order {order_id} is no longer awaiting approval"
             )
-        self._wake(order_id)
-        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
-        await self._emit("trading.changed", {"reason": "approval", "orderId": order_id})
+        for member in rejected:
+            self._wake(member)
+            await self._emit("trading.order.finished", {"order": self.get_order(member)})
+        await self._emit(
+            "trading.changed",
+            {"reason": "approval", "orderId": order_id, "batchId": row.get("batch_id")},
+        )
         return self.get_order(order_id)
 
     async def wait_order(self, order_id: str, timeout_s: float = 60.0) -> dict[str, Any]:

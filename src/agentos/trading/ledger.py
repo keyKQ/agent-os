@@ -24,11 +24,16 @@ from typing import Any
 from agentos.paths import state_dir
 from agentos.trading.pnl import Lot
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 OPENING_NOTE = "opening balance"
 
 ENTRY_KINDS = ("swap", "deposit", "withdraw", "approval", "gas", "unwrap")
+# What an order does. A swap trades one token for another through a
+# provider; a send moves one token to an address the user named; a revoke
+# sets an ERC-20 allowance back to zero. Sends in one multisend share a
+# batch_id and are decided together.
+ORDER_KINDS = ("swap", "send", "revoke")
 ORDER_STATUSES = (
     "quoted",
     "awaiting_approval",
@@ -158,10 +163,36 @@ CREATE TABLE IF NOT EXISTS orders (
     spent_in_raw TEXT,
     gas_wei TEXT,
     delivered_token TEXT,
-    provider TEXT
+    provider TEXT,
+    kind TEXT NOT NULL DEFAULT 'swap',
+    -- send: where the tokens go; revoke: the spender losing its allowance.
+    recipient TEXT,
+    batch_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_wallet ON orders (wallet, created_at DESC);
+
+-- ERC-20 allowances this wallet has granted, as seen in its Approval logs.
+-- Only the (token, spender) pairs are remembered; the live amount is read
+-- from the chain every time it is asked for, so a revoke never leaves a
+-- stale "still approved" behind.
+CREATE TABLE IF NOT EXISTS allowances (
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    token TEXT NOT NULL,
+    spender TEXT NOT NULL,
+    first_block INTEGER NOT NULL,
+    last_block INTEGER NOT NULL,
+    last_tx_hash TEXT,
+    PRIMARY KEY (chain_id, wallet, token, spender)
+);
+CREATE TABLE IF NOT EXISTS allowance_scan (
+    chain_id INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    last_block INTEGER NOT NULL,
+    updated_at REAL NOT NULL,
+    PRIMARY KEY (chain_id, wallet)
+);
 
 CREATE TABLE IF NOT EXISTS daily_spend (
     wallet TEXT NOT NULL,
@@ -240,6 +271,8 @@ _OPENING_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_entries_opening ON entries "
     "(chain_id, wallet, token_out) WHERE tx_hash IS NULL AND note = 'opening balance'"
 )
+# Created after the version-4 migration has added the column it indexes.
+_BATCH_INDEX = "CREATE INDEX IF NOT EXISTS idx_orders_batch ON orders (batch_id)"
 
 
 def default_ledger_path() -> Path:
@@ -248,6 +281,10 @@ def default_ledger_path() -> Path:
 
 def new_order_id() -> str:
     return "ord_" + uuid.uuid4().hex[:12]
+
+
+def new_batch_id() -> str:
+    return "bat_" + uuid.uuid4().hex[:12]
 
 
 def local_day(ts: float | None = None) -> str:
@@ -303,9 +340,12 @@ class Ledger:
                     self._dedupe_openings()
                 if version < 3:
                     self._add_token_columns()
+                if version < 4:
+                    self._add_order_kind_columns()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
+            self._conn.execute(_BATCH_INDEX)
             self._commit()
 
     def _add_token_columns(self) -> None:
@@ -319,6 +359,17 @@ class Ledger:
         ):
             if column not in have:
                 self._conn.execute(f"ALTER TABLE tokens ADD COLUMN {column} {ddl}")  # noqa: S608
+
+    def _add_order_kind_columns(self) -> None:
+        """Version 4: sends and revokes share the orders table with swaps."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
+        for column, ddl in (
+            ("kind", "TEXT NOT NULL DEFAULT 'swap'"),
+            ("recipient", "TEXT"),
+            ("batch_id", "TEXT"),
+        ):
+            if column not in have:
+                self._conn.execute(f"ALTER TABLE orders ADD COLUMN {column} {ddl}")  # noqa: S608
 
     def _dedupe_openings(self) -> None:
         """Version 1 could book the same opening twice; keep the newest per position."""
@@ -1050,7 +1101,12 @@ class Ledger:
             )
 
     def list_orders(
-        self, *, status: str | None = None, wallet: str | None = None, limit: int = 50
+        self,
+        *,
+        status: str | None = None,
+        wallet: str | None = None,
+        limit: int = 50,
+        kind: str | None = None,
     ) -> list[dict[str, Any]]:
         clauses = ["1=1"]
         params: list[Any] = []
@@ -1061,6 +1117,9 @@ class Ledger:
         if wallet:
             clauses.append("wallet = ?")
             params.append(wallet.lower())
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
         params.append(max(1, min(int(limit), 500)))
         with self._lock:
             return _rows(
@@ -1071,10 +1130,23 @@ class Ledger:
                 )
             )
 
+    def batch_orders(self, batch_id: str) -> list[dict[str, Any]]:
+        """Every order in a multisend, in the order they were created."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE batch_id = ? ORDER BY rowid ASC",
+                    (batch_id,),
+                )
+            )
+
     def count_orders(self, status: str) -> int:
+        """Orders in ``status``; a multisend counts once, however many rows it is."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) AS n FROM orders WHERE status = ?", (status,)
+                "SELECT COUNT(DISTINCT COALESCE(batch_id, order_id)) AS n FROM orders "
+                "WHERE status = ?",
+                (status,),
             ).fetchone()
         return int(row["n"]) if row else 0
 
@@ -1121,6 +1193,85 @@ class Ledger:
                 (wallet.lower(), day),
             ).fetchone()
         return float(row["spent_usd"]) if row else 0.0
+
+    # ── allowances ─────────────────────────────────────────────────────
+
+    def upsert_allowance(
+        self,
+        chain_id: int,
+        wallet: str,
+        token: str,
+        spender: str,
+        *,
+        block: int,
+        tx_hash: str | None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO allowances (chain_id, wallet, token, spender, first_block, "
+                "last_block, last_tx_hash) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(chain_id, wallet, token, spender) DO UPDATE SET "
+                "last_block = MAX(last_block, excluded.last_block), "
+                "last_tx_hash = CASE WHEN excluded.last_block >= last_block "
+                "THEN excluded.last_tx_hash ELSE last_tx_hash END",
+                (
+                    chain_id,
+                    wallet.lower(),
+                    token.lower(),
+                    spender.lower(),
+                    int(block),
+                    int(block),
+                    tx_hash.lower() if tx_hash else None,
+                ),
+            )
+            self._commit()
+
+    def allowances(self, chain_id: int, wallet: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM allowances WHERE chain_id = ? AND wallet = ? "
+                    "ORDER BY last_block DESC",
+                    (chain_id, wallet.lower()),
+                )
+            )
+
+    def delete_allowance(self, chain_id: int, wallet: str, token: str, spender: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM allowances WHERE chain_id = ? AND wallet = ? AND token = ? "
+                "AND spender = ?",
+                (chain_id, wallet.lower(), token.lower(), spender.lower()),
+            )
+            self._commit()
+
+    def allowance_scan(self, chain_id: int, wallet: str) -> dict[str, Any] | None:
+        with self._lock:
+            return _row(
+                self._conn.execute(
+                    "SELECT * FROM allowance_scan WHERE chain_id = ? AND wallet = ?",
+                    (chain_id, wallet.lower()),
+                ).fetchone()
+            )
+
+    def clear_allowance_scan(self, chain_id: int, wallet: str) -> None:
+        """Forget where the scan stopped (a full rescan starts from the wallet's start)."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM allowance_scan WHERE chain_id = ? AND wallet = ?",
+                (chain_id, wallet.lower()),
+            )
+            self._commit()
+
+    def set_allowance_scan(self, chain_id: int, wallet: str, *, last_block: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO allowance_scan (chain_id, wallet, last_block, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(chain_id, wallet) DO UPDATE SET "
+                "last_block = excluded.last_block, updated_at = excluded.updated_at",
+                (chain_id, wallet.lower(), int(last_block), time.time()),
+            )
+            self._commit()
 
     # ── sync state / balances / snapshots ──────────────────────────────
 

@@ -395,11 +395,9 @@ export function SwapPanel({
 
         {ready && quote.isError ? (
           <div className="trd-ticket__error" role="alert">
-            {quoteError?.includes('no_route') || quoteError?.includes('NoRoute') ? (
-              t('trading.swap.noRoute')
-            ) : (
-              quoteError
-            )}
+            {quoteError?.includes('no_route') || quoteError?.includes('NoRoute')
+              ? t('trading.swap.noRoute')
+              : quoteError}
           </div>
         ) : null}
 

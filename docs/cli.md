@@ -803,8 +803,15 @@ agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wai
 agentos trade swap  --chain base --in ETH --out USDC --usd 5     # "$5 of ETH": the engine sizes it at the current price
 agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
-agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--limit N]
+agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
 agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
+agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--wait]
+agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
+agentos trade send --chain base --token USDC --to <a>=10 --to <b>=20 --file recipients.txt   # ADDR=AMOUNT per --to; file lines 'ADDR' or 'ADDR,AMOUNT'
+agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full]   # live ERC-20 allowances, spender labels, exposure
+agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--wait]   # approve(spender, 0)
+agentos trade decode --chain base <txhash> / --data <0x…> [--to <addr>]   # what a transaction called and what moved
+agentos trade network [--fresh]             # head block, block age, gas, RPC latency and health per chain
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
@@ -874,6 +881,25 @@ fail with `trading.price_moved` instead. `--wait` blocks until each order
 settles (`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order
 survives a gateway restart and is marked `failed` after 6 hours without a
 receipt.
+
+Sends and revokes share the order pipeline (`kind` is `swap`, `send` or
+`revoke`). A send moves ETH by value or an ERC-20 by `transfer`, one plain
+transaction per recipient; several `--to` (up to 200, from flags or a
+`--file`) make one **batch** with a shared `batchId` that is judged,
+approved, rejected and reported as one. Guardrails differ from swaps on
+purpose: an **agent-initiated** send or revoke always waits for the user's
+approval — there is no threshold under which the agent sends alone — while
+the daily cap still counts the batch's total; a send typed by a person runs
+at once. Each leg is booked as a `withdraw` entry under its order. `trade
+allowances` scans the wallet's own `Approval` logs incrementally, reads
+every remembered (token, spender) allowance live, and shows what is at
+stake (`exposureUsd` = the smaller of the allowance and the balance, in
+dollars); `trade revoke` sends `approve(spender, 0)`. `trade decode` names
+the function behind a hash or calldata (ERC-20, WETH, Permit2 and the
+Uniswap routers are known; anything else is reported as its selector, never
+guessed) and lists the receipt's transfers and approvals with token
+metadata. `trade network` reads each chain's head block and gas and flags a
+head older than a minute — the sign of an RPC that is behind.
 
 `[trading]` config keys (each also an environment variable with the
 `AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |

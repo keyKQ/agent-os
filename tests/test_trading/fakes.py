@@ -18,12 +18,14 @@ import httpx
 
 from agentos.trading.aggregator import NATIVE_SENTINEL as AGG_NATIVE
 from agentos.trading.evm import (
+    APPROVAL_TOPIC,
     SEL_ALLOWANCE,
     SEL_APPROVE,
     SEL_BALANCE_OF,
     SEL_DECIMALS,
     SEL_NAME,
     SEL_SYMBOL,
+    SEL_TRANSFER,
     TRANSFER_TOPIC,
     pad_address,
     pad_uint,
@@ -77,6 +79,26 @@ def transfer_log(
     }
 
 
+def approval_log(
+    *,
+    tx_hash: str,
+    log_index: int,
+    block: int,
+    token: str,
+    owner: str,
+    spender: str,
+    amount: int,
+) -> dict[str, Any]:
+    return {
+        "address": token,
+        "topics": [APPROVAL_TOPIC, "0x" + pad_address(owner), "0x" + pad_address(spender)],
+        "data": _enc_uint(amount),
+        "blockNumber": hex(block),
+        "transactionHash": tx_hash,
+        "logIndex": hex(log_index),
+    }
+
+
 @dataclass
 class FakeChain:
     chain_id: int
@@ -86,6 +108,8 @@ class FakeChain:
     tokens: dict[str, tuple[str, str, int]] = field(default_factory=dict)
     logs: list[dict[str, Any]] = field(default_factory=list)
     receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: ``eth_getTransactionByHash`` answers, keyed by lowercase hash.
+    transactions: dict[str, dict[str, Any]] = field(default_factory=dict)
     nonces: dict[str, int] = field(default_factory=dict)
     sent: list[str] = field(default_factory=list)
     calls: list[dict[str, Any]] = field(default_factory=list)
@@ -132,6 +156,29 @@ class FakeChain:
             str(tx.get("to") or ""), owner, "0x" + data[10:74][-40:], int(data[74:138], 16)
         )
         return True
+
+    def apply_transfer(self, sender: str, tx: dict[str, Any]) -> tuple[str, int] | None:
+        """Move what a ``transfer(to, amount)`` calldata says; ``(recipient, amount)`` or None."""
+        data = str(tx.get("data") or "")
+        if not data.startswith(SEL_TRANSFER) or len(data) < 138:
+            return None
+        token = str(tx.get("to") or "").lower()
+        recipient = "0x" + data[10:74][-40:]
+        amount = int(data[74:138], 16)
+        self.set_erc20(token, sender, self.get_erc20(token, sender) - amount)
+        self.set_erc20(token, recipient, self.get_erc20(token, recipient) + amount)
+        return recipient, amount
+
+    def record_transaction(self, tx_hash: str, tx: dict[str, Any]) -> None:
+        """Remember a signed tx so ``eth_getTransactionByHash`` can answer for it."""
+        self.transactions[tx_hash.lower()] = {
+            "hash": tx_hash,
+            "from": str(tx.get("from") or ""),
+            "to": str(tx.get("to") or ""),
+            "input": str(tx.get("data") or "0x"),
+            "value": hex(int(tx.get("value") or 0)),
+            "nonce": hex(int(tx.get("nonce") or 0)),
+        }
 
     def get_erc20(self, token: str, address: str) -> int:
         return self.erc20.get(token.lower(), {}).get(address.lower(), 0)
@@ -219,6 +266,8 @@ class FakeChain:
             return "0x" + format(0xABC000 + self._seq, "x").rjust(64, "0")
         if method == "eth_getTransactionReceipt":
             return self.receipts.get(str(params[0]).lower())
+        if method == "eth_getTransactionByHash":
+            return self.transactions.get(str(params[0]).lower())
         if method == "eth_getCode":
             # A node reports bytecode only where a contract actually is. The
             # fake has to as well, or nothing can test "not on this chain".
@@ -242,6 +291,12 @@ class FakeChain:
             owner = "0x" + data[10:74][-40:]
             spender = "0x" + data[74:138][-40:]
             return _enc_uint(self.get_allowance(to, owner, spender))
+        if selector == SEL_TRANSFER:
+            # Simulated transfer: revert when the sender cannot cover it.
+            sender = str(tx.get("from") or "").lower()
+            if sender and self.get_erc20(to, sender) < int(data[74:138], 16):
+                raise _RpcFailError("execution reverted: ERC20: transfer amount exceeds balance")
+            return _enc_uint(1)
         meta = self.tokens.get(to)
         if selector == SEL_SYMBOL:
             return _enc_string(meta[0]) if meta else "0x"

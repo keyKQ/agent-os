@@ -608,6 +608,10 @@ class WalletSyncer:
         note: str | None = None,
         meta: TokenMeta | None = None,
         priced: Priced | None = None,
+        initiator: str = "external",
+        order_id: str | None = None,
+        session_key: str | None = None,
+        gas_usd: float | None = None,
     ) -> bool:
         meta = meta or await self._token_meta(chain, token)
         price, source = priced if priced is not None else await self._price_for(chain, token, ts)
@@ -624,7 +628,10 @@ class WalletSyncer:
             value_usd=value,
             price_in_usd=price,
             cost_basis_source=source,
-            initiator="external",
+            initiator=initiator,
+            order_id=order_id,
+            session_key=session_key,
+            gas_usd=gas_usd,
             note=note,
         )
         if entry_id is None:

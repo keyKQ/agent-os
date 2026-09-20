@@ -81,7 +81,11 @@ export function Overview({
         <div className="trd-hero__tools">
           {provider ? (
             <span className="trd-venue" data-testid="provider-pill">
-              {providerMark(provider) ? <ProviderMark id={provider} size={13} /> : <i aria-hidden />}
+              {providerMark(provider) ? (
+                <ProviderMark id={provider} size={13} />
+              ) : (
+                <i aria-hidden />
+              )}
               {providerLabel(provider)}
             </span>
           ) : null}

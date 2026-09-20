@@ -8,6 +8,7 @@ import {
   Hourglass,
   ListChecks,
   PackageOpen,
+  Search,
   SendHorizontal,
   ShieldAlert,
   ShieldCheck,
@@ -113,6 +114,7 @@ export function Orders({
   showWallet,
   highlight,
   onHighlighted,
+  onInspect,
 }: {
   orders: Order[]
   approvalsOnly: boolean
@@ -123,6 +125,8 @@ export function Orders({
   highlight: string | null
   /** The row has been brought into view: the owner may drop the highlight. */
   onHighlighted?: () => void
+  /** Open the decoder on this order's transaction. */
+  onInspect?: (order: Order) => void
 }) {
   // Approval timers count down by the second; nothing else on the page does.
   const now = useNow(1000)
@@ -154,6 +158,7 @@ export function Orders({
           showWallet={showWallet}
           highlighted={highlight === o.orderId}
           onHighlighted={onHighlighted}
+          onInspect={onInspect}
         />
       ))}
     </div>
@@ -180,6 +185,49 @@ function Fact({
   )
 }
 
+/** The headline of a row: a swap's two legs, a send's destination, a revoke's spender. */
+function Legs({ order }: { order: Order }) {
+  const kind = order.kind ?? 'swap'
+  if (kind === 'send') {
+    return (
+      <>
+        <span className="trd-order__leg">
+          {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
+        </span>
+        <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
+        <span className="trd-order__leg trd-mono" title={order.recipient ?? ''}>
+          {order.recipientLabel ?? shortAddress(order.recipient ?? '')}
+        </span>
+      </>
+    )
+  }
+  if (kind === 'revoke') {
+    return (
+      <>
+        <span className="trd-order__leg">
+          <i>{t('trading.orders.kind.revoke')}</i> {order.tokenIn.symbol}
+        </span>
+        <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
+        <span className="trd-order__leg trd-mono" title={order.recipient ?? ''}>
+          {order.recipientLabel ?? shortAddress(order.recipient ?? '')}
+        </span>
+      </>
+    )
+  }
+  return (
+    <>
+      <span className="trd-order__leg">
+        {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
+      </span>
+      <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
+      <span className="trd-order__leg">
+        {order.expectedOut ? `${formatAmount(order.expectedOut)} ` : ''}
+        <i>{order.tokenOut.symbol}</i>
+      </span>
+    </>
+  )
+}
+
 function OrderRow({
   order,
   now,
@@ -188,6 +236,7 @@ function OrderRow({
   showWallet,
   highlighted,
   onHighlighted,
+  onInspect,
 }: {
   order: Order
   now: number
@@ -196,6 +245,7 @@ function OrderRow({
   showWallet: boolean
   highlighted: boolean
   onHighlighted?: () => void
+  onInspect?: (order: Order) => void
 }) {
   // Scroll once when the highlight lands, not on every tick of the timer.
   const rowRef = useRef<HTMLDivElement>(null)
@@ -218,6 +268,7 @@ function OrderRow({
       className="trd-order"
       data-status={order.status}
       data-tone={tone}
+      data-kind={order.kind ?? 'swap'}
       data-testid="order-row"
       ref={rowRef}
     >
@@ -226,14 +277,7 @@ function OrderRow({
       </span>
 
       <div className="trd-order__head">
-        <span className="trd-order__leg">
-          {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
-        </span>
-        <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
-        <span className="trd-order__leg">
-          {order.expectedOut ? `${formatAmount(order.expectedOut)} ` : ''}
-          <i>{order.tokenOut.symbol}</i>
-        </span>
+        <Legs order={order} />
       </div>
 
       <div className="trd-order__value" title={formatUsd(order.valueUsd)}>
@@ -248,6 +292,18 @@ function OrderRow({
       </div>
 
       <div className="trd-order__link">
+        {order.txHash && onInspect ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={t('trading.decode.open')}
+            title={t('trading.decode.open')}
+            onClick={() => onInspect(order)}
+            data-testid="order-inspect"
+          >
+            <Search className="size-3.5 text-muted-foreground" strokeWidth={1.75} aria-hidden />
+          </Button>
+        ) : null}
         {order.explorerUrl ? (
           <Button
             variant="ghost"
@@ -271,8 +327,13 @@ function OrderRow({
         </span>
         <span className="trd-order__fact">
           <ChainBadge chainId={order.chainId} />
-          {order.provider ? (
+          {order.provider && (order.kind ?? 'swap') === 'swap' ? (
             <span>{`${t('trading.provider.via')} ${providerLabel(order.provider)}`}</span>
+          ) : null}
+          {order.batchId ? (
+            <span className="trd-mono" title={order.batchId}>
+              {t('trading.orders.batch')} {order.batchId.slice(4, 10)}
+            </span>
           ) : null}
         </span>
         {showWallet ? (

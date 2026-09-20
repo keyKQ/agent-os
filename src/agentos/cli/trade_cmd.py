@@ -9,7 +9,9 @@ threshold and the per-wallet daily cap; a swap typed by a person is not.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from typing import Any
 
 import typer
@@ -144,26 +146,34 @@ def _order_rows(result: Any) -> list[dict[str, Any]]:
     return [o for o in orders if isinstance(o, dict)]
 
 
+def _order_legs(order: dict[str, Any]) -> str:
+    """Legs in one phrase: "10 USDC → WETH", "10 USDC → 0x2222…2222", or the spender of a revoke."""
+    kind = str(order.get("kind") or "swap")
+    amount = f"{amount_text(order.get('amountIn'))} {token_symbol(order.get('tokenIn'))}"
+    if kind == "send":
+        return f"{amount} → {short_address(order.get('recipient'))}"
+    if kind == "revoke":
+        who = order.get("recipientLabel") or short_address(order.get("recipient"))
+        return f"revoke {token_symbol(order.get('tokenIn'))} for {who}"
+    return f"{amount} → {token_symbol(order.get('tokenOut'))}"
+
+
 def _order_table(orders: list[dict[str, Any]], title: str = "Orders") -> Table:
     table = Table(title=title, show_header=True, header_style=ACCENT_HEADER)
     table.add_column("Order")
     table.add_column("Chain")
     table.add_column("Wallet")
-    table.add_column("Swap")
+    table.add_column("Legs")
     table.add_column("Value", justify="right")
     table.add_column("Status")
     table.add_column("Tx / reason")
     for order in orders:
-        swap = (
-            f"{amount_text(order.get('amountIn'))} {token_symbol(order.get('tokenIn'))} → "
-            f"{token_symbol(order.get('tokenOut'))}"
-        )
         tail = order.get("txHash") or order.get("reason") or ""
         table.add_row(
             str(order.get("orderId") or ""),
             chain_label(order.get("chainId")),
             short_address(order.get("wallet")),
-            markup_escape(swap),
+            markup_escape(_order_legs(order)),
             money(order.get("valueUsd")),
             str(order.get("status") or ""),
             markup_escape(str(tail)),
@@ -175,15 +185,27 @@ def _print_order(order: dict[str, Any]) -> None:
     table = Table(title=f"Order {order.get('orderId') or ''}", show_header=False)
     table.add_column("Field", style=ACCENT)
     table.add_column("Value")
+    kind = str(order.get("kind") or "swap")
+    recipient = order.get("recipient")
+    if recipient and order.get("recipientLabel"):
+        recipient = f"{recipient} ({order['recipientLabel']})"
     for field, value in (
+        ("kind", kind if kind != "swap" else None),
+        ("batch", order.get("batchId")),
         ("status", order.get("status")),
         ("reason", order.get("reason")),
         ("chain", chain_label(order.get("chainId"))),
         ("wallet", order.get("wallet")),
-        ("in", f"{amount_text(order.get('amountIn'))} {token_symbol(order.get('tokenIn'))}"),
+        ("to" if kind == "send" else "spender", recipient),
+        (
+            "allowance" if kind == "revoke" else "in",
+            f"{amount_text(order.get('amountIn'))} {token_symbol(order.get('tokenIn'))}",
+        ),
         (
             "out",
-            f"{amount_text(order.get('expectedOut'))} {token_symbol(order.get('tokenOut'))}",
+            f"{amount_text(order.get('expectedOut'))} {token_symbol(order.get('tokenOut'))}"
+            if kind == "swap"
+            else None,
         ),
         ("min out", order.get("minOut")),
         ("value", money(order.get("valueUsd"))),
@@ -611,10 +633,459 @@ def trade_swap(
             )
 
 
+def _parse_recipient(text: str) -> tuple[str, str | None]:
+    """``0xabc`` or ``0xabc=10`` → (address, amount or None)."""
+    raw = text.strip()
+    if "=" in raw:
+        address, amount = raw.split("=", 1)
+    elif "," in raw:
+        address, amount = raw.split(",", 1)
+    elif len(raw.split()) == 2:
+        address, amount = raw.split()
+    else:
+        address, amount = raw, ""
+    address = address.strip()
+    amount = amount.strip()
+    if not is_address(address):
+        raise ValueError(f"not an address: {address!r}")
+    if amount and not amount.replace(".", "", 1).isdigit():
+        raise ValueError(f"not an amount: {amount!r} for {address}")
+    return address, amount or None
+
+
+def _recipients_from(
+    to: list[str] | None,
+    path: str | None,
+    amount: str | None,
+    usd: float | None,
+    *,
+    json_output: bool,
+) -> list[dict[str, Any]]:
+    """Recipients from ``--to`` and/or a file, each sized by its own amount or the shared one."""
+    entries: list[str] = list(to or [])
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    text = line.split("#", 1)[0].strip()
+                    if text:
+                        entries.append(text)
+        except OSError as exc:
+            _bad_argument(f"cannot read {path}: {exc}", json_output=json_output)
+    if not entries:
+        _bad_argument("Give at least one --to, or --file", json_output=json_output)
+    recipients: list[dict[str, Any]] = []
+    for entry in entries:
+        try:
+            address, own = _parse_recipient(entry)
+        except ValueError as exc:
+            _bad_argument(str(exc), json_output=json_output)
+            return []
+        item: dict[str, Any] = {"to": address}
+        if own is not None:
+            if usd is not None:
+                _bad_argument(
+                    f"{address} carries its own amount; --usd cannot also size it",
+                    json_output=json_output,
+                )
+            item["amount"] = own
+        elif amount is not None:
+            item["amount"] = amount
+        elif usd is not None:
+            item["amountUsd"] = usd
+        else:
+            _bad_argument(
+                f"{address} has no amount: add =<amount> to it, or pass --amount / --usd",
+                json_output=json_output,
+            )
+        recipients.append(item)
+    return recipients
+
+
+@app.command("send")
+def trade_send(
+    chain: str = typer.Option(..., "--chain", help="base or robinhood"),
+    token: str = typer.Option(..., "--token", help="Token to send: symbol, address, or ETH"),
+    to: list[str] | None = typer.Option(
+        None,
+        "--to",
+        help="Recipient address, optionally with its own amount as ADDR=AMOUNT (repeatable)",
+    ),
+    file: str | None = typer.Option(
+        None, "--file", help="Recipients file: one 'ADDR' or 'ADDR,AMOUNT' per line; # comments"
+    ),
+    amount: str | None = typer.Option(
+        None, "--amount", help="Amount for every recipient without its own, human units"
+    ),
+    usd: float | None = typer.Option(
+        None, "--usd", help="US dollars' worth of --token for every recipient without its own"
+    ),
+    wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    wait: bool = typer.Option(False, "--wait", help="Block until every leg settles"),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks per leg", min=1, max=900
+    ),
+    as_agent: bool = typer.Option(
+        False, "--as-agent", help="Apply the agent rules (every send waits for approval)"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Send a token to one or many addresses. Several --to make one multisend, decided once."""
+
+    if amount is not None and usd is not None:
+        _bad_argument("Use one of --amount or --usd, not both", json_output=json_output)
+    if usd is not None and usd <= 0:
+        _bad_argument("--usd must be above 0", json_output=json_output)
+    chain_id = chain_id_from_arg(chain)
+    recipients = _recipients_from(to, file, amount, usd, json_output=json_output)
+    initiator = initiator_for(as_agent)
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+
+    async def _run(client):
+        params: dict[str, Any] = {
+            "chainId": chain_id,
+            "token": await resolve_token(client, chain_id, token),
+            "recipients": recipients,
+            "initiator": initiator,
+        }
+        if wallet:
+            params["wallet"] = wallet
+        if note:
+            params["note"] = note
+        if session_key:
+            params["sessionKey"] = session_key
+        result = await client.call("trading.send", params)
+        if not wait:
+            return result
+        settled: list[dict[str, Any]] = []
+        for order in _order_rows(result):
+            order_id = order.get("orderId")
+            if order_id and order.get("status") in _PENDING_STATUSES:
+                waited = await client.call(
+                    "trading.orders.wait", {"orderId": order_id, "timeoutSeconds": wait_seconds}
+                )
+                waited_order = waited.get("order") if isinstance(waited, dict) else None
+                settled.append(waited_order if isinstance(waited_order, dict) else order)
+            else:
+                settled.append(order)
+        return {"orders": settled, "batchId": result.get("batchId")}
+
+    try:
+        result = run_gateway_sync(_run, json_output=json_output)
+    except TokenResolutionError as exc:
+        _exit_token_error(exc, json_output=json_output)
+        return
+    if json_output:
+        print_json(result)
+        return
+    orders = _order_rows(result)
+    title = f"Send ({initiator})" if len(orders) == 1 else f"Multisend ({initiator})"
+    console.print(_order_table(orders, title=title))
+    waiting = [o for o in orders if o.get("status") == "awaiting_approval"]
+    if waiting:
+        first = waiting[0]
+        console.print(
+            f"Waiting for approval in the app (or: agentos trade approve {first.get('orderId')}"
+            + (" — one approval covers the whole batch)." if len(waiting) > 1 else ").")
+        )
+
+
+@app.command("allowances")
+def trade_allowances(
+    chain: str | None = typer.Option(None, "--chain", help="base or robinhood (default: both)"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
+    full: bool = typer.Option(False, "--full", help="Rescan the chain from the wallet's start"),
+    wait: bool = typer.Option(
+        True,
+        "--wait/--no-wait",
+        help="Keep polling until the engine's log scan has caught up with the chain",
+    ),
+    wait_seconds: int = typer.Option(
+        600, "--wait-seconds", help="How long --wait polls at most", min=1, max=3600
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """What this wallet has approved others to spend, with live amounts and exposure."""
+
+    params: dict[str, Any] = {}
+    if chain:
+        params["chainId"] = chain_id_from_arg(chain)
+    if wallet:
+        params["wallet"] = wallet
+    if full:
+        params["full"] = True
+
+    async def _run(client):
+        # The engine scans in the background and answers at once with what it
+        # has; short polls keep every RPC well inside its timeout, however
+        # long a first pass over a 0.1 s chain takes.
+        result = await client.call("trading.allowances.list", params)
+        if not wait:
+            return result
+        deadline = time.monotonic() + wait_seconds
+        again = {k: v for k, v in params.items() if k != "full"}
+        while isinstance(result, dict) and result.get("scanning") and time.monotonic() < deadline:
+            await asyncio.sleep(2.0)
+            result = await client.call("trading.allowances.list", again)
+        return result
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    if json_output:
+        print_json(result)
+        return
+    result = _dict(result)
+    rows = [a for a in result.get("allowances", []) if isinstance(a, dict)]
+    table = Table(
+        title=f"Allowances for {short_address(result.get('wallet'))}",
+        show_header=True,
+        header_style=ACCENT_HEADER,
+    )
+    table.add_column("Chain")
+    table.add_column("Token")
+    table.add_column("Spender")
+    table.add_column("Allowance", justify="right")
+    table.add_column("Held", justify="right")
+    table.add_column("At stake", justify="right")
+    table.add_column("Granted in")
+    for row in rows:
+        spender = row.get("spenderLabel") or short_address(row.get("spender"))
+        allowance = row.get("allowance")
+        if row.get("readFailed"):
+            allowance = "?"
+        table.add_row(
+            chain_label(row.get("chainId")),
+            markup_escape(token_symbol(row.get("token"))),
+            markup_escape(str(spender)),
+            f"[red]{allowance}[/red]" if row.get("unlimited") else amount_text(allowance),
+            amount_text(row.get("balance")),
+            money(row.get("exposureUsd")),
+            short_address(row.get("lastTxHash")) if row.get("lastTxHash") else "",
+        )
+    console.print(table)
+    if not rows:
+        console.print("No live allowances.")
+    if result.get("scanning"):
+        console.print(
+            "[dim]The engine is still scanning older blocks; run again in a moment "
+            "for the complete list.[/dim]"
+        )
+    unlimited = int(result.get("unlimitedCount") or 0)
+    if unlimited:
+        console.print(
+            f"[yellow]{unlimited} unlimited allowance(s).[/yellow] Revoke with: "
+            "agentos trade revoke --chain <chain> --token <addr> --spender <addr>"
+        )
+
+
+@app.command("revoke")
+def trade_revoke(
+    chain: str = typer.Option(..., "--chain", help="base or robinhood"),
+    token: str = typer.Option(..., "--token", help="Token: symbol or address"),
+    spender: str = typer.Option(..., "--spender", help="Spender address to cut off"),
+    wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
+    note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    wait: bool = typer.Option(False, "--wait", help="Block until the revoke settles"),
+    wait_seconds: int = typer.Option(300, "--wait-seconds", min=1, max=900),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Set an ERC-20 allowance to zero. From an agent turn this queues for the user's approval."""
+
+    if not is_address(spender):
+        _bad_argument(f"--spender must be an address, got {spender!r}", json_output=json_output)
+    chain_id = chain_id_from_arg(chain)
+    session_key = os.environ.get("AGENTOS_SESSION_KEY", "").strip()
+
+    async def _run(client):
+        params: dict[str, Any] = {
+            "chainId": chain_id,
+            "token": await resolve_token(client, chain_id, token),
+            "spender": spender,
+            "initiator": initiator_for(False),
+        }
+        if wallet:
+            params["wallet"] = wallet
+        if note:
+            params["note"] = note
+        if session_key:
+            params["sessionKey"] = session_key
+        result = await client.call("trading.allowances.revoke", params)
+        order = result.get("order") if isinstance(result, dict) else None
+        if wait and isinstance(order, dict) and order.get("status") in _PENDING_STATUSES:
+            waited = await client.call(
+                "trading.orders.wait",
+                {"orderId": order.get("orderId"), "timeoutSeconds": wait_seconds},
+            )
+            return waited if isinstance(waited, dict) else result
+        return result
+
+    try:
+        result = run_gateway_sync(_run, json_output=json_output)
+    except TokenResolutionError as exc:
+        _exit_token_error(exc, json_output=json_output)
+        return
+    if json_output:
+        print_json(result)
+        return
+    order = result.get("order") if isinstance(result, dict) else None
+    _print_order(order if isinstance(order, dict) else {})
+    if isinstance(order, dict) and order.get("status") == "awaiting_approval":
+        console.print(
+            f"Waiting for approval in the app (or: agentos trade approve {order.get('orderId')})."
+        )
+
+
+@app.command("decode")
+def trade_decode(
+    tx_hash: str | None = typer.Argument(None, help="Transaction hash to explain"),
+    chain: str = typer.Option(..., "--chain", help="base or robinhood"),
+    data: str | None = typer.Option(None, "--data", help="Raw calldata instead of a hash"),
+    to: str | None = typer.Option(None, "--to", help="Target contract for --data (optional)"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Explain a transaction (what it called, what moved) or raw calldata."""
+
+    if (tx_hash is None) == (data is None):
+        _bad_argument("Give a transaction hash, or --data", json_output=json_output)
+    chain_id = chain_id_from_arg(chain)
+    params: dict[str, Any] = {"chainId": chain_id}
+    if tx_hash:
+        params["txHash"] = tx_hash
+    else:
+        params["data"] = data
+        if to:
+            params["to"] = to
+
+    async def _run(client):
+        return await client.call("trading.decode", params)
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    if json_output:
+        print_json(result)
+        return
+    result = _dict(result)
+    call = _dict(result.get("call"))
+    console.print(f"[{ACCENT}]{markup_escape(str(result.get('description') or ''))}[/]")
+    table = Table(show_header=False)
+    table.add_column("Field", style=ACCENT)
+    table.add_column("Value")
+    tx = _dict(result.get("tx"))
+    decoded = _dict(result.get("decoded"))
+    to_label = result.get("toLabel") or token_symbol(result.get("toToken")) or ""
+    target = str(result.get("to") or "")
+    for field, value in (
+        ("function", call.get("function") or f"{call.get('selector')} (unknown)"),
+        ("to", f"{target} ({to_label})" if to_label else target),
+        ("status", tx.get("status")),
+        ("from", tx.get("from")),
+        ("block", tx.get("blockNumber")),
+        ("value", f"{tx.get('valueWei')} wei" if tx.get("valueWei") not in (None, "0") else None),
+        ("gas used", tx.get("gasUsed")),
+        (
+            decoded.get("function") or "",
+            (
+                f"{amount_text(decoded.get('amount'))} {token_symbol(decoded.get('token'))} "
+                f"→ {decoded.get('counterparty')}"
+                + (f" ({decoded['counterpartyLabel']})" if decoded.get("counterpartyLabel") else "")
+            )
+            if decoded
+            else None,
+        ),
+        ("explorer", result.get("explorerUrl")),
+    ):
+        if value in (None, "", "—"):
+            continue
+        table.add_row(field, markup_escape(str(value)))
+    console.print(table)
+    transfers = [t for t in result.get("transfers", []) if isinstance(t, dict)]
+    if transfers:
+        moved = Table(title="Transfers", show_header=True, header_style=ACCENT_HEADER)
+        moved.add_column("Token")
+        moved.add_column("Amount", justify="right")
+        moved.add_column("From")
+        moved.add_column("To")
+        for t in transfers:
+            moved.add_row(
+                markup_escape(token_symbol(t.get("token"))),
+                amount_text(t.get("amount")),
+                short_address(t.get("from")),
+                short_address(t.get("to")),
+            )
+        console.print(moved)
+    approvals = [a for a in result.get("approvals", []) if isinstance(a, dict)]
+    if approvals:
+        granted = Table(title="Approvals", show_header=True, header_style=ACCENT_HEADER)
+        granted.add_column("Token")
+        granted.add_column("Owner")
+        granted.add_column("Spender")
+        granted.add_column("Amount", justify="right")
+        for a in approvals:
+            granted.add_row(
+                markup_escape(token_symbol(a.get("token"))),
+                short_address(a.get("owner")),
+                markup_escape(str(a.get("spenderLabel") or short_address(a.get("spender")))),
+                f"[red]{a.get('amount')}[/red]"
+                if a.get("unlimited")
+                else amount_text(a.get("amount")),
+            )
+        console.print(granted)
+    wallets = result.get("wallets") or []
+    if wallets:
+        console.print(f"Involves your wallet(s): {', '.join(short_address(w) for w in wallets)}")
+
+
+@app.command("network")
+def trade_network(
+    fresh: bool = typer.Option(False, "--fresh", help="Skip the engine's short cache"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+) -> None:
+    """Head block, block age, gas and RPC latency for every chain."""
+
+    params: dict[str, Any] = {"fresh": True} if fresh else {}
+
+    async def _run(client):
+        return await client.call("trading.network", params)
+
+    result = run_gateway_sync(_run, json_output=json_output)
+    if json_output:
+        print_json(result)
+        return
+    rows = [r for r in _dict(result).get("chains", []) if isinstance(r, dict)]
+    table = Table(title="Network", show_header=True, header_style=ACCENT_HEADER)
+    table.add_column("Chain")
+    table.add_column("RPC")
+    table.add_column("Head", justify="right")
+    table.add_column("Age", justify="right")
+    table.add_column("Base fee", justify="right")
+    table.add_column("Tip", justify="right")
+    table.add_column("Latency", justify="right")
+    table.add_column("Healthy")
+    for row in rows:
+        age = row.get("blockAgeS")
+        base_fee = row.get("baseFeeGwei")
+        tip = row.get("priorityFeeGwei")
+        latency = row.get("latencyMs")
+        healthy = row.get("healthy")
+        table.add_row(
+            str(row.get("name") or row.get("key") or ""),
+            markup_escape(str(row.get("rpcUrl") or "")),
+            str(row.get("blockNumber") or "—"),
+            f"{age} s" if age is not None else "—",
+            f"{base_fee:.4f} gwei" if isinstance(base_fee, int | float) else "—",
+            f"{tip:.4f} gwei" if isinstance(tip, int | float) else "—",
+            f"{latency} ms" if latency is not None else "—",
+            "[green]yes[/green]"
+            if healthy
+            else f"[red]no[/red] {markup_escape(str(row.get('error') or ''))}".strip(),
+        )
+    console.print(table)
+
+
 @app.command("orders")
 def trade_orders(
     status: str | None = typer.Option(None, "--status", help="Filter by status"),
     wallet: str | None = typer.Option(None, "--wallet", help="Filter by wallet address"),
+    kind: str | None = typer.Option(None, "--kind", help="swap, send or revoke"),
     limit: int = typer.Option(50, "--limit", help="Max rows", min=1, max=500),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
@@ -625,6 +1096,10 @@ def trade_orders(
         params["status"] = status
     if wallet:
         params["wallet"] = wallet
+    if kind:
+        if kind not in ("swap", "send", "revoke"):
+            _bad_argument("--kind must be swap, send or revoke", json_output=json_output)
+        params["kind"] = kind
 
     async def _run(client):
         return await client.call("trading.orders.list", params)

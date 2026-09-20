@@ -542,7 +542,10 @@ agentos trade probe --provider uniswap  # reachable? key valid? (exit 1 when not
 agentos trade tokens --chain robinhood AAPL --json     # verified Stock Tokens are flagged
 agentos trade quote --chain base --in ETH --out USDC --amount 0.01 --json
 agentos trade swap --chain base --in ETH --out USDC --amount 0.01 --wait --json
-agentos trade orders --status awaiting_approval / approve <id> / reject <id>
+agentos trade orders --status awaiting_approval [--kind swap|send|revoke] / approve <id> / reject <id>
+agentos trade send --chain base --token USDC --to <addr> --amount 25 --json   # several --to = one batch; agent sends always wait for approval
+agentos trade allowances --json / revoke --chain base --token <addr> --spender <addr>   # live ERC-20 allowances; approve(spender, 0)
+agentos trade decode --chain base <txhash> --json / network --json   # explain a tx; head block, gas, RPC health
 agentos trade portfolio / history / limits <addr>
 agentos config set trading.uniswap_api_key <key>       # or Settings › Trading in the app
 agentos cron list / add / run <id> / runs

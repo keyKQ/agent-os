@@ -11,13 +11,17 @@ import { useConnection } from '@/stores/connection'
 import { QUOTE_REFRESH_MS } from '~/views/trading/logic'
 import { CHAINS } from '~/views/trading/types'
 import type {
+  AllowanceList,
   Balance,
   ChainRead,
   Chart,
   ChartRange,
+  Decoded,
   Entry,
   Limits,
+  NetworkStatus,
   Order,
+  OrderKind,
   OrderStatus,
   Portfolio,
   ProbeResult,
@@ -47,13 +51,23 @@ export const TRADING_KEYS = {
   balances: (wallet?: string) => ['trading', 'balances', wallet ?? 'all'] as const,
   // `limit` and `wallet` shape the answer, so two callers asking for
   // different pages must not share one cache entry.
-  orders: (status?: OrderStatus, limit?: number, wallet?: string) =>
-    ['trading', 'orders', status ?? 'any', limit ?? 'default', wallet ?? 'all'] as const,
+  orders: (status?: OrderStatus, limit?: number, wallet?: string, kind?: OrderKind) =>
+    [
+      'trading',
+      'orders',
+      status ?? 'any',
+      limit ?? 'default',
+      wallet ?? 'all',
+      kind ?? 'any',
+    ] as const,
   history: (wallet?: string, chainId?: number) =>
     ['trading', 'history', wallet ?? 'all', chainId ?? 'all'] as const,
   limits: (wallet: string) => ['trading', 'limits', wallet] as const,
   chart: (chainId: number, token: string, range: string) =>
     ['trading', 'chart', chainId, token.toLowerCase(), range] as const,
+  allowances: (wallet?: string, chainId?: number) =>
+    ['trading', 'allowances', wallet ?? 'primary', chainId ?? 'all'] as const,
+  network: ['trading', 'network'] as const,
 }
 
 /** Gateway events after which trading data is stale. */
@@ -212,17 +226,19 @@ export function useOrders(
   enabled = true,
   limit = 50,
   wallet?: string,
+  kind?: OrderKind,
 ) {
   const rpc = useRpc()
   const connected = useConnected()
   const query = useQuery<OrderList>({
-    queryKey: TRADING_KEYS.orders(status, limit, wallet),
+    queryKey: TRADING_KEYS.orders(status, limit, wallet, kind),
     enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
       return rpc.call<OrderList>('trading.orders.list', {
         ...(status ? { status } : {}),
         ...(wallet ? { wallet } : {}),
+        ...(kind ? { kind } : {}),
         limit,
       })
     },
@@ -372,6 +388,107 @@ export function useSwap() {
     mutationFn: (params: SwapParams) =>
       rpc.call<SwapResult>('trading.swap', { ...params, initiator: 'manual' }),
     onSettled: () => invalidateTrading(queryClient),
+  })
+}
+
+export interface SendRecipient {
+  to: string
+  amount?: string
+  amountUsd?: number
+}
+
+export interface SendParams {
+  chainId: number
+  wallet?: string
+  token: string
+  recipients: SendRecipient[]
+  note?: string
+}
+
+interface SendResult {
+  orders: Order[]
+  batchId: string | null
+}
+
+/** A send typed by the user: it runs at once, one leg per recipient. */
+export function useSend() {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SendParams) =>
+      rpc.call<SendResult>('trading.send', { ...params, initiator: 'manual' }),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+}
+
+/**
+ * What a wallet has approved others to spend. The engine scans the wallet's
+ * own Approval logs incrementally and reads each allowance live, so a row
+ * that shows here is spendable right now.
+ */
+export function useAllowances(wallet: string | undefined, chainId?: number, enabled = true) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<AllowanceList>({
+    queryKey: TRADING_KEYS.allowances(wallet, chainId),
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<AllowanceList>('trading.allowances.list', {
+        ...(wallet ? { wallet } : {}),
+        ...(chainId ? { chainId } : {}),
+      })
+    },
+    // A first pass over an old wallet takes a while; while the engine is
+    // still walking blocks the list is re-read often, then settles down.
+    refetchInterval: (q) => (q.state.data?.scanning ? 3_000 : 60_000),
+    placeholderData: (prev) => prev,
+  })
+  const allowances = useMemo(() => query.data?.allowances ?? [], [query.data])
+  return {
+    ...query,
+    allowances,
+    unlimitedCount: query.data?.unlimitedCount ?? 0,
+    scanning: query.data?.scanning === true,
+  }
+}
+
+/** `approve(spender, 0)`, typed by the user: runs at once. */
+export function useRevoke() {
+  const rpc = useRpc()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { chainId: number; wallet?: string; token: string; spender: string }) =>
+      rpc.call<{ order: Order }>('trading.allowances.revoke', { ...params, initiator: 'manual' }),
+    onSettled: () => invalidateTrading(queryClient),
+  })
+}
+
+/** Head block, block age, gas and RPC latency per chain; the engine caches it briefly. */
+export function useNetwork(enabled = true, intervalMs = 20_000) {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const query = useQuery<NetworkStatus>({
+    queryKey: TRADING_KEYS.network,
+    enabled: connected && enabled,
+    queryFn: async () => {
+      await rpc.waitForConnection()
+      return rpc.call<NetworkStatus>('trading.network', {})
+    },
+    refetchInterval: intervalMs,
+    refetchOnWindowFocus: true,
+    placeholderData: (prev) => prev,
+  })
+  const chains = useMemo(() => query.data?.chains ?? [], [query.data])
+  return { ...query, chains }
+}
+
+/** Explain a transaction hash, or raw calldata, on a chain. */
+export function useDecode() {
+  const rpc = useRpc()
+  return useMutation({
+    mutationFn: (params: { chainId: number; txHash?: string; data?: string; to?: string }) =>
+      rpc.call<Decoded>('trading.decode', params),
   })
 }
 

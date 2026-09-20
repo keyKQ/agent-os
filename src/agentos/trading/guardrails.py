@@ -102,3 +102,64 @@ def evaluate(
             f"{float(max_price_impact_pct):.2f}%",
         )
     return verdict("allow", "within limits")
+
+
+def evaluate_transfer(
+    *,
+    initiator: str,
+    value_usd: float | None,
+    daily_cap_usd: float,
+    spent_today_usd: float,
+) -> GuardVerdict:
+    """Decide what happens to a transfer (a send, or a batch of sends) worth ``value_usd``.
+
+    A swap keeps the money in the wallet as something else; a transfer is
+    gone the moment it mines. So the per-order threshold does not apply here:
+
+    * Manual transfers are the user's own decision: always allowed.
+    * A daily cap of zero switches the agent's transfers off with its swaps.
+    * An agent transfer that would push the wallet over its daily cap is
+      refused outright, like a swap. ``spent_today_usd`` includes orders
+      still in flight; ``value_usd`` is the **whole batch** — a multisend is
+      judged once, on its total, so splitting it changes nothing.
+    * Every other agent transfer waits for a human, priced or not.
+    """
+    spent = max(0.0, float(spent_today_usd))
+    cap = float(daily_cap_usd)
+
+    def verdict(decision: Decision, reason: str) -> GuardVerdict:
+        return GuardVerdict(
+            decision=decision,
+            value_usd=value_usd,
+            spent_today_usd=spent,
+            daily_cap_usd=cap,
+            threshold_usd=0.0,
+            reason=reason,
+        )
+
+    if initiator == "manual":
+        return verdict("allow", "manual")
+    if cap <= 0:
+        return verdict("blocked_daily_cap", "daily cap is 0 USD: agent transfers are switched off")
+    if value_usd is None:
+        return verdict("needs_approval", "value unknown (no price); a transfer always waits")
+    value = float(value_usd)
+    if spent + value > cap:
+        return verdict(
+            "blocked_daily_cap",
+            f"daily cap {cap:.2f} USD would be exceeded ({spent:.2f} spent + {value:.2f})",
+        )
+    return verdict("needs_approval", "a transfer leaves the wallet for good; it waits for you")
+
+
+def evaluate_revoke(*, initiator: str) -> GuardVerdict:
+    """A revoke spends only gas, but it is still the agent writing to chain."""
+    decision: Decision = "allow" if initiator == "manual" else "needs_approval"
+    return GuardVerdict(
+        decision=decision,
+        value_usd=0.0,
+        spent_today_usd=0.0,
+        daily_cap_usd=0.0,
+        threshold_usd=0.0,
+        reason="manual" if initiator == "manual" else "the agent may not revoke on its own",
+    )

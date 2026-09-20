@@ -11,10 +11,15 @@ import { providerLabel, type OrderStatus, type ProviderId } from '../types'
 export type TradeKind =
   | 'quote'
   | 'swap'
+  | 'send'
   | 'order'
   | 'orders'
   | 'approve'
   | 'reject'
+  | 'allowances'
+  | 'revoke'
+  | 'decode'
+  | 'network'
   | 'portfolio'
   | 'balances'
   | 'history'
@@ -66,6 +71,18 @@ function flag(args: string, name: string): string | null {
   return m ? m[1]!.replace(/^['"]|['"]$/g, '') : null
 }
 
+/** Every value of a repeatable flag, e.g. the `--to` entries of a send. */
+function flags(args: string, name: string): string[] {
+  const re = new RegExp(`--${name}(?:=|\\s+)("[^"]*"|'[^']*'|\\S+)`, 'g')
+  const out: string[] = []
+  for (const m of args.matchAll(re)) out.push(m[1]!.replace(/^['"]|['"]$/g, ''))
+  return out
+}
+
+function shortAddr(value: string): string {
+  return /^0x[0-9a-fA-F]{40}$/.test(value) ? `${value.slice(0, 6)}…${value.slice(-4)}` : value
+}
+
 function chainWord(args: string): string {
   const c = (flag(args, 'chain') || '').toLowerCase()
   if (c === 'base' || c === '8453') return 'Base'
@@ -76,10 +93,15 @@ function chainWord(args: string): string {
 const TITLES: Record<TradeKind, string> = {
   quote: 'Quote',
   swap: 'Swap',
+  send: 'Send',
   order: 'Order',
   orders: 'Orders',
   approve: 'Approve',
   reject: 'Reject',
+  allowances: 'Allowances',
+  revoke: 'Revoke',
+  decode: 'Decode',
+  network: 'Network',
   portfolio: 'Portfolio',
   balances: 'Balances',
   history: 'History',
@@ -106,10 +128,15 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
         [
           'quote',
           'swap',
+          'send',
           'order',
           'orders',
           'approve',
           'reject',
+          'allowances',
+          'revoke',
+          'decode',
+          'network',
           'portfolio',
           'history',
           'status',
@@ -133,6 +160,43 @@ export function parseTradeCommand(command: string | null | undefined): TradeCall
     const legs =
       tin && tout ? `${amount ? `${amount} ` : pct ? `${pct}% ` : ''}${tin} → ${tout}` : ''
     detail = [legs, chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'send') {
+    const token = flag(args, 'token') ?? ''
+    const to = flags(args, 'to')
+    const amount = flag(args, 'amount')
+    const usd = flag(args, 'usd')
+    const size = amount ? `${amount} ${token}` : usd ? `$${usd} of ${token}` : token
+    const who =
+      to.length === 1
+        ? `→ ${shortAddr(to[0]!.split('=')[0]!)}`
+        : to.length > 1
+          ? `→ ${to.length} recipients`
+          : flag(args, 'file')
+            ? '→ a list'
+            : ''
+    detail = [[size, who].filter(Boolean).join(' '), chainWord(args)].filter(Boolean).join(' · ')
+  } else if (kind === 'revoke') {
+    const token = flag(args, 'token')
+    const spender = flag(args, 'spender')
+    detail = [
+      [token ? shortAddr(token) : '', spender ? `for ${shortAddr(spender)}` : '']
+        .filter(Boolean)
+        .join(' '),
+      chainWord(args),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  } else if (kind === 'decode') {
+    const hash = args
+      .trim()
+      .split(/\s+/)
+      .find((a) => /^0x[0-9a-fA-F]{64}$/.test(a))
+    detail = [
+      hash ? `${hash.slice(0, 10)}…` : flag(args, 'data') ? 'calldata' : '',
+      chainWord(args),
+    ]
+      .filter(Boolean)
+      .join(' · ')
   } else if (kind === 'tokens') {
     const q = args
       .trim()
@@ -209,12 +273,23 @@ function parseJson(text: string): unknown {
   }
 }
 
+function orderLegs(o: Dict): string {
+  const kind = str(o.kind) ?? 'swap'
+  const amount = `${formatAmount(str(o.amountIn))} ${sym(o.tokenIn)}`
+  if (kind === 'send') return `${amount} → ${shortAddr(str(o.recipient) ?? '')}`.trim()
+  if (kind === 'revoke') {
+    const who = str(o.recipientLabel) ?? shortAddr(str(o.recipient) ?? '')
+    return `revoke ${sym(o.tokenIn)} for ${who}`.trim()
+  }
+  return `${amount} → ${
+    str(o.expectedOut) ? `${formatAmount(str(o.expectedOut))} ` : ''
+  }${sym(o.tokenOut)}`.trim()
+}
+
 function fromOrder(o: Dict): TradeOutcome {
   const status = str(o.status) as OrderStatus | null
   const txHash = str(o.txHash)
-  const legs = `${formatAmount(str(o.amountIn))} ${sym(o.tokenIn)} → ${
-    str(o.expectedOut) ? `${formatAmount(str(o.expectedOut))} ` : ''
-  }${sym(o.tokenOut)}`.trim()
+  const legs = orderLegs(o)
   const provider = (str(o.provider) as ProviderId | null) ?? null
   const bits = [legs]
   if (status) bits.push(statusWordFor(status))
@@ -273,7 +348,8 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
     return { ...EMPTY, summary: str(e.message) ?? 'error', error: str(e.message) ?? 'error' }
   }
   switch (call.kind) {
-    case 'swap': {
+    case 'swap':
+    case 'send': {
       const orders = Array.isArray(data.orders) ? data.orders.filter(isDict) : []
       if (orders.length === 1) return fromOrder(orders[0]!)
       if (orders.length > 1) {
@@ -282,18 +358,57 @@ export function parseTradeResult(call: TradeCall, text: string): TradeOutcome {
         const counts = new Map<string, number>()
         for (const o of orders)
           counts.set(String(o.status), (counts.get(String(o.status)) ?? 0) + 1)
-        const summary = `${orders.length} wallets · ${[...counts.entries()]
+        const noun = call.kind === 'send' ? 'recipients' : 'wallets'
+        const summary = `${orders.length} ${noun} · ${[...counts.entries()]
           .map(([s, n]) => `${n} ${statusWordFor(s as OrderStatus)}`)
           .join(', ')}`
-        return { ...EMPTY, summary, awaiting, confirmed }
+        // One approval covers the batch: the stamp jumps to its first leg.
+        const first = orders.find((o) => o.status === 'awaiting_approval') ?? orders[0]!
+        return { ...EMPTY, summary, awaiting, confirmed, orderId: str(first.orderId) }
       }
       break
     }
     case 'order':
     case 'approve':
-    case 'reject': {
+    case 'reject':
+    case 'revoke': {
       if (isDict(data.order)) return fromOrder(data.order)
       break
+    }
+    case 'allowances': {
+      const rows = Array.isArray(data.allowances) ? data.allowances.filter(isDict) : []
+      const unlimited = num(data.unlimitedCount) ?? rows.filter((a) => a.unlimited).length
+      const exposure = rows.reduce((s, a) => s + (num(a.exposureUsd) ?? 0), 0)
+      const bits = [`${rows.length} live`]
+      if (unlimited) bits.push(`${unlimited} unlimited`)
+      if (exposure > 0) bits.push(`${formatUsd(exposure)} at stake`)
+      return { ...EMPTY, summary: bits.join(' · '), error: null }
+    }
+    case 'decode': {
+      const call_ = isDict(data.call) ? data.call : null
+      const tx = isDict(data.tx) ? data.tx : null
+      const bits: string[] = []
+      const fn = call_ ? str(call_.function) : null
+      bits.push(fn ? fn : call_ ? `${str(call_.selector) ?? '?'} (unknown)` : 'call')
+      if (tx && str(tx.status)) bits.push(String(tx.status))
+      const transfers = Array.isArray(data.transfers) ? data.transfers.length : 0
+      if (transfers) bits.push(`${transfers} transfer${transfers === 1 ? '' : 's'}`)
+      return { ...EMPTY, summary: bits.join(' · '), txHash: tx ? str(tx.hash) : null }
+    }
+    case 'network': {
+      const rows = Array.isArray(data.chains) ? data.chains.filter(isDict) : []
+      const parts = rows.map((c) => {
+        const name = str(c.name) ?? str(c.key) ?? ''
+        const age = num(c.blockAgeS)
+        const ok = c.healthy === true
+        return `${name} ${ok ? '✓' : '✗'}${age !== null ? ` ${age}s` : ''}`
+      })
+      const down = rows.filter((c) => c.healthy !== true).length
+      return {
+        ...EMPTY,
+        summary: parts.join(' · '),
+        error: down ? `${down} chain${down === 1 ? '' : 's'} unhealthy` : null,
+      }
     }
     case 'quote': {
       const legs = `${formatAmount(str(data.amountIn))} ${sym(data.tokenIn)} → ${formatAmount(

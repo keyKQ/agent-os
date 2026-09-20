@@ -469,3 +469,139 @@ class TestConfig:
         assert data["trading"]["uniswap_api_key"] == "sekret"
         assert redact_public_config(data)["trading"]["uniswap_api_key"] == "[redacted]"
         assert redact_public_config(data)["trading"]["uniswap_api_key_env"] == "UNISWAP_API_KEY"
+
+
+class TestSendAndToolsRpc:
+    """``trading.send``, batches, allowances, decode and network over the same fake stack."""
+
+    async def _funded(self, ctx: RpcContext, stack: dict[str, Any]) -> str:
+        await call("wallet.setup", {"password": PASSWORD}, ctx)
+        address = (await call("wallet.create", {"label": "Main"}, ctx)).payload["wallet"]["address"]
+        stack["base"].set_native(address, 10**18)
+        stack["base"].set_erc20(USDC, address, 1000 * 10**6)
+        return address
+
+    async def test_send_shapes_and_validation(self, ctx: RpcContext, stack: dict[str, Any]) -> None:
+        await self._funded(ctx, stack)
+        other = "0x2222222222222222222222222222222222222222"
+        third = "0x3333333333333333333333333333333333333333"
+        # One-address form.
+        res = await call(
+            "trading.send", {"chainId": 8453, "token": "USDC", "to": other, "amount": "1"}, ctx
+        )
+        assert res.ok, res.error
+        order = res.payload["orders"][0]
+        assert order["kind"] == "send" and order["status"] == "submitted"
+        assert order["recipient"] == "0x2222222222222222222222222222222222222222"
+        assert res.payload["batchId"] is None
+        # List form with mixed sizing.
+        res = await call(
+            "trading.send",
+            {
+                "chainId": "base",
+                "token": "USDC",
+                "recipients": [{"to": other, "amount": 2}, {"to": third, "amountUsd": 3}],
+            },
+            ctx,
+        )
+        assert res.ok, res.error
+        batch_id = res.payload["batchId"]
+        assert batch_id and len(res.payload["orders"]) == 2
+        batch = await call("trading.orders.batch", {"batchId": batch_id}, ctx)
+        assert [o["amountIn"] for o in batch.payload["orders"]] == ["2", "3"]
+        sends = await call("trading.orders.list", {"kind": "send"}, ctx)
+        assert len(sends.payload["orders"]) == 3
+        assert (await call("trading.orders.list", {"kind": "swap"}, ctx)).payload["orders"] == []
+        # Bad shapes are refused before the engine sees them.
+        for params in (
+            {"chainId": 8453, "token": "USDC"},
+            {"chainId": 8453, "token": "USDC", "recipients": []},
+            {"chainId": 8453, "token": "USDC", "recipients": ["x"]},
+            {"chainId": 8453, "token": "USDC", "to": other, "amount": True},
+            {"chainId": 8453, "to": other, "amount": "1"},
+        ):
+            assert (await call("trading.send", params, ctx)).ok is False, params
+        res = await call(
+            "trading.send", {"chainId": 8453, "token": "USDC", "to": other, "amount": "1e9"}, ctx
+        )
+        assert res.ok is False and res.error.code == "trading.insufficient_balance"
+        assert (await call("trading.orders.batch", {"batchId": "bat_nope"}, ctx)).ok is False
+
+    async def test_agent_send_and_revoke_park_for_the_user(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        address = await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        other = "0x2222222222222222222222222222222222222222"
+        res = await call(
+            "trading.send",
+            {
+                "chainId": 8453,
+                "token": "USDC",
+                "to": other,
+                "amount": "1",
+                "initiator": "manual",
+                "sessionKey": "agent:main:spoofed",
+            },
+            agent,
+        )
+        assert res.ok, res.error
+        order = res.payload["orders"][0]
+        assert order["initiator"] == "agent" and order["status"] == "awaiting_approval"
+        assert order["sessionKey"] == "agent:trading:webchat:t"
+        assert "for good" in order["reason"]
+        # Only the user decides.
+        denied = await call("trading.orders.approve", {"orderId": order["orderId"]}, agent)
+        assert denied.ok is False and denied.error.code == "trading.operator_required"
+        rejected = await call("trading.orders.reject", {"orderId": order["orderId"]}, ctx)
+        assert rejected.ok and rejected.payload["order"]["status"] == "rejected"
+        # A revoke proposed by the agent is an order for the user to approve.
+        stack["base"].set_allowance(USDC, address, other, 5)
+        res = await call(
+            "trading.allowances.revoke",
+            {"chainId": 8453, "token": USDC, "spender": other},
+            agent,
+        )
+        assert res.ok, res.error
+        assert res.payload["order"]["kind"] == "revoke"
+        assert res.payload["order"]["status"] == "awaiting_approval"
+        assert res.payload["order"]["recipient"] == "0x2222222222222222222222222222222222222222"
+        missing = await call("trading.allowances.revoke", {"chainId": 8453, "token": USDC}, ctx)
+        assert missing.ok is False
+
+    async def test_allowances_decode_network_reads(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        address = await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        # Nothing granted yet: an empty review on every chain, and per chain.
+        res = await call("trading.allowances.list", {}, agent)
+        assert res.ok, res.error
+        assert res.payload["count"] == 0 and res.payload["wallet"] == address
+        assert [c["chainId"] for c in res.payload["chains"]] == [8453, 4663]
+        one = await call("trading.allowances.list", {"chainId": 8453, "full": True}, ctx)
+        assert one.ok and one.payload["chainId"] == 8453 and one.payload["allowances"] == []
+        decoded = await call(
+            "trading.decode",
+            {
+                "chainId": 8453,
+                "data": "0xa9059cbb"
+                + "0" * 24
+                + "2222222222222222222222222222222222222222"
+                + format(10**6, "x").rjust(64, "0"),
+                "to": USDC,
+            },
+            agent,
+        )
+        assert decoded.ok, decoded.error
+        assert decoded.payload["call"]["function"] == "transfer"
+        assert decoded.payload["decoded"]["amount"] == "1"
+        assert decoded.payload["decoded"]["token"]["symbol"] == "USDC"
+        assert (await call("trading.decode", {"chainId": 8453}, ctx)).ok is False
+        missing = await call("trading.decode", {"chainId": 8453, "txHash": "0x" + "00" * 32}, ctx)
+        assert missing.ok is False and missing.error.code == "trading.invalid"
+        network = await call("trading.network", {}, agent)
+        assert network.ok, network.error
+        rows = network.payload["chains"]
+        assert [r["chainId"] for r in rows] == [8453, 4663]
+        assert rows[0]["blockNumber"] == 100 and rows[0]["latencyMs"] is not None
