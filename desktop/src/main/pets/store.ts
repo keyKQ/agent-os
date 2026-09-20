@@ -1,4 +1,4 @@
-import { nativeImage, net } from 'electron'
+import { net } from 'electron'
 import {
   copyFileSync,
   existsSync,
@@ -14,11 +14,15 @@ import {
   isPetSlug,
   parsePetFolder,
   petSheetUrl,
+  webpSize,
   type InstalledPet,
   type PetManifestEntry,
 } from '@shared/pet'
 
 const MANIFEST_URL = 'https://petdex.dev/api/manifest'
+/** Remembers which bundled pets were already copied in, so a pet the user
+ *  removed does not come back on the next launch. */
+const SEEDED_FILE = '.bundled.json'
 const MANIFEST_TTL_MS = 5 * 60_000
 const FETCH_TIMEOUT_MS = 30_000
 /** Only these hosts may serve a sheet: the manifest is public JSON, so a
@@ -219,8 +223,11 @@ export class PetStore {
     const sheetSrc = path.join(dir, sheetFile)
     let size: { width: number; height: number } | null = null
     if (!sheetFile.includes('/') && !sheetFile.includes('\\') && existsSync(sheetSrc)) {
-      const image = nativeImage.createFromPath(sheetSrc)
-      size = image.isEmpty() ? null : image.getSize()
+      try {
+        size = webpSize(readFileSync(sheetSrc))
+      } catch {
+        size = null
+      }
     }
     const check = parsePetFolder(manifest, size, path.basename(dir))
     if (!check.ok) throw new PetStoreError(check.reason)
@@ -247,6 +254,61 @@ export class PetStore {
       sheetUrl: petSheetUrl(pet.slug),
     }
   }
+
+  /**
+   * Adopt the pets that ship inside the app bundle, once each. They are
+   * ordinary petdex folders, so the app has a pet to show before anyone
+   * visits petdex.dev — or with no network at all. `.bundled.json` records
+   * what was seeded, so a built-in pet the user removed stays removed.
+   */
+  async seedBundled(bundledRoot: string): Promise<string[]> {
+    let names: string[] = []
+    try {
+      names = await readdir(bundledRoot)
+    } catch {
+      return []
+    }
+    const marker = path.join(this.root, SEEDED_FILE)
+    const seeded = new Set(seededSlugs(marker))
+    const added: string[] = []
+    for (const slug of names.sort()) {
+      if (!isPetSlug(slug) || seeded.has(slug)) continue
+      const dir = path.join(bundledRoot, slug)
+      try {
+        if (!(await stat(dir)).isDirectory()) continue
+        // A pet already on disk under that slug is the user's; leave it be.
+        if (!existsSync(this.dir(slug))) await this.importFolder(dir)
+      } catch {
+        continue // a bundled pet that no longer parses must not block startup
+      }
+      seeded.add(slug)
+      added.push(slug)
+    }
+    if (added.length > 0) {
+      mkdirSync(this.root, { recursive: true })
+      writeFileSync(marker, JSON.stringify({ seeded: [...seeded] }, null, 2) + '\n', 'utf8')
+    }
+    return added
+  }
+}
+
+/**
+ * Where the bundled pets are. Packaged: `Contents/Resources/pets`
+ * (electron-builder `extraResources`); in development the repo's own copy.
+ */
+export function bundledPetsDir(resourcesPath: string, repoRoot: string): string | null {
+  for (const candidate of [
+    path.join(resourcesPath, 'pets'),
+    path.join(repoRoot, 'resources', 'pets'),
+  ]) {
+    if (existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+function seededSlugs(marker: string): string[] {
+  const list = readJson(marker).seeded
+  return Array.isArray(list) ? list.filter((slug): slug is string => isPetSlug(slug)) : []
 }
 
 function readJson(file: string): Record<string, unknown> {

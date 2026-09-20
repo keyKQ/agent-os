@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   derivePetState,
@@ -6,7 +8,59 @@ import {
   petStateRow,
   rowFrameCounts,
   sheetGeometry,
+  webpSize,
 } from './pet'
+
+describe('webpSize', () => {
+  function riff(fourcc: string, payload: number[]): Uint8Array {
+    const bytes = new Uint8Array(12 + 8 + Math.max(payload.length, 12))
+    bytes.set(
+      [...'RIFF'].map((c) => c.charCodeAt(0)),
+      0,
+    )
+    bytes.set(
+      [...'WEBP'].map((c) => c.charCodeAt(0)),
+      8,
+    )
+    bytes.set(
+      [...fourcc].map((c) => c.charCodeAt(0)),
+      12,
+    )
+    bytes.set(payload, 20)
+    return bytes
+  }
+
+  it('reads a lossless (VP8L) header', () => {
+    const bits = (1536 - 1) | ((1872 - 1) << 14)
+    const payload = [0x2f, bits & 0xff, (bits >>> 8) & 0xff, (bits >>> 16) & 0xff, bits >>> 24]
+    expect(webpSize(riff('VP8L', payload))).toEqual({ width: 1536, height: 1872 })
+  })
+
+  it('reads a lossy (VP8) header', () => {
+    const payload = [0, 0, 0, 0x9d, 0x01, 0x2a, 0x00, 0x06, 0x50, 0x07]
+    expect(webpSize(riff('VP8 ', payload))).toEqual({ width: 1536, height: 1872 })
+  })
+
+  it('reads an extended (VP8X) canvas size', () => {
+    const payload = [0x10, 0, 0, 0, 0xff, 0x05, 0x00, 0x4f, 0x07, 0x00]
+    expect(webpSize(riff('VP8X', payload))).toEqual({ width: 1536, height: 1872 })
+  })
+
+  it('refuses bytes that are not a WebP', () => {
+    expect(webpSize(new Uint8Array(4))).toBeNull()
+    expect(webpSize(riff('JUNK', [0]))).toBeNull()
+    expect(webpSize(riff('VP8 ', [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))).toBeNull()
+  })
+
+  it('sizes the sheet this repo ships, and it is a whole frame grid', () => {
+    const sheet = readFileSync(
+      path.resolve(process.cwd(), 'resources/pets/agentos/spritesheet.webp'),
+    )
+    const size = webpSize(sheet)
+    expect(size).toEqual({ width: 1536, height: 1872 })
+    expect(sheetGeometry(size!.width, size!.height)).toEqual({ cols: 8, rows: 9 })
+  })
+})
 
 describe('parsePetFolder', () => {
   const muse = {

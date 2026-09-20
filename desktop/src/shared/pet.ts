@@ -196,6 +196,42 @@ export function parsePetFolder(
   }
 }
 
+/**
+ * A WebP's pixel size, read straight from its header. Electron's
+ * `nativeImage` decodes PNG and JPEG only — it returns an empty image for
+ * every WebP — and petdex sheets are all WebP, so the size has to come from
+ * the bytes. Covers the three stream flavours: VP8 (lossy), VP8L (lossless)
+ * and VP8X (extended, the canvas size).
+ */
+export function webpSize(bytes: Uint8Array): { width: number; height: number } | null {
+  const ascii = (at: number, n: number) => String.fromCharCode(...bytes.subarray(at, at + n))
+  if (bytes.length < 30 || ascii(0, 4) !== 'RIFF' || ascii(8, 4) !== 'WEBP') return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const fourcc = ascii(12, 4)
+  const payload = 20 // 12 (RIFF header) + 4 (fourcc) + 4 (chunk size)
+  if (fourcc === 'VP8X') {
+    const width = (view.getUint32(payload + 4, true) & 0xffffff) + 1
+    const height = (view.getUint32(payload + 6, true) >>> 8) + 1
+    return { width, height }
+  }
+  if (fourcc === 'VP8L') {
+    if (bytes[payload] !== 0x2f) return null
+    const bits = view.getUint32(payload + 1, true)
+    return { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 }
+  }
+  if (fourcc === 'VP8 ') {
+    // 3-byte frame tag, then the start code 0x9d 0x01 0x2a.
+    if (bytes[payload + 3] !== 0x9d || bytes[payload + 4] !== 0x01 || bytes[payload + 5] !== 0x2a) {
+      return null
+    }
+    return {
+      width: view.getUint16(payload + 6, true) & 0x3fff,
+      height: view.getUint16(payload + 8, true) & 0x3fff,
+    }
+  }
+  return null
+}
+
 export const PET_SCHEME = 'agentos-pet'
 
 export function petSheetUrl(slug: string): string {

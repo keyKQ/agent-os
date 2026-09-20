@@ -12,6 +12,10 @@ files:
 extraResources:
   - from: ../install.sh
     to: install.sh
+  # Pets that ship with the app (petdex folders: pet.json + spritesheet.webp).
+  # PetStore.seedBundled copies them into the pets directory on first launch.
+  - from: resources/pets
+    to: pets
 asar: true
 mac:
   category: public.app-category.developer-tools

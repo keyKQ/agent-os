@@ -8,7 +8,7 @@ import { GatewaySupervisor } from './gateway/supervisor'
 import { registerIpc } from './ipc'
 import { installAppMenu } from './menu'
 import { registerPetScheme, servePets } from './pets/protocol'
-import { PetStore } from './pets/store'
+import { bundledPetsDir, PetStore } from './pets/store'
 import { BootstrapController } from './bootstrap/controller'
 import { BootstrapRunner, bundledInstallScript } from './bootstrap/runner'
 import { SettingsStore } from './settings/store'
@@ -92,6 +92,10 @@ if (!app.requestSingleInstanceLock()) {
 
     installLoopbackOriginRewrite()
     servePets(pets)
+    // The pets that ship with the app, so Settings > Appearance has one to
+    // offer before anyone reaches petdex.dev. Seeded once each; never fatal.
+    const bundledPets = bundledPetsDir(process.resourcesPath, path.resolve(__dirname, '../..'))
+    if (bundledPets) void pets.seedBundled(bundledPets).catch(() => {})
     registerIpc({
       settings,
       gateway,

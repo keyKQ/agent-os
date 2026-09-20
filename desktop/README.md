@@ -181,10 +181,15 @@ macOS 15+ `usernotificationsd` drops every request ("addRequest not allowed:
 com.github.Electron") while `Notification.show()` reports success. Two
 scripts keep that from happening:
 
-- `scripts/sign-dev-electron.mjs` (`postinstall` and `predev`) ad-hoc signs
-  `node_modules/electron/dist/Electron.app` when its signature does not
-  verify and registers it with LaunchServices. In `npm run dev` the
-  notifications appear as "Electron", and macOS asks for permission once.
+- `scripts/sign-dev-electron.mjs` (`postinstall` and `predev`) gives
+  `node_modules/electron/dist/Electron.app` its own identity
+  (`dev.agentos.desktop.dev`, named "AgentOS Dev"), ad-hoc signs it and
+  registers it with LaunchServices. The identity matters: macOS routes a
+  notification click by bundle identifier, and every stock Electron.app is
+  `com.github.Electron`, so with the default one a click could launch some
+  other copy (an `npx electron` cache, another project) and show Electron's
+  welcome window instead of this app. In `npm run dev` the notifications
+  appear as "AgentOS Dev", and macOS asks for permission once.
 - `scripts/adhoc-sign.mjs` (electron-builder `afterSign`) ad-hoc signs the
   packaged `AgentOS.app` when no Developer ID identity signed it; a release
   build already carries a Developer ID signature, which the hook only
@@ -232,7 +237,14 @@ wave → waiting → run → review → idle).
   rounded to whole pixels so the sprite does not shimmer.
 - Settings > Appearance > Pet: toggle, searchable gallery (installed first,
   then the manifest a page at a time, thumbnails fetched on sight), size
-  slider 10–300%, remove.
+  slider 10–300%, remove, and **Import folder** for a pet someone handed you
+  (`pet.json` + its sheet, checked before a byte is copied).
+- Built-in pets live in `resources/pets/<slug>/` and ship with the app
+  (`extraResources` → `Contents/Resources/pets`). `PetStore.seedBundled`
+  adopts each one once on launch, so the gallery has AgentOS' own mascot
+  before anyone reaches petdex.dev — and with no network at all. The slugs
+  it seeded are recorded in `userData/pets/.bundled.json`, so a built-in pet
+  you remove stays removed.
 
 ## First run: the app installs the engine
 
