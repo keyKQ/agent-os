@@ -432,6 +432,37 @@ class TestAgentSurfaceRpc:
             res = await call(method, params, agent)
             assert res.ok, (method, res.error)
 
+    async def test_agent_probe_with_key_and_full_sync_are_operator_only(
+        self, ctx: RpcContext, stack: dict[str, Any]
+    ) -> None:
+        await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        # The plain forms are reads any client may do.
+        assert (await call("trading.probe", {}, agent)).ok
+        assert (await call("trading.probe", {"provider": "uniswap"}, agent)).ok
+        assert (await call("trading.sync", {}, agent)).payload == {"started": True}
+        # Testing a key that is not in config, or rebuilding the ledger, is not.
+        res = await call("trading.probe", {"apiKey": "guess", "provider": "uniswap"}, agent)
+        assert res.ok is False and res.error.code == "trading.operator_required"
+        assert "trading.probe(apiKey)" in res.error.message
+        res = await call("trading.sync", {"full": True}, agent)
+        assert res.ok is False and res.error.code == "trading.operator_required"
+        # The operator's connection still can.
+        assert (await call("trading.probe", {"apiKey": "k", "provider": "uniswap"}, ctx)).ok
+        assert (await call("trading.sync", {"full": True}, ctx)).payload == {"started": True}
+
+    async def test_agent_status_has_no_paths(self, ctx: RpcContext, stack: dict[str, Any]) -> None:
+        await self._funded(ctx, stack)
+        agent = _agent_ctx(stack)
+        for method in ("wallet.status", "trading.status"):
+            mine = (await call(method, {}, ctx)).payload
+            theirs = (await call(method, {}, agent)).payload
+            assert not [k for k in theirs if k.endswith("Path")], (method, theirs)
+            assert theirs["unlocked"] is True and theirs["initialized"] is True
+            assert set(mine) >= set(theirs)
+        # The operator still sees where the vault lives.
+        assert (await call("wallet.status", {}, ctx)).payload["vaultPath"]
+
     async def test_agent_cannot_raise_the_limits(
         self, ctx: RpcContext, stack: dict[str, Any]
     ) -> None:
@@ -445,6 +476,125 @@ class TestAgentSurfaceRpc:
         res = await call("config.patch", {"patch": {"trading": {"daily_cap_usd": 1e9}}}, agent)
         assert res.ok is False
         assert stack["config"].trading.daily_cap_usd == 1000.0
+
+
+class TestNoteSanitising:
+    """A note is the one thing an agent writes that a person reads before approving."""
+
+    def test_note_helper(self) -> None:
+        from agentos.gateway.rpc_trading import NOTE_MAX_CHARS, _note
+
+        assert _note({}) is None
+        assert _note({"note": "   "}) is None
+        assert _note({"note": "DCA  tick\n\t#3"}) == "DCA tick #3"
+        # Bidi overrides, isolates and C0/C1 controls are dropped, not escaped.
+        spoofed = "send to \u202eB\u202c not A\u2066x\u2069\x00\x1b[31m\x85"
+        assert _note({"note": spoofed}) == "send to B not Ax[31m"
+        assert _note({"note": "\u200fhi\u200e"}) == "hi"
+        # NFC so a decomposed accent does not render as a different word later.
+        assert _note({"note": "café"}) == "café"
+        long = _note({"note": "x" * 1000})
+        assert long is not None and len(long) == NOTE_MAX_CHARS
+        with pytest.raises(ValueError):
+            _note({"note": 5})
+
+    async def test_note_is_stored_sanitised(self, ctx: RpcContext, stack: dict[str, Any]) -> None:
+        await call("wallet.setup", {"password": PASSWORD}, ctx)
+        address = (await call("wallet.create", {"label": "Main"}, ctx)).payload["wallet"]["address"]
+        stack["base"].set_native(address, 10**18)
+        stack["base"].set_erc20(USDC, address, 1000 * 10**6)
+        res = await call(
+            "trading.swap",
+            {
+                "chainId": 8453,
+                "tokenIn": "USDC",
+                "tokenOut": "WETH",
+                "amountIn": "1",
+                "note": "\u202erent\u202c " + "y" * 1000,
+            },
+            ctx,
+        )
+        assert res.ok, res.error
+        note = res.payload["orders"][0]["note"]
+        assert note.startswith("rent y") and len(note) == 240 and "\u202e" not in note
+        other = "0x2222222222222222222222222222222222222222"
+        res = await call(
+            "trading.send",
+            {"chainId": 8453, "token": "USDC", "to": other, "amount": "1", "note": "\x07 pay\n"},
+            ctx,
+        )
+        assert res.ok, res.error
+        assert res.payload["orders"][0]["note"] == "pay"
+
+
+class TestClientOrderId:
+    """``clientOrderId`` reaches the engine as ``client_order_id``, or is refused; never dropped."""
+
+    async def _funded(self, ctx: RpcContext, stack: dict[str, Any]) -> str:
+        await call("wallet.setup", {"password": PASSWORD}, ctx)
+        address = (await call("wallet.create", {"label": "Main"}, ctx)).payload["wallet"]["address"]
+        stack["base"].set_native(address, 10**18)
+        stack["base"].set_erc20(USDC, address, 1000 * 10**6)
+        return address
+
+    async def test_reaches_the_service(
+        self, ctx: RpcContext, stack: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await self._funded(ctx, stack)
+        seen: list[tuple[str, Any]] = []
+
+        # The WS-B contract: ``client_order_id: str | None = None`` on both.
+        async def fake_swap(
+            self, *, client_order_id: str | None = None, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            seen.append(("swap", client_order_id))
+            return [{"orderId": "ord_swap", "clientOrderId": client_order_id}]
+
+        async def fake_send(
+            self, *, client_order_id: str | None = None, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            seen.append(("send", client_order_id))
+            return [{"orderId": "ord_send", "batchId": None}]
+
+        monkeypatch.setattr(TradingService, "swap", fake_swap)
+        monkeypatch.setattr(TradingService, "send", fake_send)
+        base = {"chainId": 8453, "tokenIn": "USDC", "tokenOut": "WETH", "amountIn": "1"}
+        res = await call("trading.swap", {**base, "clientOrderId": " dca-2026-09-20 "}, ctx)
+        assert res.ok, res.error
+        assert res.payload["orders"][0]["clientOrderId"] == "dca-2026-09-20"
+        res = await call("trading.swap", base, ctx)
+        assert res.ok, res.error
+        res = await call(
+            "trading.send",
+            {
+                "chainId": 8453,
+                "token": "USDC",
+                "to": "0x2222222222222222222222222222222222222222",
+                "amount": "1",
+                "clientOrderId": "rent-09",
+            },
+            ctx,
+        )
+        assert res.ok, res.error
+        assert seen == [("swap", "dca-2026-09-20"), ("swap", None), ("send", "rent-09")]
+        assert (await call("trading.swap", {**base, "clientOrderId": 7}, ctx)).ok is False
+
+    async def test_refused_when_the_engine_cannot_honour_it(
+        self, ctx: RpcContext, stack: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await self._funded(ctx, stack)
+        called = False
+
+        async def legacy_swap(self, **kwargs: Any) -> list[dict[str, Any]]:  # no client_order_id
+            nonlocal called
+            called = True
+            return []
+
+        monkeypatch.setattr(TradingService, "swap", legacy_swap)
+        base = {"chainId": 8453, "tokenIn": "USDC", "tokenOut": "WETH", "amountIn": "1"}
+        res = await call("trading.swap", {**base, "clientOrderId": "x"}, ctx)
+        assert res.ok is False and res.error.code == "trading.invalid"
+        assert "clientOrderId" in res.error.message and called is False
 
 
 class TestConfig:

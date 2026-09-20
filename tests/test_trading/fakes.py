@@ -16,6 +16,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from agentos.trading.aggregator import ALLOWANCE_HOLDER
 from agentos.trading.aggregator import NATIVE_SENTINEL as AGG_NATIVE
 from agentos.trading.evm import (
     APPROVAL_TOPIC,
@@ -37,7 +38,12 @@ OTHER = "0x2222222222222222222222222222222222222222"
 USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 WETH = "0x4200000000000000000000000000000000000006"
 AAPL = "0xaaaa000000000000000000000000000000000001"
+#: Uniswap's Trading API proxy — where its swaps are sent in the no-Permit2 flow.
 ROUTER = "0x0000000085e102724e78ecd2f45dc9ca239affad"
+#: The Universal Router pinned for Base (``uniswap.UNIVERSAL_ROUTERS``).
+UNIVERSAL_ROUTER = "0x6ff5693b99212da76ad316178a184ab56d299b43"
+#: Every contract a fake node should treat as "a swap landed here".
+SWAP_TARGETS: frozenset[str] = frozenset({ROUTER, UNIVERSAL_ROUTER, ALLOWANCE_HOLDER})
 
 
 def approve_calldata(spender: str, amount: int) -> str:
@@ -124,6 +130,10 @@ class FakeChain:
     batch_supported: bool = True
     block_timestamps: dict[int, int] = field(default_factory=dict)
     fee_history: bool = True
+    #: What ``eth_feeHistory`` reports: the latest base fee, and one 50th
+    #: percentile reward per block (the engine takes their median).
+    base_fee: int = 10**8
+    fee_rewards: list[int] = field(default_factory=lambda: [10**6])
     revert_calls: bool = False
     # Tokens whose ``balanceOf`` the node refuses (per-item batch failure).
     fail_balance_of: set[str] = field(default_factory=set)
@@ -254,9 +264,12 @@ class FakeChain:
         if method == "eth_feeHistory":
             if not self.fee_history:
                 raise _RpcFailError("method not supported", -32601)
-            return {"baseFeePerGas": [hex(10**8), hex(10**8)], "reward": [[hex(10**6)]]}
+            return {
+                "baseFeePerGas": [hex(self.base_fee)] * (len(self.fee_rewards) + 1),
+                "reward": [[hex(r)] for r in self.fee_rewards],
+            }
         if method == "eth_gasPrice":
-            return hex(2 * 10**8)
+            return hex(2 * self.base_fee)
         if method == "eth_sendRawTransaction":
             raw = str(params[0])
             self.sent.append(raw)
@@ -492,7 +505,7 @@ class FakeAggregator:
     expires_in_s: float = 30.0
     configured: bool = True
     quote_error: tuple[int, dict[str, Any]] | None = None
-    tx_to: str = ROUTER
+    tx_to: str = ALLOWANCE_HOLDER  # what the live API sends every swap to
     tx_value: str = "0"
     tx_data: str = "0x2213bc0b" + "22" * 32
     requests: list[httpx.Request] = field(default_factory=list)

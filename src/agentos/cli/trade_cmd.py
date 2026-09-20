@@ -564,6 +564,14 @@ def trade_swap(
     all_wallets: bool = typer.Option(False, "--all-wallets", help="Swap from every wallet"),
     slippage: float | None = typer.Option(None, "--slippage", help="Slippage %, default auto"),
     note: str | None = typer.Option(None, "--note", help="Why this swap (kept in history)"),
+    client_id: str | None = typer.Option(
+        None,
+        "--client-id",
+        help=(
+            "Idempotency key; re-running with the same id returns the same order "
+            "instead of trading twice"
+        ),
+    ),
     wait: bool = typer.Option(False, "--wait", help="Block until each order settles"),
     wait_seconds: int = typer.Option(
         300, "--wait-seconds", help="How long --wait blocks per order", min=1, max=900
@@ -608,6 +616,8 @@ def trade_swap(
             params["slippagePct"] = slippage
         if note:
             params["note"] = note
+        if client_id:
+            params["clientOrderId"] = client_id.strip()
         if session_key:
             params["sessionKey"] = session_key
         result = await client.call("trading.swap", params)
@@ -733,6 +743,14 @@ def trade_send(
     ),
     wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
     note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
+    client_id: str | None = typer.Option(
+        None,
+        "--client-id",
+        help=(
+            "Idempotency key; re-running with the same id returns the same order "
+            "instead of trading twice"
+        ),
+    ),
     wait: bool = typer.Option(False, "--wait", help="Block until every leg settles"),
     wait_seconds: int = typer.Option(
         300, "--wait-seconds", help="How long --wait blocks per leg", min=1, max=900
@@ -764,6 +782,8 @@ def trade_send(
             params["wallet"] = wallet
         if note:
             params["note"] = note
+        if client_id:
+            params["clientOrderId"] = client_id.strip()
         if session_key:
             params["sessionKey"] = session_key
         result = await client.call("trading.send", params)

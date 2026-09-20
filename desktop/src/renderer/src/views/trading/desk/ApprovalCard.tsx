@@ -4,7 +4,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { formatAmount, initiatorKey, isAwaitingApproval, shortAddress, shortHash } from '../logic'
-import { StatusPill } from '../parts'
+import { StatusPill, Sym } from '../parts'
 import type { Order, Wallet } from '../types'
 import {
   approvalFacts,
@@ -221,7 +221,9 @@ export function ApprovalCard({
             data-wide={f.wide || undefined}
           >
             <dt>{f.label}</dt>
-            <dd className="trd-mono">{f.value}</dd>
+            <dd className="trd-mono trd-sym" title={f.full}>
+              {f.value}
+            </dd>
           </div>
         ))}
       </dl>
@@ -229,11 +231,24 @@ export function ApprovalCard({
       {ask.batch ? <Recipients ask={ask} live={live} /> : null}
 
       {order.note ? (
-        <p className="trd-card__note" data-testid="card-note">
-          {order.note}
-        </p>
+        // The note is the agent's free text, under its own label and inside
+        // a bounded, bidi-isolated block: a multi-kilobyte or right-to-left
+        // note may neither push the buttons out of view nor read as one of
+        // the facts above it.
+        <section className="trd-card__note" data-testid="card-note">
+          <span className="trd-card__note-label">
+            {t(order.initiator === 'agent' ? 'trading.card.note.agent' : 'trading.card.note')}
+          </span>
+          <p className="trd-card__note-body" data-testid="card-note-body">
+            {order.note}
+          </p>
+        </section>
       ) : null}
-      {order.reason && !live ? <p className="trd-card__note">{order.reason}</p> : null}
+      {order.reason && !live ? (
+        <section className="trd-card__note">
+          <p className="trd-card__note-body">{order.reason}</p>
+        </section>
+      ) : null}
 
       {live ? (
         <div className="trd-card__actions">
@@ -306,7 +321,13 @@ function Legs({ ask }: { ask: Ask }) {
   if (ask.kind === 'revoke') {
     return (
       <p className="trd-card__legs trd-num" data-testid="card-legs">
-        <b>{lead.tokenIn.symbol || shortAddress(lead.tokenIn.address)}</b>
+        <b>
+          {lead.tokenIn.symbol ? (
+            <Sym symbol={lead.tokenIn.symbol} />
+          ) : (
+            shortAddress(lead.tokenIn.address)
+          )}
+        </b>
         <span aria-hidden>⛨</span>
         <b>{recipientDisplay(lead) || shortAddress(lead.recipient ?? '')}</b>
       </p>
@@ -316,7 +337,7 @@ function Legs({ ask }: { ask: Ask }) {
     return (
       <p className="trd-card__legs trd-num" data-testid="card-legs">
         <b>
-          {formatAmount(ask.totalAmount)} {lead.tokenIn.symbol}
+          {formatAmount(ask.totalAmount)} <Sym symbol={lead.tokenIn.symbol} />
         </b>
         <span aria-hidden>→</span>
         <b>
@@ -330,12 +351,12 @@ function Legs({ ask }: { ask: Ask }) {
   return (
     <p className="trd-card__legs trd-num" data-testid="card-legs">
       <b>
-        {formatAmount(lead.amountIn)} {lead.tokenIn.symbol}
+        {formatAmount(lead.amountIn)} <Sym symbol={lead.tokenIn.symbol} />
       </b>
       <span aria-hidden>→</span>
       <b>
         {lead.expectedOut ? `${formatAmount(lead.expectedOut)} ` : ''}
-        {lead.tokenOut.symbol}
+        <Sym symbol={lead.tokenOut.symbol} />
       </b>
     </p>
   )
@@ -359,7 +380,7 @@ function Recipients({ ask, live }: { ask: Ask; live: boolean }) {
           <li key={leg.orderId} data-status={leg.status}>
             <span className="trd-mono trd-card__addr">{leg.recipient ?? ''}</span>
             <b className="trd-num">
-              {formatAmount(leg.amountIn)} {leg.tokenIn.symbol}
+              {formatAmount(leg.amountIn)} <Sym symbol={leg.tokenIn.symbol} />
             </b>
             {!live ? (
               leg.txHash ? (

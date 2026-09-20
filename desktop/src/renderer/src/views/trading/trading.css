@@ -98,6 +98,12 @@
   font-variant-numeric: tabular-nums;
   font-variant-ligatures: none;
 }
+/* A token symbol is on-chain data: isolate its bidi run so a right-to-left
+ * override inside it cannot reorder the amount or the arrow beside it. */
+.trd-sym {
+  unicode-bidi: isolate;
+  direction: ltr;
+}
 .trd-num[data-tone='up'] {
   color: var(--trd-up);
 }
@@ -1554,6 +1560,9 @@ tr:focus-within .trd-row__actions {
 .trd-order__leg i {
   color: var(--muted-foreground);
   font-style: normal;
+}
+.trd-order__sym {
+  color: var(--muted-foreground);
 }
 .trd-order__arrow {
   align-self: center;

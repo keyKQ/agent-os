@@ -228,6 +228,22 @@ export function shortHash(hash: string | null): string {
   return hash ? shortAddress(hash, 8, 6) : ''
 }
 
+/** The most of a token symbol a row shows; the rest belongs in a `title`. */
+export const SYMBOL_MAX = 12
+
+/**
+ * A token symbol for a row: at most `max` characters, the tail replaced by
+ * an ellipsis. Symbols are on-chain data anyone can mint, so a 200-character
+ * one must not widen a leg out of its row, and an ellipsis marks the cut so
+ * "USDC…" is never read as "USDC". Bidi isolation is the `.trd-sym` class's
+ * job (see trading.css); this only bounds the length.
+ */
+export function clampSymbol(symbol: string, max = SYMBOL_MAX): string {
+  const chars = Array.from(symbol)
+  if (chars.length <= max) return symbol
+  return `${chars.slice(0, Math.max(1, max - 1)).join('')}…`
+}
+
 export function chainName(chainId: number): string {
   return CHAINS.find((c) => c.id === chainId)?.name ?? `Chain ${chainId}`
 }

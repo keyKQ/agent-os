@@ -8,6 +8,7 @@ import json
 import os
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlparse
 
@@ -56,6 +57,61 @@ def gateway_base_is_local(base_url: str | None) -> bool:
         return ipaddress.ip_address(normalized).is_loopback
     except ValueError:
         return False
+
+
+AGENT_TOKEN_ENV = "AGENTOS_AGENT_TOKEN"
+OPERATOR_SECRET_FILE_ENV = "AGENTOS_OPERATOR_SECRET_FILE"
+
+
+def _operator_secret_path() -> Path:
+    override = os.environ.get(OPERATOR_SECRET_FILE_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
+    from agentos.gateway.agent_surface import default_operator_secret_path
+
+    return default_operator_secret_path()
+
+
+def read_operator_secret() -> str | None:
+    """The operator secret the local gateway wrote at boot, if readable.
+
+    ``AGENTOS_OPERATOR_SECRET_FILE`` overrides the path (tests). Unreadable,
+    missing or empty means ``None``: the connection is then an agent's, which
+    fails safe.
+    """
+    try:
+        text = _operator_secret_path().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    secret = text.strip()
+    return secret or None
+
+
+def agent_surface_auth(url: str | None) -> dict[str, str]:
+    """What this process presents so the gateway can tell agent from operator.
+
+    Exactly one of these, never both (``gateway.agent_surface``):
+
+    * ``agentToken`` when ``AGENTOS_AGENT_TOKEN`` is set. The gateway planted
+      it in an agent's shell; presenting it binds the connection to that chat.
+      It wins even if the operator file happens to be readable, so an agent
+      that can somehow see the file still cannot use it from here.
+    * ``operatorSecret`` when the gateway is local and the file it wrote at
+      boot is readable. That is what makes the operator's own terminal the
+      operator: an agent's shell cannot read ``~/.agentos/wallets``.
+    * nothing otherwise — a remote gateway, or no file. The gateway then binds
+      the connection as ``unbound`` and applies the agent's rules, so a
+      detached process an agent left behind gains nothing by connecting later.
+    """
+    agent_token = os.environ.get(AGENT_TOKEN_ENV, "").strip()
+    if agent_token:
+        return {"agentToken": agent_token}
+    if not gateway_base_is_local(url):
+        return {}
+    secret = read_operator_secret()
+    if secret:
+        return {"operatorSecret": secret}
+    return {}
 
 
 class GatewayClient:
@@ -134,13 +190,7 @@ class GatewayClient:
         auth: dict[str, str] = {}
         if token:
             auth["token"] = token
-        # Inside an agent's shell the gateway planted a token; presenting it
-        # is what binds this connection to that chat (gateway.agent_surface).
-        # An agent cannot gain anything by dropping it: while its shell runs,
-        # the gateway treats unmarked new connections as the agent's anyway.
-        agent_token = os.environ.get("AGENTOS_AGENT_TOKEN", "").strip()
-        if agent_token:
-            auth["agentToken"] = agent_token
+        auth.update(agent_surface_auth(url))
         if auth:
             params["auth"] = auth
         await self._ws.send(

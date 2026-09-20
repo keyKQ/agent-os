@@ -40,7 +40,7 @@ import {
   orderTone,
   shortAddress,
 } from './logic'
-import { Empty, ErrorState } from './parts'
+import { Empty, ErrorState, Sym } from './parts'
 import { isWrappedEth, providerLabel, type Order, type OrderStatus } from './types'
 
 /** How long an armed Approve waits for its second click before it relaxes. */
@@ -204,7 +204,8 @@ function Legs({ order }: { order: Order }) {
     return (
       <>
         <span className="trd-order__leg">
-          {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
+          {formatAmount(order.amountIn)}{' '}
+          <Sym symbol={order.tokenIn.symbol} className="trd-order__sym" />
         </span>
         <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
         <span className="trd-order__leg trd-mono" title={order.recipient ?? ''}>
@@ -217,7 +218,7 @@ function Legs({ order }: { order: Order }) {
     return (
       <>
         <span className="trd-order__leg">
-          <i>{t('trading.orders.kind.revoke')}</i> {order.tokenIn.symbol}
+          <i>{t('trading.orders.kind.revoke')}</i> <Sym symbol={order.tokenIn.symbol} />
         </span>
         <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
         <span className="trd-order__leg trd-mono" title={order.recipient ?? ''}>
@@ -229,12 +230,13 @@ function Legs({ order }: { order: Order }) {
   return (
     <>
       <span className="trd-order__leg">
-        {formatAmount(order.amountIn)} <i>{order.tokenIn.symbol}</i>
+        {formatAmount(order.amountIn)}{' '}
+        <Sym symbol={order.tokenIn.symbol} className="trd-order__sym" />
       </span>
       <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
       <span className="trd-order__leg">
         {order.expectedOut ? `${formatAmount(order.expectedOut)} ` : ''}
-        <i>{order.tokenOut.symbol}</i>
+        <Sym symbol={order.tokenOut.symbol} className="trd-order__sym" />
       </span>
     </>
   )

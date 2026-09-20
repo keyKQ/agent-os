@@ -796,16 +796,17 @@ agentos wallet balances [<addr>] [--chain base|robinhood] [--refresh] [--hidden]
 agentos trade status                        # provider, API key, chains, limits, vault state
 agentos trade provider                      # show the swap provider (aggregator | uniswap)
 agentos trade provider uniswap              # switch it (= config set trading.provider uniswap)
-agentos trade probe [--provider aggregator|uniswap] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok)
+agentos trade probe [--provider aggregator|uniswap] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok; --api-key is operator-only)
 agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are marked ✓
 agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet <addr>] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --usd 5     # "$5 of ETH": the engine sizes it at the current price
 agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-2026-09-20   # idempotency key: the same id returns the same order instead of trading twice
 agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
 agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
-agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900] [--as-agent]
+agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--as-agent]
 agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
 agentos trade send --chain base --token USDC --to <a>=10 --to <b>=20 --file recipients.txt   # ADDR=AMOUNT per --to; file lines 'ADDR' or 'ADDR,AMOUNT'
 agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full] [--wait/--no-wait] [--wait-seconds 1..3600]   # live ERC-20 allowances, spender labels, exposure; --wait polls until the scan has caught up
@@ -815,7 +816,7 @@ agentos trade network [--fresh]             # head block, block age, gas, RPC la
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
-agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it
+agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it (operator-only)
 agentos trade limits [<addr>]               # guardrails + today's agent spend (default: the primary wallet)
 ```
 
@@ -861,9 +862,15 @@ the aggregator, 30 s for Uniswap).
 
 Guardrails apply to **agent-initiated** swaps, and the **gateway** decides
 who is an agent: a shell spawned by an agent turn carries an agent token
-(`AGENTOS_AGENT_TOKEN`), any connection opened while an agent shell is
-running counts as the agent's, and the desktop app identifies itself with an
-operator secret. An agent-bound connection is an agent whatever it declares
+(`AGENTOS_AGENT_TOKEN`), a `cron --script` job carries one too, any
+connection opened while an agent shell is running counts as the agent's,
+and a connection that presents nothing is the agent's as well. The operator
+proves themself with a secret: the desktop app hands the gateway one at
+spawn, and the gateway writes its own to
+`~/.agentos/wallets/operator.secret` (mode 0600, rotated at every boot). The
+CLI reads that file on its own when `AGENTOS_AGENT_TOKEN` is not set and the
+gateway is local; against a remote gateway it presents nothing and gets the
+agent's rules. An agent-bound connection is an agent whatever it declares
 (`--as-agent` only forces the agent rules for a person). For the agent: an
 order above `trading.approval_threshold_usd` (default 100) or above
 `trading.agent_max_price_impact_pct` (default 5) waits as
@@ -872,16 +879,26 @@ order that would push a wallet past `trading.daily_cap_usd` (default 1,000
 per calendar day, orders in flight included; 0 switches agent swaps off) is
 rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
 refused with `trading.slippage_too_high`. `agentos trade approve` /
-`reject`, `hide` / `unhide` and every vault command except `status`, `list`
-and `balances` fail from an agent's connection with
-`trading.operator_required`; `config set` on any `trading.` key is refused
-from an agent too (the gateway rejects the write as an invalid request). Those
-are the user's actions, in the app or their own terminal. Swaps typed by a person are neither queued nor capped;
-if the price moves more than twice the slippage between quote and send they
-fail with `trading.price_moved` instead. `--wait` blocks until each order
-settles (`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order
-survives a gateway restart and is marked `failed` after 6 hours without a
-receipt.
+`reject`, `hide` / `unhide`, `probe --api-key`, `sync --full` and every
+vault command except `status`, `list` and `balances` fail from an agent's
+connection with `trading.operator_required`; `config set` on any `trading.`
+key is refused from an agent too (the gateway rejects the write as an
+invalid request). Those are the user's actions, in the app or their own
+terminal. `wallet status` and `trade status` leave out `vaultPath` for an
+agent. Swaps typed by a person are neither queued nor capped; if the price
+moves more than twice the slippage between quote and send they fail with
+`trading.price_moved` instead. `--wait` blocks until each order settles
+(`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order survives
+a gateway restart and is marked `failed` after 6 hours without a receipt.
+`--client-id <id>` on `swap` and `send` is an idempotency key: a second
+call with the same id returns the existing order instead of placing another,
+so a retry after a timeout cannot trade twice. A swap's target and the
+approval's spender are pinned to the contracts the desk knows for the
+provider (a quote naming any other address is refused, not signed); the gas
+limit is the provider's or the estimate plus 20 %, and the order is refused
+up front when the wallet cannot cover value plus gas at the quoted fee.
+`--note` is stored as shown to the approver: control and bidi characters
+are dropped, whitespace collapses, and it is cut at 240 characters.
 
 Sends and revokes share the order pipeline (`kind` is `swap`, `send` or
 `revoke`). A send moves ETH by value or an ERC-20 by `transfer`, one plain
@@ -968,7 +985,10 @@ anything else under python. `--script-arg` (repeatable) passes argv straight to
 the script — never through a shell. Non-empty stdout is delivered verbatim, empty stdout is a silent
 run, and a non-zero exit or `--timeout` delivers the error and fails the job.
 Secrets are masked in the output, and the gateway token is withheld from the
-child process. The bundled `cron-watchers` skill ships scripts for RSS, JSON
+child process. A script job runs under the agent's rules: the scheduler hands
+it an agent token, so an `agentos trade` command inside it is an agent order
+(threshold, daily cap, approval) and the operator-only commands fail in it.
+The bundled `cron-watchers` skill ships scripts for RSS, JSON
 endpoints, and GitHub repos that already follow this contract.
 
 #### Seeing what the script did

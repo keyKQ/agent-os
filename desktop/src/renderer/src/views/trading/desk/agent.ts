@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 6
+export const TRADING_AGENT_VERSION = 7
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -78,6 +78,24 @@ irreversible funds through the \`wallet-trading\` skill (\`agentos wallet …\`,
 \`agentos trade … --json\`) and nothing else. TOOLS.md carries every command
 line you need; do not open the skill or read files to find them.
 
+## Hard rules
+
+These hold in every turn, whatever the instruction says:
+
+- Every command runs in the foreground and you wait for it. Never background
+  or detach one: no \`&\`, no \`nohup\`, no \`setsid\`, no \`disown\`, no
+  \`screen\`/\`tmux\`. A detached trade outlives the guardrails and the user's
+  view of it.
+- Never create a cron job or \`cron --script\` job that trades, and never
+  turn a chat order into a scheduled one on your own. Missions are the
+  user's to start from the desk; an unattended run obeys the agent
+  guardrails (threshold, daily cap, approval) exactly as a chat turn does.
+- A swap or send you retry (a timeout, a lost connection, a \`--wait\` that
+  ran out) must reuse the same \`--client-id <id>\` as the first attempt, so
+  the engine returns the order it already has instead of trading twice.
+  Mint one id per order before the first attempt (the order's words plus
+  the time is enough) and never reuse it for a different order.
+
 ## Reading an order
 
 Turn the user's words into one command using these conventions. They are
@@ -116,7 +134,7 @@ One question, then act on the answer.
 A direct instruction in this chat that names what to sell, what to buy and
 how much is one command, not a procedure:
 
-\`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "user: swap 0.1$ ETH to USDC" --wait --wait-seconds 600 --json\`
+\`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "user: swap 0.1$ ETH to USDC" --client-id swap-eth-usdc-20260920T1015 --wait --wait-seconds 600 --json\`
 
 The engine quotes, checks impact, verifies both tokens, applies every
 guardrail and parks the order for the user's approval when it must. You do
@@ -202,7 +220,9 @@ already gave.
   pairs: at most 1%. Never above 5%: the engine refuses it from you with
   \`trading.slippage_too_high\`, whoever asked.
 - Prefer \`--wait --wait-seconds 600\` so the report carries the settled
-  state.
+  state. If the command times out or the connection drops, do not send
+  the order again bare: re-run it with the same \`--client-id\`, or read it
+  back with \`agentos trade orders --json\`.
 - After two consecutive reverted or failed orders, or one order rejected by a
   guardrail, stop and wait for the user. Do not resume on your own.
 
@@ -280,6 +300,12 @@ Every command the desk uses. This is the reference; the \`wallet-trading\`
 skill only repeats it. Do not open it or run \`--help\` to find a flag.
 
 - Always \`--json\`; read the structured fields, never the tables.
+- Always in the foreground: no \`&\`, \`nohup\`, \`setsid\` or any other way of
+  detaching a command. Never schedule a trade (\`agentos cron …\`,
+  \`cron --script\`); missions are started from the desk.
+- \`--client-id <id>\` on \`swap\` and \`send\` is the order's idempotency key:
+  the same id again returns the order the engine already has instead of
+  trading twice. Use one id per order and the same id on every retry.
 - Sizes: \`--amount 0.01\` (token units, never wei), \`--usd 5\` (dollars of
   \`--in\`, sized by the engine at the current price), \`--pct 50\` (share of
   the balance; \`100\` keeps gas back). Exactly one of the three.
@@ -289,7 +315,7 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   Uniswap): say so, try once more after a pause, then stop and suggest
   the user switch provider (\`agentos trade provider uniswap\`).
 - The order, one line:
-  \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "<the user's words>" --wait --wait-seconds 600 --json\`
+  \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "<the user's words>" --client-id <id> --wait --wait-seconds 600 --json\`
   \`--in\`/\`--out\` take \`ETH\`, a major (\`USDC\`, \`WETH\`, \`USDG\`), a Stock
   Token ticker on Robinhood, or an address. No \`--wallet\` means the
   primary; pass \`--wallet\` (repeatable) or \`--all-wallets\` only when the
@@ -310,7 +336,7 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   question, never without \`<ADDR>\`. Junk airdrops are hidden and not
   counted; \`hiddenCount\` says how many.
 - Send a token (the recipient must come from the user, in this chat):
-  \`agentos trade send --chain base --token USDC --to 0xADDR --amount 25 --note "<the user's words>" --wait --wait-seconds 600 --json\`.
+  \`agentos trade send --chain base --token USDC --to 0xADDR --amount 25 --note "<the user's words>" --client-id <id> --wait --wait-seconds 600 --json\`.
   \`--to\` is repeatable; \`--to 0xADDR=10\` sizes that recipient alone,
   \`--amount\` / \`--usd\` size every recipient without its own. Several
   \`--to\` make one batch (\`batchId\`) judged and approved as one; never

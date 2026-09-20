@@ -109,6 +109,26 @@ describe('tradingAgentFiles · reading an order', () => {
       expect(files[name]).not.toContain('provider_blocked')
     }
   })
+  it('carries the hard rules: foreground only, no scheduled trades, one client id per order', () => {
+    // A detached command outlives the guardrails; a cron job of the agent's
+    // own making trades unattended; a bare retry after a timeout trades twice.
+    const agents = files['AGENTS.md']
+    const tools = files['TOOLS.md']
+    expect(agents).toContain('## Hard rules')
+    expect(agents).toMatch(/no `&`, no `nohup`, no `setsid`/)
+    expect(agents).toMatch(/Never create a cron job or `cron --script` job that trades/)
+    expect(agents).toMatch(/reuse the same `--client-id <id>`/)
+    expect(agents).toMatch(/instead of trading twice/)
+    expect(tools).toMatch(/no `&`, `nohup`, `setsid`/)
+    expect(tools).toMatch(/`--client-id <id>` on `swap` and `send` is the order's idempotency key/)
+    // Both command lines the agent copies carry the flag.
+    expect(tools).toMatch(/agentos trade swap .*--client-id <id> --wait/)
+    expect(tools).toMatch(/agentos trade send .*--client-id <id> --wait/)
+    expect(agents).toMatch(/agentos trade swap .*--client-id \S+ --wait/)
+  })
+  it('bumped the version with the text, so every desk rewrites its files', () => {
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(7)
+  })
 })
 
 describe('syncTradingAgent', () => {

@@ -411,7 +411,7 @@ class TestFreshness:
         # A fresh quote is built from what it already has.
         tx = await provider.build(quote, deadline=0, sign_permit=None, decision_origin="autonomous")
         assert fake_aggregator.quotes == 1
-        assert tx["to"] == ROUTER and tx["data"].startswith("0x2213bc0b")
+        assert tx["to"] == ALLOWANCE_HOLDER and tx["data"].startswith("0x2213bc0b")
         assert tx["gasLimit"] == str(int(288079 * 1.2))
         # A lapsed one is fetched again rather than broadcast.
         quote.fetched_at -= 120

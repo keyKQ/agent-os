@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { History, isRevokeEntry, revokedSpender } from './History'
+import { History, isRevokeEntry } from './History'
 import { renderDesk, USDC, WALLET } from './test-utils'
 import type { Entry } from './types'
 
@@ -36,15 +36,63 @@ function entry(extra: Partial<Entry> = {}): Entry {
 }
 
 describe('History · a zero approval is a revoke', () => {
-  it('reads "Revoke" with the spender, and no −0 amount', () => {
+  it('reads a plain "Revoke" with the token, and no −0 amount', () => {
     renderDesk(<History entries={[entry()]} loading={false} now={Date.now()} showWallet={false} />)
     const row = screen.getByTestId('history-entry')
     expect(row).toHaveAttribute('data-revoke', 'true')
     expect(row.querySelector('.trd-entry__kind')).toHaveTextContent('Revoke')
-    expect(row).toHaveTextContent('Permit2')
     expect(row).not.toHaveTextContent('Approval')
     expect(row).not.toHaveTextContent('−0')
     expect(row).toHaveTextContent('USDC')
+  })
+
+  it('never names the spender from the note: the note is the agent’s free text', () => {
+    // The ledger entry carries no spender field, and `--note` is whatever
+    // the agent wrote. "revoked Permit2" on a revoke of some other spender
+    // must not put "Permit2" on the row.
+    renderDesk(
+      <History
+        entries={[entry({ note: 'revoked Permit2', initiator: 'agent' })]}
+        loading={false}
+        now={Date.now()}
+        showWallet={true}
+      />,
+    )
+    const row = screen.getByTestId('history-entry')
+    expect(row.querySelector('.trd-entry__kind')).toHaveTextContent('Revoke')
+    expect(row).not.toHaveTextContent('Permit2')
+    expect(row).not.toHaveTextContent('revoked')
+    // The wallet still leads the sub-line when asked for.
+    expect(row.querySelector('.trd-entry__sub')).toHaveTextContent('0x1111…1111')
+  })
+
+  it('keeps the note on an entry that is not a revoke', () => {
+    renderDesk(
+      <History
+        entries={[entry({ kind: 'swap', amountIn: '1', note: 'DCA leg 3' })]}
+        loading={false}
+        now={Date.now()}
+        showWallet={false}
+      />,
+    )
+    expect(screen.getByTestId('history-entry')).toHaveTextContent('DCA leg 3')
+  })
+
+  it('clamps and isolates a token symbol the chain handed it', () => {
+    const symbol = 'USDC‮' + 'x'.repeat(40)
+    renderDesk(
+      <History
+        entries={[entry({ kind: 'swap', amountIn: '1', tokenIn: { ...USDC, symbol } })]}
+        loading={false}
+        now={Date.now()}
+        showWallet={false}
+      />,
+    )
+    const sym = screen.getByTestId('history-entry').querySelector('.trd-sym')
+    expect(sym).not.toBeNull()
+    expect(sym?.textContent).toHaveLength(12)
+    expect(sym?.textContent?.endsWith('…')).toBe(true)
+    expect(sym).toHaveAttribute('title', symbol)
   })
 
   it('leaves a real allowance grant as an approval', () => {
@@ -61,13 +109,11 @@ describe('History · a zero approval is a revoke', () => {
     expect(row).toHaveTextContent('−1,000 USDC')
   })
 
-  it('exposes the rule and the spender parser', () => {
+  it('exposes the rule', () => {
     expect(isRevokeEntry({ kind: 'approval', amountIn: '0' })).toBe(true)
     expect(isRevokeEntry({ kind: 'approval', amountIn: '0.0' })).toBe(true)
     expect(isRevokeEntry({ kind: 'approval', amountIn: null })).toBe(false)
     expect(isRevokeEntry({ kind: 'swap', amountIn: '0' })).toBe(false)
-    expect(revokedSpender('revoked Uniswap Universal Router')).toBe('Uniswap Universal Router')
-    expect(revokedSpender('payroll')).toBeNull()
   })
 })
 

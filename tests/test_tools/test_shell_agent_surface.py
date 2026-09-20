@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import pytest
 
@@ -68,7 +69,7 @@ async def test_exec_command_holds_an_exec_window_while_the_child_runs(
     assert out.startswith("exit_code=0")
     assert seen == [1]
     assert surface.active_windows() == 0
-    assert surface.bind({}) is None
+    assert surface.bind({}).via == "unbound"
 
 
 @pytest.mark.asyncio
@@ -83,3 +84,45 @@ async def test_background_process_keeps_the_window_open_until_it_ends() -> None:
     await proc.wait()
     shell._finalize_bg_session(session)
     assert surface.active_windows() == 0
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are a POSIX thing")
+@pytest.mark.asyncio
+async def test_a_detached_sleeper_does_not_outlive_the_exec_window(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process the command left behind is killed when the command ends.
+
+    Otherwise it could connect to the gateway after the window closed. The
+    sleeper is a ``nohup … &`` job from a nested subshell (the double-fork
+    shape), writes its pid and ignores SIGTERM, so only the SIGKILL that
+    follows can end it. (A true ``setsid`` escapes the process group; that
+    needs a sandbox, not a signal, and is out of scope here.)
+    """
+    pid_file = tmp_path / "sleeper.pid"
+    sleeper = f'trap "" TERM; echo $$ > {pid_file}; sleep 30'
+    command = f"(nohup sh -c '{sleeper}' >/dev/null 2>&1 &) ; sleep 0.3; echo done"
+
+    # The host path: what the sandbox backend does with a process group is
+    # its own business (and the sandbox-backend fallback does the same).
+    monkeypatch.setattr(shell, "get_runtime", lambda: None)
+    out = await shell._run_exec_subprocess(command, str(tmp_path), None, 10)
+
+    assert out.startswith("exit_code=0"), out
+    pid = int(pid_file.read_text().strip())
+    # SIGTERM was ignored, SIGKILL was not; give the kernel a moment to reap.
+    for _ in range(50):
+        if not _pid_alive(pid):
+            break
+        await asyncio.sleep(0.05)
+    assert not _pid_alive(pid), f"detached sleeper {pid} survived the exec window"

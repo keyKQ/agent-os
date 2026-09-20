@@ -25,7 +25,7 @@ import {
   shortAddress,
   formatUsdCell,
 } from './logic'
-import { Empty, ErrorState, Skeleton } from './parts'
+import { Empty, ErrorState, Skeleton, Sym } from './parts'
 import type { Entry, EntryKind } from './types'
 
 const GLYPH: Record<EntryKind, LucideIcon> = {
@@ -218,20 +218,16 @@ export function isRevokeEntry(entry: Pick<Entry, 'kind' | 'amountIn'>): boolean 
   return entry.kind === 'approval' && entry.amountIn !== null && Number(entry.amountIn) === 0
 }
 
-/** The spender a revoke entry's engine note names ("revoked Permit2"), if any. */
-export function revokedSpender(note: string | null): string | null {
-  const m = /^revoked (.+)$/.exec((note ?? '').trim())
-  return m?.[1] ?? null
-}
-
 function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) {
   const Glyph = GLYPH[entry.kind]
   const by = initiatorKey(entry.initiator)
   const revoke = isRevokeEntry(entry)
-  const spender = revoke ? revokedSpender(entry.note) : null
   // The chain leads the sub-line as a mark, so the rest stays plain text. A
-  // revoke names its spender there in place of the engine's note.
-  const sub = [showWallet ? shortAddress(entry.wallet) : null, spender ?? entry.note]
+  // revoke reads as a plain "Revoke": the ledger entry carries no spender
+  // field, and its note is free text the agent wrote (`--note`), so naming
+  // a spender from it would let a note claim "revoked Permit2" for a revoke
+  // of anything. The spender lives in the Allowances tab, read from chain.
+  const sub = [showWallet ? shortAddress(entry.wallet) : null, revoke ? null : entry.note]
     .filter(Boolean)
     .join(' · ')
   return (
@@ -256,15 +252,17 @@ function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) 
       <span className="trd-entry__legs">
         {revoke && entry.tokenIn ? (
           // Nothing left the wallet: the token alone, no "−0".
-          <span className="trd-entry__out">{entry.tokenIn.symbol}</span>
+          <span className="trd-entry__out">
+            <Sym symbol={entry.tokenIn.symbol} />
+          </span>
         ) : entry.tokenIn && entry.amountIn ? (
           <span className="trd-entry__out" title={formatAmount(entry.amountIn, 18)}>
-            −{formatAmountCompact(entry.amountIn)} {entry.tokenIn.symbol}
+            −{formatAmountCompact(entry.amountIn)} <Sym symbol={entry.tokenIn.symbol} />
           </span>
         ) : null}
         {entry.tokenOut && entry.amountOut ? (
           <span className="trd-entry__in" title={formatAmount(entry.amountOut, 18)}>
-            +{formatAmountCompact(entry.amountOut)} {entry.tokenOut.symbol}
+            +{formatAmountCompact(entry.amountOut)} <Sym symbol={entry.tokenOut.symbol} />
           </span>
         ) : null}
       </span>

@@ -510,6 +510,56 @@ def test_swap_as_agent_from_env_carries_session_key(
     ]
 
 
+def test_swap_and_send_client_id_reach_the_gateway(client: _FakeClient) -> None:
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "swap",
+            "--chain",
+            "base",
+            "--in",
+            "USDC",
+            "--out",
+            "WETH",
+            "--amount",
+            "10",
+            "--client-id",
+            " dca-2026-09-20 ",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.swap")[0]["clientOrderId"] == "dca-2026-09-20"
+    # Absent or blank: the key is not sent at all.
+    runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "USDC", "--out", "WETH", "--amount", "10"],
+    )
+    assert "clientOrderId" not in client.calls_to("trading.swap")[1]
+    client.payloads["trading.send"] = {"orders": [_send_order()], "batchId": None}
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "send",
+            "--chain",
+            "base",
+            "--token",
+            "USDC",
+            "--to",
+            WALLET_B,
+            "--amount",
+            "1",
+            "--client-id",
+            "rent-09",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert client.calls_to("trading.send")[0]["clientOrderId"] == "rent-09"
+    for command in ("swap", "send"):
+        help_text = runner.invoke(trade_cmd.app, [command, "--help"]).output
+        assert "--client-id" in help_text and "Idempotency" in help_text
+
+
 def test_swap_as_agent_flag_and_all_wallets(client: _FakeClient) -> None:
     result = runner.invoke(
         trade_cmd.app,

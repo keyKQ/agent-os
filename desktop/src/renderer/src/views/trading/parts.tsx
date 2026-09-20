@@ -6,6 +6,7 @@ import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import { ChainBadge } from './ChainMark'
 import {
+  clampSymbol,
   errorText,
   formatUsd,
   formatUsdCell,
@@ -17,6 +18,19 @@ import {
 import type { OrderStatus, Token } from './types'
 
 /** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
+
+/**
+ * A token symbol in a row: clamped to 12 characters (the whole in `title`)
+ * and bidi-isolated, so an on-chain name cannot widen the row or reorder
+ * the amount beside it with a right-to-left override.
+ */
+export function Sym({ symbol, className }: { symbol: string; className?: string }) {
+  return (
+    <span className={cn('trd-sym', className)} title={symbol} data-testid="sym">
+      {clampSymbol(symbol)}
+    </span>
+  )
+}
 
 export function Sheet({
   title,

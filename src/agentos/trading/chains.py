@@ -43,6 +43,14 @@ class ChainSpec:
     # A Blockscout instance indexing this chain, used only to *discover* which
     # ERC-20s a wallet holds; every balance is then read from the RPC.
     blockscout_url: str | None = None
+    # Gas ceilings for anything this desk signs. A fee quote comes from the
+    # node (and a gas limit sometimes from the provider); neither is allowed
+    # to name a number above these — a wild tip, a base-fee spike or an
+    # inflated limit is refused, never clamped upward. L2 defaults: tips are
+    # well under a gwei, base fees a few hundred mwei, a swap well under 1M gas.
+    max_priority_fee_wei: int = 2 * 10**9
+    max_fee_per_gas_wei: int = 50 * 10**9
+    max_gas_limit: int = 3_000_000
 
     def tx_url(self, tx_hash: str) -> str:
         return f"{self.explorer_url}/tx/{tx_hash}"

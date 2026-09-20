@@ -13,6 +13,7 @@ from tests.test_trading.fakes import (
     AAPL,
     OTHER,
     ROUTER,
+    SWAP_TARGETS,
     USDC,
     WETH,
     FakeAggregator,
@@ -45,7 +46,7 @@ def _wire_swap_effects(
         tx_hash = "0x" + format(0xFEED00 + chain._seq, "x").rjust(64, "0")
         gas_wei = 100_000 * 10**8
         chain.nonces[wallet.lower()] = tx.get("nonce", 0) + 1
-        if tx["to"].lower() == ROUTER and status == 1:
+        if tx["to"].lower() in SWAP_TARGETS and status == 1:
             data_in = int(tx["value"])
             chain.native[wallet.lower()] -= data_in + gas_wei
             if data_in == 0:
@@ -898,7 +899,7 @@ class TestSwapFlow:
 
 def _revert(chain: FakeChain, inner, raw: str) -> str:
     tx = decode_fake_raw(raw)
-    if tx["to"].lower() == ROUTER:
+    if tx["to"].lower() in SWAP_TARGETS:
         chain._seq += 1
         tx_hash = "0x" + format(0xBAD000 + chain._seq, "x").rjust(64, "0")
         chain.native[tx["from"].lower() if "from" in tx else next(iter(chain.native))] -= (
@@ -1178,9 +1179,12 @@ class TestSafetyRails:
         check = TradingService._check_approval_tx
         spenders = frozenset({PERMIT2.lower()})
         ok = {"to": USDC, "data": approve_calldata(PERMIT2, 10), "value": "0"}
-        check(ok, token=USDC, amount_raw=10, spenders=spenders)
+        assert check(ok, token=USDC, amount_raw=10, spenders=spenders) == PERMIT2.lower()
+        # An unlimited allowance used to be waved through as "conventional";
+        # the desk now signs exactly the order's amount and nothing else.
         unlimited = {"to": USDC, "data": approve_calldata(PERMIT2, 2**256 - 1), "value": "0"}
-        check(unlimited, token=USDC, amount_raw=10, spenders=spenders)
+        with pytest.raises(TradingError, match="exceeds"):
+            check(unlimited, token=USDC, amount_raw=10, spenders=spenders)
         with pytest.raises(TradingError, match="exceeds"):
             check(
                 {"to": USDC, "data": approve_calldata(PERMIT2, 11), "value": "0"},
@@ -1231,34 +1235,36 @@ class TestSafetyRails:
         usdc = TokenMeta(8453, USDC, "USDC", "USD Coin", 6)
         eth = TokenMeta(8453, NATIVE_ADDRESS, "ETH", "Ether", 18, native=True)
         base = {"from": wallet, "to": ROUTER, "value": "0", "chainId": 8453}
-        service._check_swap_tx(base, chain=BASE, record=record, meta_in=usdc, amount_raw=10)
-        service._check_swap_tx(
-            {**base, "value": str(10**15)},
-            chain=BASE,
-            record=record,
-            meta_in=eth,
-            amount_raw=10**15,
-        )
-        with pytest.raises(TradingError, match="wei"):
+        targets = frozenset({ROUTER})
+
+        def check(tx: dict, *, meta_in=usdc, amount_raw: int = 10, targets=targets) -> None:
             service._check_swap_tx(
-                {**base, "value": str(10**15 + 1)},
+                tx,
                 chain=BASE,
                 record=record,
-                meta_in=eth,
-                amount_raw=10**15,
+                meta_in=meta_in,
+                amount_raw=amount_raw,
+                provider="uniswap",
+                targets=targets,
             )
+
+        check(base)
+        check({**base, "value": str(10**15)}, meta_in=eth, amount_raw=10**15)
+        with pytest.raises(TradingError, match="wei"):
+            check({**base, "value": str(10**15 + 1)}, meta_in=eth, amount_raw=10**15)
         with pytest.raises(TradingError, match="chain"):
-            service._check_swap_tx(
-                {**base, "chainId": 1}, chain=BASE, record=record, meta_in=usdc, amount_raw=10
-            )
+            check({**base, "chainId": 1})
         with pytest.raises(TradingError, match="not from this wallet"):
-            service._check_swap_tx(
-                {**base, "from": ROUTER}, chain=BASE, record=record, meta_in=usdc, amount_raw=10
-            )
+            check({**base, "from": ROUTER})
         with pytest.raises(TradingError, match="implausible"):
-            service._check_swap_tx(
-                {**base, "to": USDC}, chain=BASE, record=record, meta_in=usdc, amount_raw=10
-            )
+            check({**base, "to": USDC})
+        # The target is pinned per provider and chain; anything else, and
+        # a chain with nothing pinned, is refused — checksummed or not.
+        with pytest.raises(TradingError, match="not a contract this desk trusts"):
+            check({**base, "to": OTHER})
+        with pytest.raises(TradingError, match="no swap contract is pinned"):
+            check(base, targets=frozenset())
+        check({**base, "to": ROUTER.upper().replace("0X", "0x")})
 
     async def test_submitted_order_is_recovered_after_a_restart(
         self, funded_service: TradingService, base_chain: FakeChain
@@ -1345,7 +1351,9 @@ class TestSettlementSurvivesTheNode:
         """
         service = funded_service
         wallet = service.test_wallet  # type: ignore[attr-defined]
-        _wire_swap_effects(base_chain, wallet)
+        # Deliver what the aggregator quoted, so the recovered row carries
+        # no short-fill note and its reason is genuinely None.
+        _wire_swap_effects(base_chain, wallet, out_amount=5 * 10**15)
         real_settle = service._settle
         blown = 0
 
@@ -1382,7 +1390,7 @@ class TestSettlementSurvivesTheNode:
         # A later housekeeping pass owns the stray and books it once.
         await service.recover_submitted()
         recovered = service.get_order(order["orderId"])
-        assert recovered["status"] == "confirmed" and recovered["receivedOut"] == "0.0005"
+        assert recovered["status"] == "confirmed" and recovered["receivedOut"] == "0.005"
         assert recovered["reason"] is None
         swaps = [e for e in service.ledger.list_entries(wallet=wallet) if e["kind"] == "swap"]
         assert len(swaps) == 1

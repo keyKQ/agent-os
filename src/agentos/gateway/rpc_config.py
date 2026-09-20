@@ -134,11 +134,27 @@ def _has_existing_redacted_source(source: Any) -> bool:
     return source is not None and source != ""
 
 
+def _is_redacted_keyed_url(payload: Any, source: Any, prefix: str) -> bool:
+    """``trading.rpc_urls.<chain>`` comes back from a public view as the host
+    only (``https://base.drpc.org/…``); writing that back would replace the
+    real URL, key and all, with a broken one. Recognise it and keep the source."""
+    if not isinstance(payload, str) or not isinstance(source, str) or payload == source:
+        return False
+    parts = prefix.split(".")
+    if len(parts) < 2 or parts[-2] != "rpc_urls":
+        return False
+    from agentos.trading.chains import redact_rpc_url
+
+    return payload.strip() == redact_rpc_url(source)
+
+
 def _restore_redacted_values(payload: Any, source: Any, prefix: str = "") -> tuple[Any, set[str]]:
     if payload == _REDACTED_PUBLIC_VALUE and _is_sensitive_redacted_path(prefix):
         if not _has_existing_redacted_source(source):
             raise ValueError(f"Cannot preserve redacted secret at {prefix}: no existing secret")
         return source, {prefix} if prefix else set()
+    if _is_redacted_keyed_url(payload, source, prefix):
+        return source, {prefix}
     if isinstance(payload, dict):
         source_dict = source if isinstance(source, dict) else {}
         restored: dict[str, Any] = {}

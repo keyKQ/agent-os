@@ -219,6 +219,8 @@ class EvmClient:
         http: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
         max_log_span: int = 2000,
+        max_priority_fee_wei: int = 2 * 10**9,
+        max_fee_per_gas_wei: int = 50 * 10**9,
     ) -> None:
         self.url = url
         # Provider keys live in the path (dRPC, Alchemy): errors show only the host.
@@ -227,6 +229,10 @@ class EvmClient:
         self._http = http or httpx.AsyncClient(timeout=timeout)
         self._timeout = timeout
         self.max_log_span = max(1, int(max_log_span))
+        # Ceilings on what ``fee_data`` may answer (see ``ChainSpec``): the
+        # node's fee history is data, not a number this desk signs blindly.
+        self.max_priority_fee_wei = max(1, int(max_priority_fee_wei))
+        self.max_fee_per_gas_wei = max(self.max_priority_fee_wei, int(max_fee_per_gas_wei))
         self._next_id = 1
 
     async def aclose(self) -> None:
@@ -624,24 +630,34 @@ class EvmClient:
     async def fee_data(self) -> tuple[int, int]:
         """``(maxFeePerGas, maxPriorityFeePerGas)`` from ``eth_feeHistory``.
 
+        The tip is the *median* 50th-percentile reward over the last ten
+        blocks: one block with a single absurd tip (a MEV bundle, a fat
+        finger) must not become the price of every transaction this desk
+        signs. Both numbers are then capped at the chain's ceilings — the
+        cap wins over the node, never the other way round.
+
         Falls back to ``eth_gasPrice`` when the node does not serve fee
         history; the priority tip is then a small fraction of the base fee.
         """
         try:
-            history = await self.call("eth_feeHistory", [5, "latest", [50]])
+            history = await self.call("eth_feeHistory", [10, "latest", [50]])
         except EvmRpcError:
             history = None
         if isinstance(history, dict) and history.get("baseFeePerGas"):
             base_fees = [decode_uint(str(x)) for x in history["baseFeePerGas"]]
             rewards = history.get("reward") or []
-            tips = [decode_uint(str(r[0])) for r in rewards if r]
+            tips = sorted(decode_uint(str(r[0])) for r in rewards if r)
             base = base_fees[-1] if base_fees else 0
-            tip = max(tips) if tips else max(base // 20, 1)
-            tip = max(tip, 1)
-            return base * 2 + tip, tip
+            tip = tips[len(tips) // 2] if tips else max(base // 20, 1)
+            return self._capped(base * 2, tip)
         gas_price = decode_uint(await self.call("eth_gasPrice"))
-        tip = max(gas_price // 20, 1)
-        return gas_price + tip, tip
+        return self._capped(gas_price, max(gas_price // 20, 1))
+
+    def _capped(self, fee_before_tip: int, tip: int) -> tuple[int, int]:
+        tip = min(max(int(tip), 1), self.max_priority_fee_wei)
+        max_fee = min(int(fee_before_tip) + tip, self.max_fee_per_gas_wei)
+        # EIP-1559 needs maxFeePerGas >= maxPriorityFeePerGas.
+        return max_fee, min(tip, max_fee)
 
     async def send_raw_transaction(self, raw_hex: str) -> str:
         result = await self.call("eth_sendRawTransaction", [raw_hex])

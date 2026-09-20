@@ -2032,6 +2032,9 @@ class UpdatesConfig(BaseModel):
     notify: bool = True
 
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 class TradingConfig(BaseSettings):
     """Wallet + swap trading settings (``[trading]``).
 
@@ -2074,6 +2077,29 @@ class TradingConfig(BaseSettings):
     unlock_mode: Literal["auto", "manual"] = "auto"
     sync_interval_seconds: int = Field(default=30, ge=5)
     price_ttl_seconds: int = Field(default=20, ge=1)
+
+    @field_validator("aggregator_base_url")
+    @classmethod
+    def _aggregator_url_must_be_https(cls, value: str) -> str:
+        """The aggregator hands back calldata the wallet signs: it must be
+        fetched over TLS. Plain ``http`` is allowed only for a loopback host
+        (a local mock or a dev deployment on this machine)."""
+        from urllib.parse import urlsplit
+
+        text = (value or "").strip()
+        parsed = urlsplit(text)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("trading.aggregator_base_url must be an absolute http(s) URL")
+        scheme = parsed.scheme.lower()
+        if scheme == "https":
+            return text
+        host = (parsed.hostname or "").lower()
+        if scheme == "http" and host in _LOOPBACK_HOSTS:
+            return text
+        raise ValueError(
+            "trading.aggregator_base_url must use https (http is allowed only for "
+            "127.0.0.1, localhost or ::1)"
+        )
 
     def resolved_uniswap_api_key(self) -> str:
         """The API key to send: explicit config value, else the named env var."""
@@ -2854,11 +2880,24 @@ _PUBLIC_SECRET_EXACT_KEYS = frozenset(
 )
 _PUBLIC_SECRET_SUFFIXES = ("_token", "_secret", "_password", "_api_key")
 _REDACTED = "[redacted]"
+# Keys whose values are URLs that carry a provider key in the path or query
+# (dRPC, Alchemy, Infura, QuickNode all do). The host survives, the rest is cut.
+_PUBLIC_KEYED_URL_MAPS = frozenset({"rpc_urls"})
 
 
 def is_sensitive_config_key(key: str) -> bool:
     normalized = key.lower().replace("-", "_")
     return normalized in _PUBLIC_SECRET_EXACT_KEYS or normalized.endswith(_PUBLIC_SECRET_SUFFIXES)
+
+
+def _redact_keyed_urls(value: Any) -> Any:
+    from agentos.trading.chains import redact_rpc_url
+
+    if isinstance(value, dict):
+        return {k: (redact_rpc_url(v) if isinstance(v, str) else v) for k, v in value.items()}
+    if isinstance(value, str):
+        return redact_rpc_url(value)
+    return value
 
 
 def redact_public_config(value: Any) -> Any:
@@ -2867,6 +2906,8 @@ def redact_public_config(value: Any) -> Any:
         for key, item in value.items():
             if is_sensitive_config_key(key) and item:
                 redacted[key] = _REDACTED
+            elif key.lower().replace("-", "_") in _PUBLIC_KEYED_URL_MAPS:
+                redacted[key] = _redact_keyed_urls(item)
             else:
                 redacted[key] = redact_public_config(item)
         return redacted

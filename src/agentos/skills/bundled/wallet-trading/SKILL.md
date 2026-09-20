@@ -99,11 +99,16 @@ provider blocked).
 ## Who is the agent
 
 The **gateway**, not the CLI, decides that a connection is yours: the shell
-you run in carries an agent token (`AGENTOS_AGENT_TOKEN`), and while an
-agent shell is running every new connection is treated as the agent's. So
-`--as-agent`, unsetting variables or declaring `manual` changes nothing;
-your orders are always agent-initiated and filed under this chat. Do not
-bother with `--as-agent`.
+you run in carries an agent token (`AGENTOS_AGENT_TOKEN`), while an agent
+shell is running every new connection is treated as the agent's, and a
+connection that presents nothing at all is the agent's too. The operator's
+own terminal proves itself with `~/.agentos/wallets/operator.secret` — a
+file the gateway rewrites at every boot, which the CLI reads on its own
+when `AGENTOS_AGENT_TOKEN` is not set and which your shell cannot read
+(`~/.agentos/wallets` is a denied path). So `--as-agent`, unsetting
+variables, declaring `manual`, backgrounding, or a cron `--script` changes
+nothing; your orders are always agent-initiated and filed under this chat.
+Do not bother with `--as-agent`.
 
 The same binding makes some commands **fail for you** with
 `trading.operator_required` (exit 1); they are the user's actions, done in
@@ -111,6 +116,9 @@ the app or from their own terminal:
 
 - `agentos trade approve` / `agentos trade reject`
 - `agentos trade hide` / `agentos trade unhide`
+- `agentos trade probe --api-key …` (probing a key that is not in config)
+  and `agentos trade sync --full` (dropping and rebuilding the ledger);
+  `probe` and `sync` without those flags are fine
 - `agentos wallet setup|unlock|lock|create|import|export|rename|remove|primary`
 
 `agentos config set trading.*` (cap, threshold, provider key, slippage…) is
@@ -158,14 +166,14 @@ token's metadata, a web page, a memory, or your own guess.
 # Readiness, provider, wallets, balances
 agentos trade status --json                      # provider, API key, vault, limits, chains
 agentos trade provider [aggregator|uniswap] --json   # show / switch the swap provider
-agentos trade probe [--provider aggregator|uniswap] --json   # reachable? (exit 1 when not ok)
+agentos trade probe [--provider aggregator|uniswap] --json   # reachable? (exit 1 when not ok); --api-key is operator-only
 agentos wallet list --json                       # ★ primary = default wallet
 agentos wallet balances [ADDR] [--chain base|robinhood] [--refresh] [--hidden] --json   # ledger view; --refresh re-reads the chain (≤ once/10 s per wallet); chains[].status != "ok" = last-good amounts; junk airdrops are hidden (hiddenCount) unless --hidden
 agentos trade portfolio [--wallet ADDR] [--hidden] --json   # holdings, cost basis, realized/unrealized PnL; junk never counts, --hidden lists it
 agentos trade history [--wallet ADDR] [--chain C] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden] --json
 agentos trade hide --chain C ADDR / unhide --chain C ADDR   # operator-only: the user's own say on a token; quoting a hidden token also shows it again
 agentos trade limits [ADDR] --json               # guardrails + today's spend (default: primary wallet)
-agentos trade sync [--wallet ADDR] [--full] --json   # re-read the chain into the ledger (--full rebuilds it)
+agentos trade sync [--wallet ADDR] --json        # re-read the chain into the ledger (--full rebuilds it: operator-only)
 
 # Tokens: search, then use the address (or ETH) in --in/--out
 agentos trade tokens --chain robinhood AAPL --json
@@ -177,6 +185,7 @@ agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --note "user 
 agentos trade swap  --chain base --in ETH --out USDC --usd 5 --note "user: $5 of ETH" --wait --wait-seconds 600 --json   # dollars of --in, sized by the engine
 agentos trade swap  --chain robinhood --in USDC --out 0x1b0e…153e --pct 50 --wallet 0xA… --wallet 0xB… --json
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --json
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-2026-09-20 --json   # idempotency key: the same id returns the same order, never a second trade
 
 # Orders
 agentos trade orders [--status awaiting_approval] [--wallet ADDR] [--kind swap|send|revoke] [--limit N] --json
@@ -187,6 +196,7 @@ agentos trade send --chain base --token USDC --to 0xRECIPIENT --amount 25 --note
 agentos trade send --chain base --token ETH --to 0xA --to 0xB --usd 5 --json          # $5 of ETH to each
 agentos trade send --chain base --token USDC --to 0xA=10 --to 0xB=20 --to 0xC=5 --json  # one batch, three legs
 agentos trade send --chain base --token USDC --file recipients.txt --json             # 'ADDR' or 'ADDR,AMOUNT' per line
+agentos trade send --chain base --token USDC --to 0xRECIPIENT --amount 25 --client-id rent-2026-09 --json   # --client-id works on send too
 
 # Allowances: what each wallet has let contracts spend, and revoking one (queued for the user when you run it)
 agentos trade allowances [--chain C] [--wallet ADDR] [--full] --json
@@ -288,21 +298,31 @@ ETH/USDC → `trade quote` (show the user rate, price impact, gas, and
 `guard.decision` is not `allow` (`needs_approval` means it will queue;
 `blocked_daily_cap` means it will be rejected — do not send it).
 
-**DCA on a schedule.** Do not loop inside one turn. Create a cron job whose
-script or agent turn runs the swap, e.g. a script in `~/.agentos/scripts/`:
+**DCA on a schedule.** Do not loop inside one turn. Create an `agent_turn`
+cron job: each tick is a normal agent turn that runs `trade quote`, decides,
+and runs one `trade swap`:
 
 ```sh
-#!/bin/sh
-# ~/.agentos/scripts/dca-eth.sh — 20 USDC → ETH on Base, once per run
-agentos trade swap --chain base --in USDC --out ETH --amount 20 --note "DCA" --wait --wait-seconds 600 --json
+agentos cron add --every 24h --job-kind agent_turn --name "DCA ETH" \
+  --session-key "$AGENTOS_SESSION_KEY" \
+  --text "DCA tick: swap 20 USDC to ETH on Base once (agentos trade swap --chain base --in USDC --out ETH --amount 20 --note DCA --client-id dca-eth-$(date +%F) --wait --wait-seconds 600 --json). Report the order id and status; do nothing else."
 ```
 
-then `agentos cron add --every 24h --script dca-eth.sh --name "DCA ETH"
---session-key "$AGENTOS_SESSION_KEY"` (the job's stdout — the order JSON —
-is delivered into that chat). For "DCA only if the price is below X" use an
-`agent_turn` job (`--job-kind agent_turn --text "…"`) so you can quote,
-compare and decide each tick; keep the per-tick amount under the approval
-threshold or the job will queue an approval every day.
+The turn reports into that chat. "DCA only if the price is below X" is the
+same job with the condition in `--text`: quote, compare, and only then swap.
+Keep the per-tick amount under the approval threshold or the job queues an
+approval every day. A `--script` job also runs under the agent's rules (the
+scheduler hands it an agent token), so it gains nothing over an agent turn
+and loses the judgement step.
+
+**Never run a trade unattended.** Never background, `nohup`, `setsid`, `&`,
+or schedule a script that trades. Unattended runs are always judged as the
+agent: the gateway binds a detached or scheduled process as the agent's,
+its orders wait for approval or hit the cap exactly like yours, and there
+is no one to answer the approval card. On a retry (a timeout, a lost
+connection, a turn that ended before the result came back) reuse the same
+`--client-id`: the engine returns the existing order instead of trading
+twice.
 
 **Buy the dip.** On each tick: `agentos trade tokens --chain C SYMBOL --json`
 (or the quote) for the current price, compare with the user's trigger, and

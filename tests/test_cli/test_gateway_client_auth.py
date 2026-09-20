@@ -14,6 +14,7 @@ silently fell back to the hardcoded ``ws://localhost:18791/ws`` default.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -105,9 +106,15 @@ class TestAgentToken:
     """Inside an agent's shell the CLI presents the gateway-minted token."""
 
     @pytest.mark.asyncio
-    async def test_handshake_carries_the_agent_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_handshake_carries_the_agent_token(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         import json as _json
 
+        # A gateway booted earlier in the run may have written the operator
+        # credential file under the shared state root; this test is about the
+        # token and the bare frame, so point the lookup at nothing.
+        monkeypatch.setenv("AGENTOS_OPERATOR_SECRET_FILE", str(tmp_path / "absent.secret"))
         sent: list[dict[str, Any]] = []
 
         class _Ws:

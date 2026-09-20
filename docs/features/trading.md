@@ -129,7 +129,12 @@ variables `RPC_BASE_URL` (8453) / `RPC_ROBINHOOD_URL` (4663), then the
 public default. Every `[trading]` key is also an environment variable with
 the `AGENTOS_TRADING_` prefix (`AGENTOS_TRADING_DAILY_CAP_USD=250`,
 `AGENTOS_TRADING_PROVIDER=uniswap`). The API key is redacted in
-`config.snapshot` and every public config view like any other `*_api_key`.
+`config.snapshot` and every public config view like any other `*_api_key`;
+`rpc_urls` values are shown as scheme and host only (`https://base.drpc.org/…`)
+because dRPC, Alchemy and Infura keys live in the path. Writing that
+redacted form back through `config.apply` / `config.patch` keeps the stored
+URL. `aggregator_base_url` must be `https`; `http` is accepted only for
+`127.0.0.1`, `localhost` or `::1`.
 Get a key from the Uniswap developer dashboard; the desktop's **Settings →
 Trading** pane has a *Test key* button (`trading.probe`).
 
@@ -171,20 +176,29 @@ Guardrails are only worth anything if the gateway, not the client, decides
 who is asking. `agentos.gateway.agent_surface` computes an *agent binding*
 for every admitted connection from three signals, strongest first:
 
-1. **The operator secret.** The desktop app spawns the gateway and hands it
-   a random secret (`AGENTOS_OPERATOR_SECRET_FILE`, a `0600` file the
-   gateway deletes after reading; `AGENTOS_OPERATOR_SECRET` as a fallback,
-   scrubbed from the environment). A connection presenting it at the
-   handshake is the operator's, never an agent's.
-2. **An agent token.** When an agent turn spawns a shell, the shell tool
-   mints a token and passes it to the child as `AGENTOS_AGENT_TOKEN`; the
-   CLI presents it back and the connection is bound to that session and
-   agent.
+1. **An operator secret.** Two are accepted. The desktop app spawns the
+   gateway and hands it a random secret (`AGENTOS_OPERATOR_SECRET_FILE`, a
+   `0600` file the gateway deletes after reading; `AGENTOS_OPERATOR_SECRET`
+   as a fallback, scrubbed from the environment). The gateway also writes
+   its own secret to `~/.agentos/wallets/operator.secret` (`0600`, rotated
+   at every boot); the CLI reads it automatically when `AGENTOS_AGENT_TOKEN`
+   is not set and the gateway is local, and an agent's shell cannot read it
+   (`~/.agentos/wallets` is a denied path). A connection presenting either
+   at the handshake is the operator's, never an agent's. Against a remote
+   gateway the CLI presents nothing and gets the agent's rules.
+2. **An agent token.** When an agent turn spawns a shell — or the scheduler
+   runs a `cron --script` job — a token is minted and passed to the child
+   as `AGENTOS_AGENT_TOKEN`; the CLI presents it back and the connection is
+   bound to that session and agent. A script job therefore trades under
+   the agent's rules.
 3. **An exec window.** While any agent shell is running (background
    processes included), a new connection that presents nothing is treated
    as the agent's. Unsetting variables gains nothing; a person who opens
    the CLI in that window gets the agent's rules, which fail safe (their
    order waits for approval instead of executing).
+4. **Nothing.** A connection with no secret, no token and no open window
+   is unbound and gets the agent's rules as well: a process an agent
+   detached (`setsid`, `nohup`, `&`) that connects later gains nothing.
 
 An agent-bound connection is `initiator: agent` whatever it declares, and
 its orders are filed under the session the binding names. These RPCs are
@@ -192,11 +206,26 @@ its orders are filed under the session the binding names. These RPCs are
 `wallet.setup`, `unlock`, `lock`, `setUnlockMode`, `changePassword`,
 `create`, `import`, `export`, `rename`, `remove`, `setPrimary`;
 `trading.orders.approve`, `trading.orders.reject`, `trading.tokens.hide`,
-`trading.unwrap`, `trading.lot.setCost`. `config.set` / `config.patch` of
+`trading.unwrap`, `trading.lot.setCost`, `trading.probe` with an `apiKey`
+(testing a key that is not in config) and `trading.sync` with `full`
+(dropping and rebuilding the ledger). `config.set` / `config.patch` of
 any `trading.*` key is refused from an agent as well (as an invalid request,
 not with a `trading.*` code). So `agentos trade approve`,
 `agentos wallet export` or `agentos config set trading.daily_cap_usd`
-simply fail inside an agent turn. This is not a full sandbox (a same-user process can still read
+simply fail inside an agent turn. `wallet.status` and `trading.status`
+answer an agent without `vaultPath`. A `note` on a swap, send or revoke is
+stored as the approver will see it: control and bidi characters are
+dropped, whitespace is collapsed, and it is cut at 240 characters.
+`trading.swap` and `trading.send` take a `clientOrderId`: a repeat call with
+the same id returns the existing order instead of placing a second one
+(`agentos trade swap|send --client-id`). Swap targets and approval spenders
+are pinned to the provider's known contracts (a quote naming another address
+is refused, not signed); the gas limit is the provider's or the estimate
+plus 20 %, and an order the wallet cannot fund (value plus gas at the quoted
+fee) is refused before signing. `trading.rpc_urls` are shown host-only in
+every public config view (`config.snapshot`, `agentos config get`) because
+provider keys live in the URL path; `trading.aggregator_base_url` must be
+`https` (plain `http` only for a loopback host). This is not a full sandbox (a same-user process can still read
 files); it is the difference between a guardrail a prompt can talk its way
 around and one it cannot.
 
@@ -267,15 +296,15 @@ Every client goes through the same gateway methods:
 
 | Method | What it does |
 | --- | --- |
-| `trading.status`, `trading.limits`, `trading.probe`, `trading.network` | readiness, the guardrails and today's spend, provider reachability, head block / gas / RPC latency per chain |
+| `trading.status`, `trading.limits`, `trading.probe`, `trading.network` | readiness (no `vaultPath` for an agent), the guardrails and today's spend, provider reachability (with `apiKey`: operator-only), head block / gas / RPC latency per chain |
 | `trading.setProvider` | switch the swap provider (a wrapper over `config.set trading.provider`) |
 | `trading.tokens.search`, `trading.tokens.resolve`, `trading.tokens.hide` | search a chain's tokens; resolve one address to its metadata (symbol, decimals, verification, price); hide or show a token (operator-only) |
-| `trading.quote`, `trading.swap`, `trading.send`, `trading.unwrap` | price a swap; place one (per wallet, several, or all); send a token to one or many recipients as one batch; unwrap WETH delivered by a swap (operator-only) |
+| `trading.quote`, `trading.swap`, `trading.send`, `trading.unwrap` | price a swap; place one (per wallet, several, or all); send a token to one or many recipients as one batch; unwrap WETH delivered by a swap (operator-only). `swap` and `send` take `clientOrderId` (idempotency: the same id returns the same order) and a `note` that is sanitised (control/bidi characters, 240 chars) |
 | `trading.allowances.list`, `trading.allowances.revoke` | live ERC-20 allowances with exposure; `approve(spender, 0)` |
 | `trading.orders.list`, `trading.orders.get`, `trading.orders.wait`, `trading.orders.batch` | orders (filter by status, wallet, `kind`); one order; block until it settles; every leg of a multisend by `batchId` |
 | `trading.orders.approve`, `trading.orders.reject` | the user's decision on a parked order (operator-only) |
 | `trading.decode` | explain a transaction hash or raw calldata |
-| `trading.history`, `trading.portfolio`, `trading.chart`, `trading.sync`, `trading.lot.setCost` | the ledger; holdings with PnL; price history for a token (GeckoTerminal on Base, the engine's own snapshots on Robinhood Chain); re-read the chain; correct a lot's cost basis (operator-only) |
+| `trading.history`, `trading.portfolio`, `trading.chart`, `trading.sync`, `trading.lot.setCost` | the ledger; holdings with PnL; price history for a token (GeckoTerminal on Base, the engine's own snapshots on Robinhood Chain); re-read the chain (`full`, a rebuild, is operator-only); correct a lot's cost basis (operator-only) |
 
 ## Ledger and PnL
 

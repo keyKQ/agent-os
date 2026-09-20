@@ -774,4 +774,7 @@ export const trading = {
   // Confirm sheet: the quote is frozen while it is open.
   'trading.confirm.quoteAsOf': 'Quote as of',
   'trading.confirm.refreshQuote': 'Refresh quote',
+  // Approval card: the free-text note, labelled so it never reads as a fact.
+  'trading.card.note.agent': 'Agent’s note',
+  'trading.card.note': 'Note',
 } as const

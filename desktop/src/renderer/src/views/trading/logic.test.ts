@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DUST_USD,
+  SYMBOL_MAX,
   checksumAddress,
   checksumMismatch,
+  clampSymbol,
   gasReserveEth,
   maxSpendable,
   splitDust,
@@ -461,5 +463,35 @@ describe('gas reserve for a native Max', () => {
     expect(maxSpendable('0.0001', 18, '0.0003')).toBe('0')
     // An ERC-20 leg pays gas in something else: nothing is kept back.
     expect(maxSpendable('12.5', 6, null)).toBe('12.5')
+  })
+})
+
+describe('clampSymbol', () => {
+  it('leaves an ordinary symbol alone', () => {
+    expect(clampSymbol('ETH')).toBe('ETH')
+    expect(clampSymbol('USDC')).toBe('USDC')
+    expect(clampSymbol('A'.repeat(SYMBOL_MAX))).toBe('A'.repeat(SYMBOL_MAX))
+    expect(clampSymbol('')).toBe('')
+  })
+
+  it('cuts a long one to the limit with an ellipsis, so the cut is visible', () => {
+    // A symbol is on-chain data anyone can mint; a 200-character one must
+    // not widen a leg out of its row.
+    const long = 'USDC' + 'x'.repeat(200)
+    expect(clampSymbol(long)).toBe('USDCxxxxxxx…')
+    expect(Array.from(clampSymbol(long)).length).toBe(SYMBOL_MAX)
+    expect(clampSymbol('ABCDEFGH', 4)).toBe('ABC…')
+  })
+
+  it('counts code points, so an astral glyph is not split in half', () => {
+    const sym = '🪙'.repeat(13)
+    expect(clampSymbol(sym)).toBe('🪙'.repeat(11) + '…')
+  })
+
+  it('keeps a bidi override inside the clamp (isolation is the CSS class’s job)', () => {
+    // The override is invisible but it is a code point: it counts toward the 12.
+    const sym = 'USDC‮abcdefghijklmnop'
+    expect(clampSymbol(sym)).toBe('USDC‮abcdef…')
+    expect(Array.from(clampSymbol(sym))).toHaveLength(SYMBOL_MAX)
   })
 })

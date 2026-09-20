@@ -1,6 +1,7 @@
 import type { RawJob, RawRun } from '@/views/cron/logic'
 import {
   chainName,
+  clampSymbol,
   formatAmount,
   formatPct,
   formatUsd,
@@ -142,6 +143,19 @@ export interface Fact {
   tone?: 'warn' | 'danger'
   /** An address: rendered on its own line, in full, never truncated. */
   wide?: boolean
+  /** The value with every symbol unclamped, for the row's `title`; set only when a clamp cut something. */
+  full?: string
+}
+
+/**
+ * "0.2 ETH", the symbol clamped: `[shown, full]`, the second only when the
+ * clamp changed something. Symbols are on-chain data; a fact row must not
+ * grow to fit a 200-character one, and the whole belongs in a tooltip.
+ */
+function amountWithSymbol(amount: unknown, symbol: string): [string, string | undefined] {
+  const short = clampSymbol(symbol)
+  const shown = `${formatAmount(amount)} ${short}`
+  return [shown, short === symbol ? undefined : `${formatAmount(amount)} ${symbol}`]
 }
 
 function utcOffset(d: Date): string {
@@ -214,6 +228,7 @@ export function approvalFacts(
     value: string | null | undefined,
     tone?: Fact['tone'],
     wide?: boolean,
+    full?: string,
   ) => {
     if (value === null || value === undefined || value === '') return
     facts.push({
@@ -222,15 +237,19 @@ export function approvalFacts(
       value,
       ...(tone ? { tone } : {}),
       ...(wide ? { wide } : {}),
+      ...(full ? { full } : {}),
     })
   }
+  const symIn = clampSymbol(order.tokenIn.symbol)
+  const symOut = clampSymbol(order.tokenOut.symbol)
   push('wallet', walletDisplay(order.wallet, wallets))
   push('chain', chainName(order.chainId))
   const kind = orderKind(order)
   if (kind === 'send') {
     // Where the money goes is the one fact that may never be shortened.
     push('to', addressFact(order), undefined, true)
-    push('send', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
+    const [send, sendFull] = amountWithSymbol(order.amountIn, order.tokenIn.symbol)
+    push('send', send, undefined, undefined, sendFull)
     if (order.valueUsd !== null) push('value', formatUsd(order.valueUsd))
     if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
     push('order', order.orderId)
@@ -238,31 +257,43 @@ export function approvalFacts(
     return facts
   }
   if (kind === 'revoke') {
-    push('token', order.tokenIn.symbol || shortAddress(order.tokenIn.address))
+    push(
+      'token',
+      symIn || shortAddress(order.tokenIn.address),
+      undefined,
+      undefined,
+      symIn === order.tokenIn.symbol ? undefined : order.tokenIn.symbol,
+    )
     push('spender', addressFact(order), undefined, true)
+    const [allowance, allowanceFull] = amountWithSymbol(order.amountIn, order.tokenIn.symbol)
     push(
       'allowance',
-      order.amountIn === 'unlimited'
-        ? (labels.unlimited ?? 'unlimited')
-        : `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`,
+      order.amountIn === 'unlimited' ? (labels.unlimited ?? 'unlimited') : allowance,
       order.amountIn === 'unlimited' ? 'danger' : undefined,
+      undefined,
+      order.amountIn === 'unlimited' ? undefined : allowanceFull,
     )
     if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
     push('order', order.orderId)
     if (order.expiresAt) push('expires', formatExpiryShort(order.expiresAt, now, locale))
     return facts
   }
-  push('pay', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
-  if (order.expectedOut)
-    push('receive', `${formatAmount(order.expectedOut)} ${order.tokenOut.symbol}`)
-  if (order.minOut) push('minimum', `${formatAmount(order.minOut)} ${order.tokenOut.symbol}`)
+  const [pay, payFull] = amountWithSymbol(order.amountIn, order.tokenIn.symbol)
+  push('pay', pay, undefined, undefined, payFull)
+  if (order.expectedOut) {
+    const [receive, receiveFull] = amountWithSymbol(order.expectedOut, order.tokenOut.symbol)
+    push('receive', receive, undefined, undefined, receiveFull)
+  }
+  if (order.minOut) {
+    const [minimum, minimumFull] = amountWithSymbol(order.minOut, order.tokenOut.symbol)
+    push('minimum', minimum, undefined, undefined, minimumFull)
+  }
   if (order.expectedOut) {
     const rate = Number(order.expectedOut) / Number(order.amountIn)
     if (Number.isFinite(rate) && rate > 0) {
-      push(
-        'rate',
-        `1 ${order.tokenIn.symbol} ≈ ${formatAmount(String(rate), 6)} ${order.tokenOut.symbol}`,
-      )
+      const shown = `1 ${symIn} ≈ ${formatAmount(String(rate), 6)} ${symOut}`
+      const whole = `1 ${order.tokenIn.symbol} ≈ ${formatAmount(String(rate), 6)} ${order.tokenOut.symbol}`
+      push('rate', shown, undefined, undefined, shown === whole ? undefined : whole)
     }
   }
   if (order.valueUsd !== null) push('value', formatUsd(order.valueUsd))
@@ -296,15 +327,27 @@ export function batchFacts(
   now: number = Date.now(),
 ): Fact[] {
   const facts: Fact[] = []
-  const push = (key: string, value: string | null | undefined, tone?: Fact['tone']) => {
+  const push = (
+    key: string,
+    value: string | null | undefined,
+    tone?: Fact['tone'],
+    full?: string,
+  ) => {
     if (value === null || value === undefined || value === '') return
-    facts.push({ key, label: labels[key] ?? key, value, ...(tone ? { tone } : {}) })
+    facts.push({
+      key,
+      label: labels[key] ?? key,
+      value,
+      ...(tone ? { tone } : {}),
+      ...(full ? { full } : {}),
+    })
   }
   const lead = ask.lead
   push('wallet', walletDisplay(lead.wallet, wallets))
   push('chain', chainName(lead.chainId))
   push('recipients', String(ask.orders.length))
-  push('total', `${formatAmount(ask.totalAmount)} ${lead.tokenIn.symbol}`)
+  const [total, totalFull] = amountWithSymbol(ask.totalAmount, lead.tokenIn.symbol)
+  push('total', total, undefined, totalFull)
   if (ask.totalUsd !== null) push('value', formatUsd(ask.totalUsd))
   const gas = ask.orders.reduce((s, o) => s + (o.gasUsd ?? 0), 0)
   if (gas > 0) push('gas', formatUsd(gas))

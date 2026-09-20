@@ -515,6 +515,12 @@ class AggregatorProvider:
         # the thing this set exists to check.
         return TRUSTED_SPENDERS
 
+    def trusted_targets(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        # 0x's AllowanceHolder is the entry point for every route the
+        # aggregator builds, ERC-20 and native sells alike; the swap is sent
+        # there or not at all.
+        return TRUSTED_SPENDERS
+
     async def build(
         self,
         quote: ProviderQuote,

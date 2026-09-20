@@ -24,7 +24,7 @@ from typing import Any
 from agentos.paths import state_dir
 from agentos.trading.pnl import Lot
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 OPENING_NOTE = "opening balance"
 
@@ -167,7 +167,10 @@ CREATE TABLE IF NOT EXISTS orders (
     kind TEXT NOT NULL DEFAULT 'swap',
     -- send: where the tokens go; revoke: the spender losing its allowance.
     recipient TEXT,
-    batch_id TEXT
+    batch_id TEXT,
+    -- A caller's own idempotency key: the same key from the same wallet
+    -- (and, for a multisend, to the same recipient) is the same order.
+    client_order_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_wallet ON orders (wallet, created_at DESC);
@@ -273,6 +276,13 @@ _OPENING_INDEX = (
 )
 # Created after the version-4 migration has added the column it indexes.
 _BATCH_INDEX = "CREATE INDEX IF NOT EXISTS idx_orders_batch ON orders (batch_id)"
+# One order per (client key, wallet, recipient). The recipient is part of
+# the key because a multisend is one client key fanned out over N rows for
+# the same wallet; without it the second leg could never be inserted.
+_CLIENT_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_client ON orders "
+    "(client_order_id, wallet, COALESCE(recipient, '')) WHERE client_order_id IS NOT NULL"
+)
 
 
 def default_ledger_path() -> Path:
@@ -342,10 +352,13 @@ class Ledger:
                     self._add_token_columns()
                 if version < 4:
                     self._add_order_kind_columns()
+                if version < 5:
+                    self._add_order_client_column()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
             self._conn.execute(_BATCH_INDEX)
+            self._conn.execute(_CLIENT_INDEX)
             self._commit()
 
     def _add_token_columns(self) -> None:
@@ -370,6 +383,12 @@ class Ledger:
         ):
             if column not in have:
                 self._conn.execute(f"ALTER TABLE orders ADD COLUMN {column} {ddl}")  # noqa: S608
+
+    def _add_order_client_column(self) -> None:
+        """Version 5: a caller-supplied idempotency key on ``orders``."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
+        if "client_order_id" not in have:
+            self._conn.execute("ALTER TABLE orders ADD COLUMN client_order_id TEXT")
 
     def _dedupe_openings(self) -> None:
         """Version 1 could book the same opening twice; keep the newest per position."""
@@ -567,11 +586,20 @@ class Ledger:
             self._commit()
 
     def touch_token(self, chain_id: int, address: str) -> None:
-        """The wallet acted on this token on purpose: it is shown, and stays shown."""
+        """The wallet acted on this token on purpose: it is shown, and stays shown.
+
+        Unless the *user* hid it: a deliberate hide outranks a deliberate
+        trade, the same way it outranks the classifier. The touch is still
+        recorded so the classifier never gets to re-decide the token.
+        """
         with self._lock:
             self._conn.execute(
-                "UPDATE tokens SET touched = 1, hidden = 0, hidden_by = NULL "
-                "WHERE chain_id = ? AND address = ?",
+                "UPDATE tokens SET touched = 1 WHERE chain_id = ? AND address = ?",
+                (chain_id, address.lower()),
+            )
+            self._conn.execute(
+                "UPDATE tokens SET hidden = 0, hidden_by = NULL "
+                "WHERE chain_id = ? AND address = ? AND COALESCE(hidden_by, '') != 'user'",
                 (chain_id, address.lower()),
             )
             self._commit()
@@ -1074,6 +1102,39 @@ class Ledger:
             if expect_status is not None and cursor.rowcount == 0:
                 return None
         return self.get_order(order_id)
+
+    def settle_order(
+        self,
+        order_id: str,
+        *,
+        expect_status: str,
+        spend: tuple[str, float, str] | None = None,
+        **fields: Any,
+    ) -> dict[str, Any] | None:
+        """Flip an order to its final status and count its spend, as one write.
+
+        The compare-and-set on ``expect_status`` decides who settles; the
+        winner's ``daily_spend`` upsert (``(wallet, usd, day)``) lands in the
+        same transaction, so a crash or a failed write between the two can
+        never leave a confirmed order that the cap has not seen — or the
+        reverse. Returns the row, or ``None`` when someone else got there first.
+        """
+        with self.transaction():
+            row = self.update_order(order_id, expect_status=expect_status, **fields)
+            if row is not None and spend is not None:
+                wallet, usd, day = spend
+                self.add_daily_spend(wallet, usd, day)
+        return row
+
+    def find_orders_by_client_id(self, client_order_id: str) -> list[dict[str, Any]]:
+        """Every order created under a caller's idempotency key, oldest first."""
+        with self._lock:
+            return _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE client_order_id = ? ORDER BY rowid ASC",
+                    (client_order_id,),
+                )
+            )
 
     def open_agent_value_usd(
         self, wallet: str, *, exclude_order_id: str | None = None, now: float | None = None

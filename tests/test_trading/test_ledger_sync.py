@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import httpx
 import pytest
 
@@ -834,7 +836,8 @@ class TestLedgerMigration:
             }
         )
         first._conn.execute("DROP INDEX idx_orders_batch")
-        for column in ("kind", "recipient", "batch_id"):
+        first._conn.execute("DROP INDEX idx_orders_client")
+        for column in ("kind", "recipient", "batch_id", "client_order_id"):
             first._conn.execute(f"ALTER TABLE orders DROP COLUMN {column}")  # noqa: S608
         first._conn.execute("DROP TABLE allowances")
         first._conn.execute("DROP TABLE allowance_scan")
@@ -844,6 +847,12 @@ class TestLedgerMigration:
         row = reopened.get_order("o1")
         assert row and row["kind"] == "swap" and row["recipient"] is None
         assert row["batch_id"] is None
+        # Version 5: the idempotency key column and its unique index arrived too.
+        assert row["client_order_id"] is None
+        reopened.insert_order({**row, "order_id": "o2", "client_order_id": "k1"})
+        with pytest.raises(sqlite3.IntegrityError):
+            reopened.insert_order({**row, "order_id": "o3", "client_order_id": "k1"})
+        assert [o["order_id"] for o in reopened.find_orders_by_client_id("k1")] == ["o2"]
         reopened.upsert_allowance(8453, WALLET, USDC, OTHER, block=5, tx_hash="0xaa")
         assert [a["spender"] for a in reopened.allowances(8453, WALLET)] == [OTHER]
         reopened.close()
@@ -911,9 +920,15 @@ class TestLedgerMigration:
         assert WETH in ledger.hidden_tokens(8453)
         ledger.set_token_hidden(8453, USDC, False, by="user", classified_at=2.0)
         assert ledger.get_token(8453, USDC)["hidden_by"] == "user"  # type: ignore[index]
-        # A deliberate act shows a token and marks it touched.
+        # A deliberate act marks a token touched and shows it — unless the
+        # user hid it: a user's hide outranks a trade as it outranks the classifier.
         ledger.touch_token(8453, WETH)
         row = ledger.get_token(8453, WETH)
+        assert row and row["hidden"] == 1 and row["touched"] == 1 and row["hidden_by"] == "user"
+        ledger.upsert_token(8453, AAPL, symbol="JUNK", name="Junk", decimals=18)
+        ledger.set_token_hidden(8453, AAPL, True, by="auto", classified_at=3.0)
+        ledger.touch_token(8453, AAPL)
+        row = ledger.get_token(8453, AAPL)
         assert row and row["hidden"] == 0 and row["touched"] == 1 and row["hidden_by"] is None
         # "Spent" means an outgoing entry or any order naming the token.
         assert ledger.token_was_spent(8453, USDC) is False

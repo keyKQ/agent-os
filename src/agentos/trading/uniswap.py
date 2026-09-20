@@ -24,6 +24,16 @@ DecisionOrigin = Literal["human_mediated", "autonomous"]
 
 BASE_URL = "https://trade-api.gateway.uniswap.org/v1"
 PROXY_SPENDER = "0x0000000085E102724e78eCd2F45DC9cA239Affad"
+#: The Universal Router a Trading API swap may be sent ``to``, per chain,
+#: lowercase. Pinned here rather than read from the response: the service
+#: refuses to sign a swap whose target is not in this table (or the proxy
+#: above), so a chain without an entry cannot swap through Uniswap at all
+#: until someone verifies its router and adds it. Only addresses already
+#: known to this repo (see ``decode.KNOWN_SPENDERS``) are listed; Robinhood
+#: Chain (4663) has none pinned and is therefore refused.
+UNIVERSAL_ROUTERS: dict[int, str] = {
+    8453: "0x6ff5693b99212da76ad316178a184ab56d299b43",
+}
 CLASSIC_PROTOCOLS = ["V2", "V3", "V4"]
 ACCEPTED_ROUTINGS = frozenset({"CLASSIC", "WRAP", "UNWRAP"})
 QUOTE_FRESH_SECONDS = 30.0

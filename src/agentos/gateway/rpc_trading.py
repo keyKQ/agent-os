@@ -10,6 +10,9 @@ Control-plane only.
 from __future__ import annotations
 
 import functools
+import inspect
+import re
+import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -29,6 +32,12 @@ _d = get_dispatcher()
 
 _VALID_EXPORT_FORMATS = {"keystore", "privateKey"}
 _VALID_INITIATORS = {"manual", "agent"}
+NOTE_MAX_CHARS = 240
+# Unicode bidi controls (LRM/RLM/ALM, the embedding/override/isolate pairs):
+# in a note they can make "send to A" read as "send to B" in the approval card.
+_BIDI_CONTROLS = "\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069"
+_NOTE_STRIP = re.compile(f"[\\x00-\\x1f\\x7f-\\x9f{_BIDI_CONTROLS}]")
+_NOTE_SPACES = re.compile(r"\s+")
 
 
 def _require_operator(ctx: RpcContext, action: str) -> None:
@@ -104,6 +113,61 @@ def _str(params: dict[str, Any], key: str, *, required: bool = False) -> str | N
     return value.strip()
 
 
+def _note(params: dict[str, Any], key: str = "note") -> str | None:
+    """A free-text note as it will be shown in history and the approval card.
+
+    C0/C1 control characters and Unicode bidi controls are dropped, runs of
+    whitespace collapse to one space, and the text is cut at
+    :data:`NOTE_MAX_CHARS`. The note is the one field an agent writes that a
+    person reads before approving, so it must render as it was typed.
+    """
+    raw = _str(params, key)
+    if raw is None:
+        return None
+    text = unicodedata.normalize("NFC", raw)
+    # Whitespace first (a newline or tab becomes a space, not nothing), then
+    # the controls that are not whitespace, then collapse what that left.
+    text = _NOTE_SPACES.sub(" ", text)
+    text = _NOTE_STRIP.sub("", text)
+    text = _NOTE_SPACES.sub(" ", text).strip()
+    if not text:
+        return None
+    return text[:NOTE_MAX_CHARS].rstrip()
+
+
+def _without_paths(ctx: RpcContext, payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop filesystem paths (``vaultPath`` and any other ``*Path``) for an agent.
+
+    Where the keystores live is the operator's business; an agent only needs
+    to know whether the vault is set up and unlocked.
+    """
+    if agent_binding(ctx) is None:
+        return payload
+    return {k: v for k, v in payload.items() if not (isinstance(k, str) and k.endswith("Path"))}
+
+
+def _client_order_id(service: TradingService, method: str, p: dict[str, Any]) -> dict[str, Any]:
+    """``clientOrderId`` → ``client_order_id=`` for the service call.
+
+    An idempotency key must never be dropped on the floor: a retry that lost
+    its key is a second trade. So when the engine's ``method`` does not take
+    one, a caller that sent one is refused instead of served without it.
+    """
+    value = _str(p, "clientOrderId")
+    if value is None:
+        return {}
+    fn = getattr(type(service), method, None)
+    try:
+        accepted = fn is not None and "client_order_id" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins without a signature
+        accepted = False
+    if not accepted:
+        raise RpcHandlerError(
+            "trading.invalid", f"clientOrderId is not supported by this engine's {method}"
+        )
+    return {"client_order_id": value}
+
+
 def _number(params: dict[str, Any], key: str) -> float | None:
     value = params.get(key)
     if value is None or value == "":
@@ -154,7 +218,7 @@ def _raise(exc: Exception) -> RpcHandlerError:
 async def _wallet_status(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     service = _service(ctx)
     service.ensure_unlocked()
-    return service.vault.status()
+    return _without_paths(ctx, service.vault.status())
 
 
 @_d.method("wallet.setup")
@@ -374,15 +438,21 @@ async def _trading_status(params: dict | None, ctx: RpcContext) -> dict[str, Any
     p = _params(params)
     service = _service(ctx)
     service.ensure_unlocked()
-    return await service.status(check_rpc=bool(p.get("checkRpc")))
+    return _without_paths(ctx, await service.status(check_rpc=bool(p.get("checkRpc"))))
 
 
 @_d.method("trading.probe")
 async def _trading_probe(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Is the provider reachable? With ``apiKey`` it also tests a key that is not
+    in config, which turns the gateway into a key oracle — so that form is the
+    operator's only."""
     p = _params(params)
+    api_key = _str(p, "apiKey")
+    if api_key is not None:
+        _require_operator(ctx, "trading.probe(apiKey)")
     service = _service(ctx)
     try:
-        return await service.probe(_str(p, "apiKey"), provider_id=_str(p, "provider"))
+        return await service.probe(api_key, provider_id=_str(p, "provider"))
     except Exception as exc:
         raise _raise(exc) from exc
 
@@ -511,8 +581,9 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
             slippage_pct=_number(p, "slippagePct"),
             initiator=initiator,  # type: ignore[arg-type]
             session_key=session_key,
-            note=_str(p, "note"),
+            note=_note(p),
             wait=bool(p.get("wait")),
+            **_client_order_id(service, "swap", p),
         )
     except Exception as exc:
         raise _raise(exc) from exc
@@ -571,8 +642,9 @@ async def _trading_send(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
             recipients=recipients,
             initiator=initiator,  # type: ignore[arg-type]
             session_key=session_key,
-            note=_str(p, "note"),
+            note=_note(p),
             wait=bool(p.get("wait")),
+            **_client_order_id(service, "send", p),
         )
     except Exception as exc:
         raise _raise(exc) from exc
@@ -646,7 +718,7 @@ async def _trading_allowances_revoke(params: dict | None, ctx: RpcContext) -> di
             spender=_str(p, "spender", required=True) or "",
             initiator=initiator,  # type: ignore[arg-type]
             session_key=session_key,
-            note=_str(p, "note"),
+            note=_note(p),
             wait=bool(p.get("wait")),
         )
     except Exception as exc:
@@ -807,11 +879,16 @@ async def _trading_chart(params: dict | None, ctx: RpcContext) -> dict[str, Any]
 
 @_d.method("trading.sync")
 async def _trading_sync(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Re-read the chain into the ledger. ``full`` drops and rebuilds the ledger
+    (every chain, from the wallet's first block), so an agent may not ask for it."""
     p = _params(params)
+    full = bool(p.get("full"))
+    if full:
+        _require_operator(ctx, "trading.sync(full)")
     service = _service(ctx)
     service.ensure_unlocked()
     try:
-        service.request_sync(wallet=_str(p, "wallet"), full=bool(p.get("full")))
+        service.request_sync(wallet=_str(p, "wallet"), full=full)
     except Exception as exc:
         raise _raise(exc) from exc
     return {"started": True}

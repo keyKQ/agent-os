@@ -1,6 +1,58 @@
 import { BrowserWindow, nativeTheme, shell } from 'electron'
 import { is } from '@electron-toolkit/utils'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+/** The only schemes a link in the renderer may hand to the OS. */
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:'])
+
+/**
+ * May this URL leave the app for the default browser or mail client? Only
+ * web and mail links; `file:`, `javascript:`, `data:` and custom schemes are
+ * refused outright, since a rendered link is content the agent (or a token
+ * name it read from the chain) may have written.
+ */
+export function isAllowedExternalUrl(url: string): boolean {
+  try {
+    return EXTERNAL_SCHEMES.has(new URL(url).protocol)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The renderer's own place: the dev server's origin, or the `file:` URL of
+ * the built renderer directory. `isAppNavigation` measures against it.
+ */
+export function appOriginFor(rendererUrl: string | undefined, rendererDir: string): string {
+  if (rendererUrl) {
+    try {
+      return new URL(rendererUrl).origin
+    } catch {
+      // Fall through to the packaged renderer.
+    }
+  }
+  return pathToFileURL(path.join(rendererDir, '/')).href
+}
+
+/**
+ * Is this navigation still inside the app? For a dev-server origin the
+ * origin must match exactly; for a packaged renderer the URL must be a
+ * `file:` URL under the renderer directory. Anything else — another site,
+ * another local file, `javascript:`/`data:` — is not the app.
+ */
+export function isAppNavigation(url: string, appOrigin: string): boolean {
+  let target: URL
+  try {
+    target = new URL(url)
+  } catch {
+    return false
+  }
+  if (appOrigin.startsWith('file:')) {
+    return target.protocol === 'file:' && target.pathname.startsWith(new URL(appOrigin).pathname)
+  }
+  return target.origin === appOrigin
+}
 
 /** Matches --background in renderer/src/theme/palettes.ts so the first paint
  *  before React mounts is not a white flash in dark mode. */
@@ -57,16 +109,28 @@ export function createMainWindow(
     win.webContents.setZoomFactor((opts.uiScale ?? 100) / 100)
   })
 
-  // External links open in the default browser, never inside the shell.
+  // External links open in the default browser, never inside the shell —
+  // and only web and mail links go out at all; anything else is dropped.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
 
-  if (is.dev && process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  // The renderer never leaves its own origin. A link, a form or a script
+  // that navigates the top frame anywhere else is stopped here; the page
+  // stays where it was. (`loadURL`/`loadFile` from this process do not
+  // raise will-navigate, so the app's own loads are unaffected.)
+  const rendererUrl = is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+  const rendererDir = path.join(__dirname, '../renderer')
+  const appOrigin = appOriginFor(rendererUrl, rendererDir)
+  win.webContents.on('will-navigate', (event, url) => {
+    if (!isAppNavigation(url, appOrigin)) event.preventDefault()
+  })
+
+  if (rendererUrl) {
+    void win.loadURL(rendererUrl)
   } else {
-    void win.loadFile(path.join(__dirname, '../renderer/index.html'))
+    void win.loadFile(path.join(rendererDir, 'index.html'))
   }
   return win
 }

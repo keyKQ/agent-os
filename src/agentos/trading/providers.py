@@ -18,6 +18,7 @@ from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec, is_native
 from agentos.trading.evm import EvmClient
 from agentos.trading.uniswap import (
     PROXY_SPENDER,
+    UNIVERSAL_ROUTERS,
     DecisionOrigin,
     Quote,
     UniswapAuthError,
@@ -127,6 +128,16 @@ class SwapProvider(Protocol):
         """
         ...
 
+    def trusted_targets(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        """The only addresses (lowercase) a swap transaction may be sent ``to``.
+
+        Pinned per provider and chain, never read from the quote: calldata
+        is opaque, so the contract it is sent to is the one thing the
+        service can still hold a provider to. An empty set refuses every
+        swap on that chain.
+        """
+        ...
+
     async def build(
         self,
         quote: ProviderQuote,
@@ -227,6 +238,16 @@ class UniswapProvider:
         # The Trading API approves either Permit2 (classic routes with a
         # permit signature) or its allowance-holder proxy; nothing else.
         return frozenset({PERMIT2.lower(), PROXY_SPENDER.lower()})
+
+    def trusted_targets(self, chain: ChainSpec, quote: ProviderQuote) -> frozenset[str]:
+        # The no-Permit2 workflow sends the swap to the Trading API's proxy;
+        # a permit route to the Universal Router. Both are pinned per chain
+        # in ``UNIVERSAL_ROUTERS``: a chain without a verified router entry
+        # gets an empty set, which refuses the swap rather than guessing.
+        router = UNIVERSAL_ROUTERS.get(chain.chain_id)
+        if router is None:
+            return frozenset()
+        return frozenset({router.lower(), PROXY_SPENDER.lower()})
 
     async def build(
         self,

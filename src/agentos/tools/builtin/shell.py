@@ -732,6 +732,27 @@ def _signal_exec_process_tree(proc: Any, sig: signal.Signals) -> bool:
     return True
 
 
+async def _reap_exec_process_tree(proc: Any) -> None:
+    """After the command exited: kill what it left in its process group.
+
+    The exec window closes when this function's caller returns, and a
+    detached child (``setsid``, ``nohup … &``, a double fork) that connected
+    to the gateway afterwards would otherwise be an unmarked connection.
+    SIGTERM first, then SIGKILL half a second later for whatever ignored it.
+    A group that is already empty is the common case and costs nothing.
+    """
+    if os.name != "posix":
+        return
+    os_mod = cast(Any, os)
+    try:
+        os_mod.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, OSError):
+        return
+    await asyncio.sleep(0.5)
+    with contextlib.suppress(ProcessLookupError, OSError):
+        os_mod.killpg(proc.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+
+
 async def _terminate_exec_process_tree(proc: Any) -> None:
     _signal_exec_process_tree(proc, signal.SIGTERM)
     if await _wait_exec_process(proc, _EXEC_TERMINATE_TIMEOUT):
@@ -886,13 +907,17 @@ async def _run_exec_subprocess(
             if isinstance(escalation, DenialResult):
                 return json.dumps(escalation.to_dict())
             try:
-                proc = await asyncio.create_subprocess_shell(
-                    command,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    cwd=cwd,
-                    env=merged_env,
-                )
+                fallback_kwargs: dict[str, Any] = {
+                    "stdout": asyncio.subprocess.PIPE,
+                    "stderr": asyncio.subprocess.STDOUT,
+                    "cwd": cwd,
+                    "env": merged_env,
+                }
+                if os.name == "posix":
+                    # Own process group, so what the command detached dies
+                    # with it (see the host path below).
+                    fallback_kwargs["start_new_session"] = True
+                proc = await asyncio.create_subprocess_shell(command, **fallback_kwargs)
                 try:
                     stdout_bytes, _ = await asyncio.wait_for(
                         proc.communicate(), timeout=effective_timeout
@@ -900,7 +925,9 @@ async def _run_exec_subprocess(
                 except TimeoutError:
                     proc.kill()
                     await proc.communicate()
+                    await _reap_exec_process_tree(proc)
                     return f"[timeout after {effective_timeout}s]\ncommand: {command}"
+                await _reap_exec_process_tree(proc)
                 output = redact_terminal_output(
                     stdout_bytes.decode("utf-8", errors="replace"), command
                 )
@@ -937,8 +964,7 @@ async def _run_exec_subprocess(
             if not await _wait_exec_process(proc, effective_timeout):
                 await _terminate_exec_process_tree(proc)
                 return f"[timeout after {effective_timeout}s]\ncommand: {command}"
-            if os.name == "posix":
-                _signal_exec_process_tree(proc, signal.SIGTERM)
+            await _reap_exec_process_tree(proc)
 
             output_file.flush()
             output_file.seek(0)

@@ -1,6 +1,6 @@
 import { act, fireEvent, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { order, renderDesk, WALLET } from '../test-utils'
+import { order, renderDesk, USDC, WALLET } from '../test-utils'
 import { ApprovalCard } from './ApprovalCard'
 import { ApprovalsRegion } from './ApprovalsRegion'
 
@@ -334,5 +334,87 @@ describe('ApprovalCard for sends, batches and revokes', () => {
     expect(screen.getByTestId('card-legs')).toHaveTextContent('Permit2')
     expect(card).toHaveTextContent('unlimited')
     expect(screen.queryByTestId('stamp-irreversible')).toBeNull()
+  })
+})
+
+describe('ApprovalCard · the note and the symbols are data, not facts', () => {
+  it('labels the agent’s note and keeps a 5000-character one inside a bounded block', () => {
+    const note = 'buy the dip '.repeat(420).slice(0, 5000)
+    renderDesk(
+      <ApprovalCard
+        order={order({ note, initiator: 'agent' })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const block = screen.getByTestId('card-note')
+    expect(block).toHaveTextContent('Agent’s note')
+    const body = screen.getByTestId('card-note-body')
+    expect(body).toHaveClass('trd-card__note-body')
+    expect(body.textContent).toHaveLength(5000)
+    expect(block.contains(body)).toBe(true)
+    // The buttons are still there, after the note, and still work.
+    const approve = screen.getByTestId('card-approve')
+    const reject = screen.getByTestId('card-reject')
+    expect(approve).toBeInTheDocument()
+    expect(reject).toBeInTheDocument()
+    expect(block.compareDocumentPosition(approve) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(approve).toBeEnabled()
+  })
+
+  it('calls a person’s note a note, not the agent’s', () => {
+    renderDesk(
+      <ApprovalCard
+        order={order({ note: 'from the ticket', initiator: 'manual' })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const block = screen.getByTestId('card-note')
+    expect(block).toHaveTextContent('Note')
+    expect(block).not.toHaveTextContent('Agent’s note')
+  })
+
+  it('clamps a bidi-crafted symbol and isolates it, with the whole in the title', () => {
+    // A "symbol" is whatever the token contract returns: a right-to-left
+    // override could paint "0.2 ETH → 500 USDC" as something else.
+    const symbol = 'USDC‮' + 'CDSU 000,01'.repeat(8)
+    renderDesk(
+      <ApprovalCard
+        order={order({ tokenOut: { ...USDC, symbol } })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    const legs = screen.getByTestId('card-legs')
+    const syms = legs.querySelectorAll('.trd-sym')
+    expect(syms).toHaveLength(2)
+    const out = syms[1] as HTMLElement
+    expect(Array.from(out.textContent ?? '')).toHaveLength(12)
+    expect(out.textContent?.endsWith('…')).toBe(true)
+    expect(out).toHaveAttribute('title', symbol)
+    // The facts that carry the symbol are clamped the same way, whole in the title.
+    const receive = Array.from(document.querySelectorAll('.trd-card__fact')).find((el) =>
+      el.querySelector('dt')?.textContent?.startsWith('Receive'),
+    )
+    expect(receive).toBeDefined()
+    const dd = receive?.querySelector('dd') as HTMLElement
+    expect(dd).toHaveClass('trd-sym')
+    expect(dd.textContent).toBe('500 USDC‮CDSU 0…')
+    expect(dd).toHaveAttribute('title', `500 ${symbol}`)
+    // An ordinary symbol carries no title on its fact row.
+    const pay = Array.from(document.querySelectorAll('.trd-card__fact')).find((el) =>
+      el.querySelector('dt')?.textContent?.startsWith('Pay'),
+    )
+    expect(pay?.querySelector('dd')).not.toHaveAttribute('title')
   })
 })

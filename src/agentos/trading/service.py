@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
+import sqlite3
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -137,6 +139,16 @@ NETWORK_TTL_S = 10.0
 # A head block older than this means the endpoint is behind or the chain is
 # stalled; either way a read from it is not to be trusted.
 STALE_HEAD_S = 60.0
+# A transaction the node *refused* at broadcast is almost certainly not on
+# chain — but "almost": a load-balanced endpoint can reject on one node
+# after another accepted. Such an order is watched this long, not six hours.
+REJECTED_GIVE_UP_S = 600.0
+# Gas may cost at most the larger of this and this share of the order.
+GAS_CEILING_USD = 2.0
+GAS_CEILING_SHARE = 0.05
+# What a caller's idempotency key may look like.
+CLIENT_ORDER_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+BROADCAST_REJECTED = "broadcast rejected:"
 
 
 def _thin(points: list[dict[str, float]], limit: int) -> list[dict[str, float]]:
@@ -226,6 +238,31 @@ def _sign_tx(tx: dict[str, Any], key: bytes) -> str:
 
     signed = Account.sign_transaction(tx, key)
     return "0x" + bytes(signed.raw_transaction).hex()
+
+
+def _local_tx_hash(raw: str) -> str:
+    """The hash a signed transaction *will* have: keccak of its raw bytes.
+
+    Known before the node is asked, so the ledger can carry it before the
+    broadcast rather than after — the window between the two is where a
+    crash or a "rejected" that was actually accepted used to lose money.
+    """
+    from eth_utils import keccak
+
+    return "0x" + keccak(bytes.fromhex(raw.removeprefix("0x"))).hex()
+
+
+def _client_order_id(value: str | None) -> str | None:
+    """Validate a caller's idempotency key; ``None`` when none was given."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    if not CLIENT_ORDER_ID_RE.match(text):
+        raise TradingError(
+            "trading.invalid",
+            "clientOrderId must be 1-64 characters of letters, digits, '.', '_', ':' or '-'",
+        )
+    return text
 
 
 def _sign_permit(permit: dict[str, Any], key: bytes) -> str:
@@ -323,7 +360,13 @@ class TradingService:
                 client = self._evm_factory(chain)
             else:
                 url = rpc_url_for(chain, dict(getattr(self.config, "rpc_urls", {}) or {}))
-                client = EvmClient(url, http=self._http, max_log_span=chain.max_log_span)
+                client = EvmClient(
+                    url,
+                    http=self._http,
+                    max_log_span=chain.max_log_span,
+                    max_priority_fee_wei=chain.max_priority_fee_wei,
+                    max_fee_per_gas_wei=chain.max_fee_per_gas_wei,
+                )
             self._evm[chain.chain_id] = client
         return client
 
@@ -448,6 +491,14 @@ class TradingService:
         transaction is on-chain and the ledger owes it an answer.
         """
         watched = {t.get_name() for t in self._confirm_tasks}
+        # A row that carries a tx_hash was signed and recorded before the
+        # broadcast; whatever status the crash left it in, the transaction
+        # may be on chain, so it is a ``submitted`` order from here on.
+        for row in self.ledger.list_orders(status="quoted,approved,awaiting_approval", limit=100):
+            if row.get("tx_hash"):
+                self.ledger.update_order(
+                    str(row["order_id"]), expect_status=str(row["status"]), status="submitted"
+                )
         for row in self.ledger.list_orders(status="submitted", limit=100):
             order_id = str(row["order_id"])
             tx_hash = row.get("tx_hash")
@@ -1613,6 +1664,28 @@ class TradingService:
             return None
         return float(to_human(amount_raw, token.decimals)) * price
 
+    async def _order_value_usd(
+        self,
+        chain: ChainSpec,
+        meta_in: TokenMeta,
+        amount_in_raw: int,
+        meta_out: TokenMeta,
+        amount_out_raw: int,
+    ) -> float | None:
+        """What a swap is worth for the guardrails: the *larger* of its two sides.
+
+        The two legs of an honest swap price about the same; when they do
+        not, one of the feeds is wrong — a stale or thin-pool price on the
+        sell side would let a large order through the approval threshold
+        and the daily cap as if it were small. Taking the larger side means
+        a bad price can only make an order look bigger, never smaller.
+        ``None`` only when neither side has a price at all.
+        """
+        in_usd = await self._value_usd(chain, meta_in, amount_in_raw)
+        out_usd = await self._value_usd(chain, meta_out, amount_out_raw)
+        sides = [v for v in (in_usd, out_usd) if v is not None]
+        return max(sides) if sides else None
+
     async def _priced(
         self,
         provider: SwapProvider,
@@ -1715,9 +1788,9 @@ class TradingService:
             )
         except ProviderError as exc:
             raise _err(exc) from exc
-        value = await self._value_usd(chain, meta_in, amount_raw)
-        if value is None:
-            value = await self._value_usd(chain, meta_out, quote.amount_out_raw)
+        value = await self._order_value_usd(
+            chain, meta_in, amount_raw, meta_out, quote.amount_out_raw
+        )
         verdict = self._verdict(initiator=initiator, value=value, record=record, quote=quote)
         return self._quote_dict(chain, record, meta_in, meta_out, quote, value, verdict)
 
@@ -1804,6 +1877,7 @@ class TradingService:
             "deliveredToken": self._token_dict(chain_id, row.get("delivered_token")),
             "provider": row.get("provider") or DEFAULT_PROVIDER_ID,
             "providerLabel": provider_label(row.get("provider") or DEFAULT_PROVIDER_ID),
+            "clientOrderId": row.get("client_order_id"),
         }
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -1847,6 +1921,7 @@ class TradingService:
         session_key: str | None,
         note: str | None,
         wait: bool = False,
+        client_order_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Send one token to one or many addresses from one wallet.
 
@@ -1855,11 +1930,20 @@ class TradingService:
         as one. The guardrail sees the batch's total: an agent cannot get a
         transfer through by chopping it up, and a person approving it sees
         one card, not twenty.
+
+        ``client_order_id`` makes the call idempotent: a repeat with the
+        same key returns the orders it created the first time, whatever
+        state they are in, and creates nothing.
         """
         if not getattr(self.config, "enabled", True):
             raise TradingError("trading.disabled", "Trading is disabled in config")
         if initiator not in ("manual", "agent"):
             raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        client_id = _client_order_id(client_order_id)
+        if client_id is not None:
+            existing = self.ledger.find_orders_by_client_id(client_id)
+            if existing:
+                return [self._order_dict(r) for r in existing]
         if not self.ensure_unlocked():
             raise TradingError("wallet.locked", "Wallet vault is locked")
         record = self.vault.resolve(wallet)
@@ -1938,27 +2022,36 @@ class TradingService:
         order_ids: list[str] = []
         for (to, raw), value in zip(legs, values, strict=True):
             order_id = new_order_id()
-            self.ledger.insert_order(
-                {
-                    "order_id": order_id,
-                    "created_at": now,
-                    "updated_at": now,
-                    "chain_id": chain.chain_id,
-                    "wallet": record.key,
-                    "token_in": meta.address,
-                    "token_out": meta.address,
-                    "amount_raw": str(raw),
-                    "amount_human": format_amount(raw, meta.decimals),
-                    "value_usd": value,
-                    "status": "quoted",
-                    "initiator": initiator,
-                    "session_key": session_key,
-                    "note": note,
-                    "kind": "send",
-                    "recipient": to,
-                    "batch_id": batch_id,
-                }
-            )
+            try:
+                self.ledger.insert_order(
+                    {
+                        "order_id": order_id,
+                        "created_at": now,
+                        "updated_at": now,
+                        "chain_id": chain.chain_id,
+                        "wallet": record.key,
+                        "token_in": meta.address,
+                        "token_out": meta.address,
+                        "amount_raw": str(raw),
+                        "amount_human": format_amount(raw, meta.decimals),
+                        "value_usd": value,
+                        "status": "quoted",
+                        "initiator": initiator,
+                        "session_key": session_key,
+                        "note": note,
+                        "kind": "send",
+                        "recipient": to,
+                        "batch_id": batch_id,
+                        "client_order_id": client_id,
+                    }
+                )
+            except sqlite3.IntegrityError:
+                # Two identical calls raced past the lookup above; the other
+                # one's rows are this call's answer.
+                if client_id is not None:
+                    twins = self.ledger.find_orders_by_client_id(client_id)
+                    return [self._order_dict(r) for r in twins]
+                raise
             order_ids.append(order_id)
         verdict = guardrails.evaluate_transfer(
             initiator=initiator,
@@ -2033,11 +2126,14 @@ class TradingService:
         if status in ORDER_FINAL_STATUSES:
             return
         if row.get("tx_hash") or status == "submitted":
-            self.ledger.update_order(
-                order_id,
-                expect_status=status,
-                reason=f"settling: {error.code}: {error}",
-            )
+            # A refused broadcast keeps its reason: it decides how long the
+            # order is watched (``_confirm``), and it is the real story.
+            if not str(row.get("reason") or "").startswith(BROADCAST_REJECTED):
+                self.ledger.update_order(
+                    order_id,
+                    expect_status=status,
+                    reason=f"settling: {error.code}: {error}",
+                )
             log.warning("trading.settle_deferred", order=order_id, error=str(error))
             return
         self.ledger.update_order(
@@ -2501,11 +2597,24 @@ class TradingService:
         note: str | None,
         wait: bool = False,
         amount_usd: float | None = None,
+        client_order_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Swap from one or many wallets; one order per wallet.
+
+        ``client_order_id`` makes the call idempotent: a repeat with the
+        same key returns the orders it created the first time and creates
+        nothing — a client that lost the reply to a timeout can ask again
+        without a second swap going out.
+        """
         if not getattr(self.config, "enabled", True):
             raise TradingError("trading.disabled", "Trading is disabled in config")
         if initiator not in ("manual", "agent"):
             raise TradingError("trading.invalid", "initiator must be 'manual' or 'agent'")
+        client_id = _client_order_id(client_order_id)
+        if client_id is not None:
+            existing = self.ledger.find_orders_by_client_id(client_id)
+            if existing:
+                return [self._order_dict(r) for r in existing]
         if not self.ensure_unlocked():
             raise TradingError("wallet.locked", "Wallet vault is locked")
         self.provider()  # raises early when the provider is not usable (no key)
@@ -2532,18 +2641,38 @@ class TradingService:
                 amount_raw = await self._amount_for(
                     chain, record, meta_in, amount_in, amount_pct, amount_usd
                 )
-                row = self._new_order(
-                    order_id,
-                    chain,
-                    record,
-                    meta_in,
-                    meta_out,
-                    amount_raw,
-                    slippage,
-                    initiator,
-                    session_key,
-                    note,
-                )
+                try:
+                    row = self._new_order(
+                        order_id,
+                        chain,
+                        record,
+                        meta_in,
+                        meta_out,
+                        amount_raw,
+                        slippage,
+                        initiator,
+                        session_key,
+                        note,
+                        client_order_id=client_id,
+                    )
+                except sqlite3.IntegrityError:
+                    # Two identical calls raced past the lookup above: the
+                    # other one owns this wallet's order under this key.
+                    if client_id is None:
+                        raise
+                    twin = next(
+                        (
+                            r
+                            for r in self.ledger.find_orders_by_client_id(client_id)
+                            if str(r["wallet"]) == record.key
+                        ),
+                        None,
+                    )
+                    if twin is None:
+                        raise
+                    order_id = str(twin["order_id"])
+                    results.append(self.get_order(order_id))
+                    continue
                 await self._process_order(row, wait=wait)
             except Exception as exc:  # one wallet failing never blocks the batch
                 error = _err(exc)
@@ -2565,6 +2694,7 @@ class TradingService:
                             "session_key": session_key,
                             "note": note,
                             "slippage_pct": slippage,
+                            "client_order_id": client_id,
                         }
                     )
                     log.warning("trading.order_failed", order=order_id, error=str(error))
@@ -2616,6 +2746,7 @@ class TradingService:
         initiator: str,
         session_key: str | None,
         note: str | None,
+        client_order_id: str | None = None,
     ) -> dict[str, Any]:
         now = self._now()
         row = {
@@ -2634,6 +2765,7 @@ class TradingService:
             "note": note,
             "slippage_pct": slippage,
             "provider": self.provider_id(),
+            "client_order_id": client_order_id,
         }
         self.ledger.insert_order(row)
         return row
@@ -2664,9 +2796,9 @@ class TradingService:
             slippage_pct=row.get("slippage_pct"),
             decision_origin=_origin(str(row["initiator"])),
         )
-        value = await self._value_usd(chain, meta_in, amount_raw)
-        if value is None:
-            value = await self._value_usd(chain, meta_out, quote.amount_out_raw)
+        value = await self._order_value_usd(
+            chain, meta_in, amount_raw, meta_out, quote.amount_out_raw
+        )
         self.ledger.update_order(
             row["order_id"],
             expected_out_raw=str(quote.amount_out_raw),
@@ -2748,14 +2880,26 @@ class TradingService:
             if not meta_in.native:
                 approval_tx = await provider.approval_tx(quote, evm=evm, decision_origin=origin)
                 if approval_tx is not None:
-                    self._check_approval_tx(
+                    spender = self._check_approval_tx(
                         approval_tx,
                         token=meta_in.address,
                         amount_raw=amount_raw,
                         spenders=provider.trusted_spenders(chain, quote),
                     )
-                    tx_hash = await self._send(chain, record, key, approval_tx)
-                    self.ledger.update_order(order_id, approval_tx_hash=tx_hash)
+                    # The provider's calldata was only ever read for its
+                    # spender; what gets signed is our own encoding of
+                    # exactly the order's amount, whatever the provider
+                    # asked for (see ``_check_approval_tx``).
+                    approval_tx = {**approval_tx, "data": encode_approve(spender, amount_raw)}
+                    tx_hash = await self._send(
+                        chain,
+                        record,
+                        key,
+                        approval_tx,
+                        order_id=order_id,
+                        hash_field="approval_tx_hash",
+                        value_usd=row.get("value_usd"),
+                    )
                     receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
                     if receipt is None:
                         raise TradingError(
@@ -2820,9 +2964,9 @@ class TradingService:
             if value is None:
                 # Parked without a price and approved later: price it now so
                 # the daily cap counts it rather than adding zero.
-                value = await self._value_usd(chain, meta_in, amount_raw)
-                if value is None:
-                    value = await self._value_usd(chain, meta_out, quote.amount_out_raw)
+                value = await self._order_value_usd(
+                    chain, meta_in, amount_raw, meta_out, quote.amount_out_raw
+                )
             self.ledger.update_order(
                 order_id,
                 expected_out_raw=str(quote.amount_out_raw),
@@ -2841,13 +2985,20 @@ class TradingService:
             )
             validate_transaction(tx)
             self._check_swap_tx(
-                tx, chain=chain, record=record, meta_in=meta_in, amount_raw=amount_raw
+                tx,
+                chain=chain,
+                record=record,
+                meta_in=meta_in,
+                amount_raw=amount_raw,
+                provider=provider.id,
+                targets=provider.trusted_targets(chain, quote),
             )
             pre_in = await self._balance_raw(chain, record, meta_in)
             pre_out = await self._balance_raw(chain, record, meta_out)
             pre_native = await evm.get_balance(record.address)
-            tx_hash = await self._send(chain, record, key, tx)
-            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+            # ``_send`` records the hash and flips the row to ``submitted``
+            # *before* the broadcast; nothing is written here.
+            tx_hash = await self._send(chain, record, key, tx, order_id=order_id, value_usd=value)
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         await self._watch(
             order_id, tx_hash, {"in": pre_in, "out": pre_out, "native": pre_native}, wait=wait
@@ -2903,8 +3054,15 @@ class TradingService:
                     "chainId": chain.chain_id,
                 }
             pre_native = await evm.get_balance(record.address)
-            tx_hash = await self._send(chain, record, key, tx, plain=meta.native)
-            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+            tx_hash = await self._send(
+                chain,
+                record,
+                key,
+                tx,
+                plain=meta.native,
+                order_id=order_id,
+                value_usd=row.get("value_usd"),
+            )
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         await self._watch(
             order_id, tx_hash, {"in": balance, "out": 0, "native": pre_native}, wait=wait
@@ -2928,8 +3086,9 @@ class TradingService:
                 "chainId": chain.chain_id,
             }
             pre_native = await evm.get_balance(record.address)
-            tx_hash = await self._send(chain, record, key, tx)
-            self.ledger.update_order(order_id, status="submitted", tx_hash=tx_hash, reason=None)
+            tx_hash = await self._send(
+                chain, record, key, tx, order_id=order_id, value_usd=row.get("value_usd")
+            )
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         await self._watch(order_id, tx_hash, {"in": 0, "out": 0, "native": pre_native}, wait=wait)
 
@@ -2946,14 +3105,20 @@ class TradingService:
         record: WalletRecord,
         meta_in: TokenMeta,
         amount_raw: int,
+        provider: str,
+        targets: frozenset[str],
     ) -> None:
         """What a provider's swap transaction must satisfy before it is signed.
 
         The provider is data, not authority: its calldata is opaque, but the
         envelope is not. The sender is this wallet, the chain is the order's,
-        and the native value is exactly the order's amount (zero for an ERC-20
+        the native value is exactly the order's amount (zero for an ERC-20
         sale) — a transaction asking for more ETH than the order says spends
-        more than the user approved.
+        more than the user approved — and the target is one of the contracts
+        pinned for this provider on this chain (``targets``, lowercase). A
+        native sell has no approval to anchor the target to, so this is the
+        only thing standing between a tampered response and ETH sent to an
+        attacker; an empty ``targets`` refuses every swap.
         """
         if str(tx.get("from") or "").lower() != record.key:
             raise TradingError("trading.tx_failed", "swap transaction is not from this wallet")
@@ -2973,18 +3138,26 @@ class TradingService:
         to = str(tx.get("to") or "").lower()
         if to == record.key or to == meta_in.address.lower():
             raise TradingError("trading.tx_failed", "swap transaction has an implausible 'to'")
+        if not targets or to not in targets:
+            raise TradingError(
+                "trading.tx_failed",
+                f"swap target {to or '(none)'} is not a contract this desk trusts for "
+                f"{provider_label(provider)} on {chain.name}"
+                + ("" if targets else " (no swap contract is pinned for this chain)"),
+            )
 
     @staticmethod
     def _check_approval_tx(
         tx: dict[str, Any], *, token: str, amount_raw: int, spenders: frozenset[str]
-    ) -> None:
+    ) -> str:
         """An approval is signed only when it says exactly what we meant.
 
         ``approve(spender, amount)`` on the token being sold, to a spender the
-        provider is known to use, for no more than the order needs (or the
-        conventional unlimited allowance, which the provider's own flow may
-        ask for). Anything else — another token, another spender, native
-        value attached — is refused unsigned.
+        provider is known to use, for no more than the order needs. Anything
+        else — another token, another spender, native value attached, an
+        unlimited allowance — is refused unsigned. Returns the spender: the
+        caller re-encodes the approval for exactly the order's amount, so
+        the provider's calldata never reaches the signer as it came.
         """
         if str(tx.get("to") or "").lower() != token.lower():
             raise TradingError("trading.tx_failed", "approval is not on the token being sold")
@@ -2999,11 +3172,11 @@ class TradingService:
         amount = int(data[10 + 64 :], 16)
         if spender.lower() not in {s.lower() for s in spenders}:
             raise TradingError("trading.tx_failed", f"approval spender {spender} is not trusted")
-        unlimited = 2**256 - 1
-        if amount != unlimited and amount > amount_raw:
+        if amount > amount_raw:
             raise TradingError(
                 "trading.tx_failed", f"approval amount {amount} exceeds the order's {amount_raw}"
             )
+        return spender.lower()
 
     async def _send(
         self,
@@ -3013,12 +3186,30 @@ class TradingService:
         tx: dict[str, Any],
         *,
         plain: bool = False,
+        order_id: str | None = None,
+        hash_field: str = "tx_hash",
+        value_usd: float | None = None,
     ) -> str:
-        """Simulate, price, sign and broadcast ``tx`` from ``record``.
+        """Simulate, price, sign, record and broadcast ``tx`` from ``record``.
 
         ``plain`` admits empty calldata: a native send carries value and
         nothing else, which for a provider's swap would mean it forgot the
         swap.
+
+        Gas is this desk's decision, not the provider's: its fee fields are
+        ignored outright, its gas limit is taken only under the chain's cap
+        (never clamped — a limit above the cap is refused), and the worst
+        case cost in dollars must stay under the larger of
+        ``GAS_CEILING_USD`` and ``GAS_CEILING_SHARE`` of ``value_usd``.
+
+        With ``order_id`` the signed transaction's hash is written to the
+        order (``hash_field``: the swap leg flips the row to ``submitted``,
+        the approval leg only records its hash) *before* the broadcast. A
+        node that then refuses it is not believed outright — a load-balanced
+        endpoint can say no on one node after another accepted — so the
+        swap leg records the refusal as its reason and returns the hash for
+        the confirm loop to watch (``REJECTED_GIVE_UP_S``); the approval leg
+        raises, since nothing downstream can proceed without it.
         """
         evm = self.evm(chain)
         to = str(tx.get("to") or "")
@@ -3048,23 +3239,47 @@ class TradingService:
             await evm.simulate(base_tx)
         except EvmRpcError as exc:
             raise TradingError("trading.tx_failed", f"simulation reverted: {exc}") from exc
+        gas_cap = int(chain.max_gas_limit)
         gas_limit = int(str(tx.get("gasLimit") or "0"), 0) if tx.get("gasLimit") else 0
+        if gas_limit > gas_cap:
+            raise TradingError(
+                "trading.tx_failed",
+                f"gas limit {gas_limit} exceeds cap {gas_cap} on {chain.name}",
+            )
         if gas_limit <= 0:
-            gas_limit = int(await evm.estimate_gas(base_tx) * 1.2)
-        max_fee = int(str(tx.get("maxFeePerGas") or "0"), 0) if tx.get("maxFeePerGas") else 0
-        max_priority = (
-            int(str(tx.get("maxPriorityFeePerGas") or "0"), 0)
-            if tx.get("maxPriorityFeePerGas")
-            else 0
-        )
-        if max_fee <= 0:
-            max_fee, max_priority = await evm.fee_data()
-        if native < value + gas_limit * max_fee:
+            estimate = await evm.estimate_gas(base_tx)
+            if estimate > gas_cap:
+                raise TradingError(
+                    "trading.tx_failed",
+                    f"gas estimate {estimate} exceeds cap {gas_cap} on {chain.name}",
+                )
+            gas_limit = min(int(estimate * 1.2), gas_cap)
+        # The provider's own maxFeePerGas / maxPriorityFeePerGas are ignored:
+        # the node's fee history, under the chain's caps, is the only source.
+        max_fee, max_priority = await evm.fee_data()
+        gas_cost_wei = gas_limit * max_fee
+        if native < value + gas_cost_wei:
             raise TradingError(
                 "trading.insufficient_balance",
                 f"not enough {chain.native_symbol} for gas "
-                f"(need ~{format_amount(value + gas_limit * max_fee, 18)})",
+                f"(need ~{format_amount(value + gas_cost_wei, 18)})",
             )
+        gas_cost_usd = await self._gas_usd(chain, gas_cost_wei)
+        if gas_cost_usd is not None:
+            ceiling = max(GAS_CEILING_USD, GAS_CEILING_SHARE * float(value_usd or 0.0))
+            if gas_cost_usd > ceiling:
+                raise TradingError(
+                    "trading.gas_too_high",
+                    f"gas could cost up to ${gas_cost_usd:.2f}, above the ${ceiling:.2f} "
+                    f"ceiling for this order ({gas_limit} gas at "
+                    f"{format_amount(max_fee, 9)} gwei)",
+                    details={
+                        "gasUsd": gas_cost_usd,
+                        "ceilingUsd": ceiling,
+                        "gasLimit": gas_limit,
+                        "maxFeePerGas": str(max_fee),
+                    },
+                )
         nonce = await evm.nonce(record.address)
         full_tx = {
             "chainId": chain.chain_id,
@@ -3078,10 +3293,35 @@ class TradingService:
             "type": 2,
         }
         raw = self._sign_tx(full_tx, key)
+        local_hash = _local_tx_hash(raw)
+        # Record before send: from here on the ledger knows a transaction
+        # with this hash may exist, whatever happens to the process or the
+        # node in the next few milliseconds.
+        if order_id is not None:
+            if hash_field == "tx_hash":
+                self.ledger.update_order(
+                    order_id, status="submitted", tx_hash=local_hash, reason=None
+                )
+            else:
+                self.ledger.update_order(order_id, **{hash_field: local_hash})
         try:
-            return await evm.send_raw_transaction(raw)
-        except EvmRpcError as exc:
-            raise TradingError("trading.tx_failed", f"broadcast rejected: {exc}") from exc
+            sent = await evm.send_raw_transaction(raw)
+        except (EvmRpcError, EvmTransportError) as exc:
+            if order_id is not None:
+                self.ledger.update_order(order_id, reason=f"{BROADCAST_REJECTED} {exc}")
+            if order_id is None or hash_field != "tx_hash":
+                raise TradingError("trading.tx_failed", f"{BROADCAST_REJECTED} {exc}") from exc
+            log.warning("trading.broadcast_rejected", order=order_id, tx=local_hash, error=str(exc))
+            return local_hash
+        if sent and sent != local_hash:
+            # A node answers with keccak(raw) by definition; anything else is
+            # a node (or a test double) that indexes the transaction under
+            # its own name, and that is the name the receipt lives under.
+            log.warning("trading.tx_hash_mismatch", local=local_hash, node=sent, order=order_id)
+            if order_id is not None:
+                self.ledger.update_order(order_id, **{hash_field: sent})
+            return sent
+        return local_hash
 
     async def _record_gas(
         self,
@@ -3143,16 +3383,28 @@ class TradingService:
             log.warning("trading.receipt_error", order=order_id, error=str(exc))
         if receipt is None:
             age = self._now() - float(row["created_at"])
-            if age > SUBMITTED_GIVE_UP_S:
+            reason = str(row.get("reason") or "")
+            rejected = reason.startswith(BROADCAST_REJECTED)
+            # A broadcast the node refused is watched for minutes, not hours:
+            # if it was secretly accepted it mines in the next block or two.
+            give_up = REJECTED_GIVE_UP_S if rejected else SUBMITTED_GIVE_UP_S
+            if age > give_up:
+                why = reason.removeprefix(BROADCAST_REJECTED).strip()
                 self.ledger.update_order(
                     order_id,
                     expect_status="submitted",
                     status="failed",
-                    reason="transaction never mined (dropped or replaced)",
+                    reason=(
+                        f"transaction never mined ({why})"
+                        if rejected
+                        else "transaction never mined (dropped or replaced)"
+                    ),
                 )
                 self._wake(order_id)
                 await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
-            else:
+            elif not rejected:
+                # The refusal is kept as the reason: it is what decides the
+                # shorter give-up above, and what the user should see.
                 self.ledger.update_order(order_id, reason="waiting for the transaction to be mined")
             return
         if pre is None:
@@ -3180,6 +3432,14 @@ class TradingService:
     async def _gas_usd(self, chain: ChainSpec, gas_wei: int) -> float | None:
         eth_price = await self.prices.price(chain, NATIVE_ADDRESS)
         return float(to_human(gas_wei, 18)) * eth_price if eth_price is not None else None
+
+    def _spend_for(
+        self, row: dict[str, Any], record: WalletRecord
+    ) -> tuple[str, float, str] | None:
+        """What a settled order adds to today's cap: an agent order's value; nothing else."""
+        if row["initiator"] == "agent" and row.get("value_usd"):
+            return (record.key, float(row["value_usd"]), local_day(self._now()))
+        return None
 
     async def _settle_reverted(
         self,
@@ -3275,16 +3535,15 @@ class TradingService:
             if post_token is None:
                 post_token = await self._balance_raw(chain, record, meta)
             self.ledger.set_balance(chain.chain_id, record.key, meta.address, post_token)
-        settled = self.ledger.update_order(
+        self.ledger.settle_order(
             order_id,
             expect_status="submitted",
+            spend=self._spend_for(row, record),
             status="confirmed",
             reason=None,
             spent_in_raw=str(amount),
             gas_wei=str(gas_wei),
         )
-        if settled is not None and row["initiator"] == "agent" and row.get("value_usd"):
-            self.ledger.add_daily_spend(record.key, float(row["value_usd"]), local_day(self._now()))
         self._wake(order_id)
         await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
@@ -3608,20 +3867,35 @@ class TradingService:
             self.ledger.set_balance(chain.chain_id, record.key, meta_in.address, post_in)
         if not meta_out.native:
             self.ledger.set_balance(chain.chain_id, record.key, meta_out.address, post_out)
-        # Compare-and-set on the final flip: if anything else already settled
-        # this order, the spend is not counted twice.
-        settled = self.ledger.update_order(
+        # A mined swap that delivered less than the quote's minimum should
+        # have reverted; that it did not means the calldata's own floor was
+        # lower than the one we were shown. The order is still confirmed —
+        # the tokens moved — but it says so, loudly.
+        reason: str | None = None
+        min_out = int(row.get("min_out_raw") or 0)
+        if delivered == str(row["token_out"]) and min_out > 0 and received < min_out:
+            reason = f"short fill: received {received} below min {min_out}"
+            log.warning(
+                "trading.short_fill",
+                order=order_id,
+                received=received,
+                min_out=min_out,
+                token=delivered,
+            )
+        # Compare-and-set on the final flip, with the spend in the same
+        # transaction: if anything else already settled this order, neither
+        # lands; if the spend write fails, the flip does not either.
+        self.ledger.settle_order(
             order_id,
             expect_status="submitted",
+            spend=self._spend_for(row, record),
             status="confirmed",
-            reason=None,
+            reason=reason,
             spent_in_raw=str(spent),
             received_out_raw=str(received),
             gas_wei=str(gas_wei),
             delivered_token=delivered,
         )
-        if settled is not None and row["initiator"] == "agent" and row.get("value_usd"):
-            self.ledger.add_daily_spend(record.key, float(row["value_usd"]), local_day(self._now()))
         self._wake(order_id)
         await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
