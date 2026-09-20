@@ -264,6 +264,8 @@ def trade_status(
     table.add_row("daily cap / wallet", money(limits.get("dailyCapUsd")))
     table.add_row("approval TTL", f"{limits.get('approvalTtlSeconds', '—')} s")
     table.add_row("syncing", "yes" if result.get("syncing") else "no")
+    if result.get("ledgerRepair"):
+        table.add_row("ledger", f"[bold red]{markup_escape(str(result['ledgerRepair']))}[/]")
     console.print(table)
     providers = result.get("providers", [])
     if isinstance(providers, list) and providers:
@@ -579,10 +581,22 @@ def trade_swap(
     as_agent: bool = typer.Option(
         False, "--as-agent", help="Apply the agent guardrails (threshold, daily cap)"
     ),
+    expected_out_raw: str | None = typer.Option(
+        None,
+        "--expected-out-raw",
+        hidden=True,
+        help="The quote's amountOutRaw you confirmed; refused if the price moved past it",
+    ),
+    min_out_raw: str | None = typer.Option(
+        None, "--min-out-raw", hidden=True, help="The quote's minOutRaw you confirmed"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Swap tokens from one, several, or all wallets."""
 
+    for name, raw in (("--expected-out-raw", expected_out_raw), ("--min-out-raw", min_out_raw)):
+        if raw is not None and not raw.strip().isdigit():
+            _bad_argument(f"{name} must be a whole number in base units", json_output=json_output)
     if sum(v is not None for v in (amount, pct, usd)) != 1:
         _bad_argument("Use exactly one of --amount, --pct or --usd", json_output=json_output)
     if pct is not None and not 0 < pct <= 100:
@@ -618,6 +632,10 @@ def trade_swap(
             params["note"] = note
         if client_id:
             params["clientOrderId"] = client_id.strip()
+        if expected_out_raw is not None:
+            params["expectedOutRaw"] = expected_out_raw.strip()
+        if min_out_raw is not None:
+            params["minOutRaw"] = min_out_raw.strip()
         if session_key:
             params["sessionKey"] = session_key
         result = await client.call("trading.swap", params)

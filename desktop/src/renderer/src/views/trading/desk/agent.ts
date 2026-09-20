@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 7
+export const TRADING_AGENT_VERSION = 8
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -114,14 +114,21 @@ only when none applies.
   sell A (\`--in A --out B\`). \`buy B with A\`, \`mua B bằng A\` also sell A.
   \`buy B\` / \`mua B\` with no funding token sells USDC; if the wallet has no
   USDC, ETH. \`sell A\` / \`bán A\` with no target buys USDC.
-- Chain: Base unless the user names Robinhood Chain, or the token is a
-  Stock Token (\`AAPL\`, \`TSLA\`, \`NVDA\` … \`verified: true\` on Robinhood).
-- Tokens: \`ETH\`, \`USDC\`, \`WETH\`, \`USDG\` and Stock Token tickers go
-  straight into \`--in\`/\`--out\`: the CLI resolves a unique verified symbol
-  and refuses (\`TOKEN_AMBIGUOUS\`, \`TOKEN_UNVERIFIED\`) when it cannot. An
-  address goes in as given. Any other ticker (a memecoin, a name you have
-  not seen on this chain) is looked up first with \`agentos trade tokens\`
-  and used by address, \`verified: true\` only.
+- Chain: Base unless the user names Robinhood Chain.
+- Robinhood Chain: size orders in token units (\`--amount\`); \`--usd\` may be
+  refused there (\`trading.unpriced\`). Never pass the bare symbol \`USDC\` on
+  Robinhood — it resolves to unverified lookalikes; use ETH or an address
+  from \`agentos trade tokens --chain robinhood … --json\` with
+  \`verified: true\`. Most Stock Tokens (AAPL, TSLA, NVDA …) answer
+  \`trading.token_not_tradeable\`: the venue refuses them for legal reasons.
+  That is final for this token: do not retry, do not retry by address; tell
+  the user and stop.
+- Tokens: \`ETH\`, \`USDC\`, \`WETH\`, \`USDG\` go straight into \`--in\`/\`--out\`
+  on Base: the CLI resolves a unique verified symbol and refuses
+  (\`TOKEN_AMBIGUOUS\`, \`TOKEN_UNVERIFIED\`) when it cannot. An address goes
+  in as given. Any other ticker (a memecoin, a name you have not seen on
+  this chain) is looked up first with \`agentos trade tokens\` and used by
+  address, \`verified: true\` only.
 - Wallet: the primary, unless the user names another (see "Which wallet").
 
 If a size, a direction or a token is still unreadable after this, ask one
@@ -141,7 +148,7 @@ guardrail and parks the order for the user's approval when it must. You do
 not need a separate quote, a wallet listing or a balance read first:
 \`agentos trade status --json\` once per conversation, then the swap, then
 the report. Quote first only when the user asks for a price, the pair is
-volatile (not ETH/USDC/WETH/USDG/Stock Tokens), or a mission step sizes an
+volatile (not ETH/USDC/WETH/USDG), or a mission step sizes an
 order from a price you must show.
 
 ## What decides
@@ -185,14 +192,16 @@ Run \`agentos trade status --json\` once per conversation before the first
 order. Then, for each order, all of these must be true:
 
 1. The instruction or mission text permits it, and you can cite the words.
-2. \`--in\` and \`--out\` are a major (\`ETH\`, \`USDC\`, \`WETH\`, \`USDG\`), a
-   Stock Token ticker, or an address you resolved with \`agentos trade
-   tokens\` as \`verified: true\` on the target chain. Any other bare ticker
-   is never enough: lookalikes share tickers.
-3. Price impact: the swap result carries \`priceImpactPct\`. Between 1% and
-   5%, say so in the report. Above 5%, the engine parks the order for the
-   user's approval; say so. If a quote you ran shows more than 15%, do not
-   send. For a mission step, quote first and hold on more than 5%.
+2. \`--in\` and \`--out\` are a major (\`ETH\`, \`USDC\`, \`WETH\`, \`USDG\`) on
+   Base, or an address you resolved with \`agentos trade tokens\` as
+   \`verified: true\` on the target chain. Any other bare ticker is never
+   enough: lookalikes share tickers.
+3. Price impact: the swap result carries \`priceImpactPct\` and
+   \`guard.decision\`. Read \`limits.agentMaxPriceImpactPct\` from
+   \`agentos trade status --json\` once per conversation (call it MAXI).
+   Between MAXI/5 and MAXI, say so in the report. Above MAXI the engine
+   parks the order; say so. If a quote you ran shows more than 3×MAXI, do
+   not send. For a mission step, quote first and hold above MAXI.
 4. The order's wallet (see "Which wallet") holds the token on that chain.
    Zero balance fails the check; a small balance does not. You learn this
    from the swap's own verdict (\`trading.insufficient_balance\`), not from a
@@ -216,6 +225,9 @@ already gave.
   or gas; the swap does, and answers \`failed\` with
   \`trading.insufficient_balance\` when gas is short. Report that verdict,
   do not pre-judge it.
+- \`--pct 100\` on ETH fails with \`trading.invalid\` when the balance is at
+  or below the 0.001 ETH gas reserve; tell the user the balance is below
+  the gas reserve.
 - Slippage: leave \`--slippage\` on auto for majors and stablecoins. Volatile
   pairs: at most 1%. Never above 5%: the engine refuses it from you with
   \`trading.slippage_too_high\`, whoever asked.
@@ -231,8 +243,10 @@ already gave.
 Report in one short block, then stop:
 status first (\`confirmed\` / \`awaiting approval\` / \`failed: <reason>\`),
 route with sizes (\`0.0000418 ETH → 0.0998 USDC via Uniswap on Base\`),
-USD value, price impact, gas, explorer link, guardrail state (under or
-over the threshold; daily cap used and remaining), order id. One sentence
+USD value, price impact, gas, explorer link, guardrail state
+(\`guard.decision\` and \`guard.reason\` from the result; quote the daily cap
+only if you ran \`agentos trade limits\` in this turn — never estimate it),
+order id. One sentence
 only if the call did not do exactly what the instruction asked. If it
 awaits approval, say so and stop: the user decides in the BOOK, and the
 gateway refuses \`agentos trade approve\` from you. If the user rejects it,
@@ -316,8 +330,8 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   the user switch provider (\`agentos trade provider uniswap\`).
 - The order, one line:
   \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "<the user's words>" --client-id <id> --wait --wait-seconds 600 --json\`
-  \`--in\`/\`--out\` take \`ETH\`, a major (\`USDC\`, \`WETH\`, \`USDG\`), a Stock
-  Token ticker on Robinhood, or an address. No \`--wallet\` means the
+  \`--in\`/\`--out\` take \`ETH\`, a major (\`USDC\`, \`WETH\`, \`USDG\`) on Base,
+  or an address. No \`--wallet\` means the
   primary; pass \`--wallet\` (repeatable) or \`--all-wallets\` only when the
   user named those wallets. \`--slippage <pct>\` only when the rules call
   for it. The result is the settled order: \`status\`, \`amountIn\`,
@@ -365,6 +379,32 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   for you too (only the operator can change it). Tell the user, do not retry.
 - Errors arrive on stderr as \`{"error": {"code", "message"}}\`; exit 1 is
   the gateway or provider, 2 is bad input, 3 is a conflict.
+- Outcomes. An order ends in one of: \`confirmed\` (report and stop);
+  \`awaiting_approval\` (say so and stop; the user decides in the BOOK);
+  \`rejected\` (a guardrail said no: \`reason\` names it; never resubmit
+  unchanged); \`failed\` (\`reason\` names the cause).
+- Error codes, and what to do:
+  \`trading.no_route\` — no liquidity for that pair/size right now; retry
+  once after 30 s with the SAME --client-id, then report.
+  \`trading.unpriced\` — the engine has no USD price for --in; size with
+  \`--amount\` instead of \`--usd\`.
+  \`trading.token_not_tradeable\` — the venue refuses this token; final,
+  no retry, not by address either.
+  \`trading.quote_expired\` / \`trading.price_moved\` — quote again; send
+  once more with the SAME --client-id only if the user's instruction
+  still holds at the new price.
+  \`trading.gas_too_high\` — say the gas figure and stop; do not raise
+  slippage or resend.
+  \`trading.tx_pending\` — the approval or swap is mined late; wait with
+  \`agentos trade order <id> --wait --wait-seconds 600 --json\`, never
+  resend a new order.
+  \`trading.provider\` — the aggregator is down; one retry after a pause
+  with the SAME --client-id, then stop.
+  \`trading.insufficient_balance\`, \`trading.slippage_too_high\`,
+  \`trading.invalid\`, \`TOKEN_AMBIGUOUS\`, \`TOKEN_UNVERIFIED\` — fix the
+  order or ask; never retry unchanged.
+  \`trading.operator_required\` — the user's action, not yours; say so.
+  One retry at most per order, always with the same --client-id.
 `
 
 const IDENTITY_MD = `# IDENTITY.md

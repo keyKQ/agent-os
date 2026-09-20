@@ -126,8 +126,69 @@ describe('tradingAgentFiles · reading an order', () => {
     expect(tools).toMatch(/agentos trade send .*--client-id <id> --wait/)
     expect(agents).toMatch(/agentos trade swap .*--client-id \S+ --wait/)
   })
+  it('names every outcome and error code, and what to do with each', () => {
+    // A desk that meets `trading.no_route` bare either retries forever or
+    // gives up on a transient; the table says which codes are final.
+    const tools = files['TOOLS.md']
+    expect(tools).toMatch(/- Outcomes\. An order ends in one of: `confirmed`/)
+    for (const code of [
+      'trading.no_route',
+      'trading.unpriced',
+      'trading.token_not_tradeable',
+      'trading.quote_expired',
+      'trading.price_moved',
+      'trading.gas_too_high',
+      'trading.tx_pending',
+      'trading.provider',
+      'trading.insufficient_balance',
+      'trading.slippage_too_high',
+      'trading.invalid',
+      'TOKEN_AMBIGUOUS',
+      'TOKEN_UNVERIFIED',
+      'trading.operator_required',
+    ]) {
+      expect(tools).toContain(`\`${code}\``)
+    }
+    expect(tools).toMatch(/One retry at most per order, always with the same --client-id\./)
+    expect(tools).toMatch(
+      /`trading\.tx_pending` — .*\n.*`agentos trade order <id> --wait --wait-seconds 600 --json`/,
+    )
+  })
+  it('sizes Robinhood Chain orders in tokens and treats a refused Stock Token as final', () => {
+    // Live on Robinhood Chain: `--usd` answers `trading.unpriced`, bare
+    // `USDC` resolves to lookalikes, and AAPL/TSLA are refused by the venue.
+    const agents = files['AGENTS.md']
+    expect(agents).toContain('- Chain: Base unless the user names Robinhood Chain.')
+    expect(agents).toMatch(/Robinhood Chain: size orders in token units \(`--amount`\)/)
+    expect(agents).toMatch(/Never pass the bare symbol `USDC` on\s+Robinhood/)
+    expect(agents).toMatch(/do not retry, do not retry by address; tell\s+the user and stop/)
+    expect(agents).not.toMatch(/Stock Token tickers go\s+straight into/)
+    expect(agents).not.toMatch(/USDG\/Stock Tokens/)
+    expect(files['TOOLS.md']).not.toMatch(/a Stock\s+Token ticker on Robinhood/)
+  })
+  it('reads the impact ceiling from the engine instead of a hard-coded 5%', () => {
+    const agents = files['AGENTS.md']
+    expect(agents).toMatch(
+      /Read `limits\.agentMaxPriceImpactPct` from\s+`agentos trade status --json` once per conversation \(call it MAXI\)/,
+    )
+    expect(agents).toMatch(/Between MAXI\/5 and MAXI, say so in the report/)
+    expect(agents).toMatch(/more than 3×MAXI, do\s+not send/)
+    expect(agents).toMatch(/quote first and hold above MAXI/)
+    expect(agents).not.toMatch(/Between 1% and\s+5%/)
+  })
+  it('reports the guard verdict from the result and never estimates the daily cap', () => {
+    const agents = files['AGENTS.md']
+    expect(agents).toMatch(/`guard\.decision` and `guard\.reason` from the result/)
+    expect(agents).toMatch(
+      /quote the daily cap\s+only if you ran `agentos trade limits` in this turn — never estimate it/,
+    )
+    expect(agents).not.toMatch(/daily cap used and remaining/)
+    expect(agents).toMatch(
+      /`--pct 100` on ETH fails with `trading\.invalid` when the balance is at\s+or below the 0\.001 ETH gas reserve/,
+    )
+  })
   it('bumped the version with the text, so every desk rewrites its files', () => {
-    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(7)
+    expect(TRADING_AGENT_VERSION).toBeGreaterThanOrEqual(8)
   })
 })
 

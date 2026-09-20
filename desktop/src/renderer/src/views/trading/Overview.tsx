@@ -25,6 +25,7 @@ export function Overview({
   provider,
   entering,
   head,
+  unpricedCount = 0,
 }: {
   totals: Totals
   holdings: Holding[]
@@ -39,10 +40,15 @@ export function Overview({
   entering?: boolean
   /** Whose value this is: the wallet head, above the figure. */
   head?: ReactNode
+  /** Positions the totals could not price (`portfolio.unpricedCount`). */
+  unpricedCount?: number
 }) {
-  const tone = pnlTone(totals.change24hUsd)
+  // The hero is coloured by the book's own result — banked plus open PnL —
+  // never by the day's price move, which is only the chip's business.
+  const tone = pnlTone((totals.realizedUsd ?? 0) + (totals.unrealizedUsd ?? 0))
+  const deltaTone = pnlTone(totals.change24hUsd)
   const segments = allocationSegments(holdings)
-  const Arrow = tone === 'down' ? TrendingDown : TrendingUp
+  const Arrow = deltaTone === 'down' ? TrendingDown : TrendingUp
   const { counting, attach } = useCountUp(totals.valueUsd, Boolean(entering) && !loading)
 
   return (
@@ -64,14 +70,23 @@ export function Overview({
         {!loading && totals.change24hUsd !== null ? (
           <span
             className="trd-delta"
-            data-tone={tone}
+            data-tone={deltaTone}
             data-testid="portfolio-delta"
-            title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
+            aria-label={t('trading.overview.move24h')}
+            title={`${t('trading.overview.move24h')}: ${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
           >
-            {tone !== 'flat' ? <Arrow className="size-3.5" strokeWidth={2.25} aria-hidden /> : null}
+            {deltaTone !== 'flat' ? (
+              <Arrow className="size-3.5" strokeWidth={2.25} aria-hidden />
+            ) : null}
             <Money value={totals.change24hUsd} signed cell />
             <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
             <small>{t('trading.overview.today')}</small>
+          </span>
+        ) : null}
+        {!loading && unpricedCount > 0 ? (
+          <span className="trd-delta" data-tone="flat" data-testid="portfolio-unpriced">
+            <em className="trd-num">{unpricedCount}</em>
+            <small>{t('trading.overview.unpriced')}</small>
           </span>
         ) : null}
 

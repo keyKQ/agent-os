@@ -422,6 +422,11 @@ export interface SwapParams {
   amountPct?: number
   slippagePct?: number
   note?: string
+  /** The quote the person confirmed, in base units: the engine re-quotes and
+   *  answers `trading.price_moved` instead of filling at a worse price. */
+  expectedOutRaw?: string
+  minOutRaw?: string
+  quoteId?: string
 }
 
 interface SwapResult {

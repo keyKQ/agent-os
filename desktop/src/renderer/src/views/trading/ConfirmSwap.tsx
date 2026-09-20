@@ -6,14 +6,17 @@ import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useSwap } from '~/stores/trading'
 import {
+  errorCode,
   errorText,
   formatAmount,
   formatPct,
   formatUsd,
   impactTone,
   needsRetype,
+  PRICE_MOVED,
   quoteCountdown,
   retypeMatches,
+  toRaw,
   walletLabel,
 } from './logic'
 import { Sheet } from './parts'
@@ -83,7 +86,7 @@ export function ConfirmSwap({
   }
   const quote = frozen.quote
   const fetchedAt = frozen.fetchedAt
-  const stale = quoteCountdown(fetchedAt, now).expired
+  const stale = quoteCountdown(fetchedAt, now, quote.expiresAt).expired
   const retype = needsRetype(quote.valueUsd)
   const [typed, setTyped] = useState('')
   const retypeOk = !retype || retypeMatches(typed, amount)
@@ -92,6 +95,12 @@ export function ConfirmSwap({
   const impact = impactTone(quote.priceImpactPct)
 
   function send() {
+    // The numbers the person read and retyped against are the ones the
+    // engine is held to: it re-quotes on send and refuses to fill at a
+    // worse price than this frozen quote promised.
+    const expectedOutRaw =
+      quote.amountOutRaw ?? toRaw(quote.amountOut, tokenOut.decimals).toString()
+    const minOutRaw = quote.minOutRaw ?? toRaw(quote.minOut, tokenOut.decimals).toString()
     swap.mutate(
       {
         chainId: quote.chainId,
@@ -100,6 +109,9 @@ export function ConfirmSwap({
         tokenOut: tokenOut.address,
         amountIn: amount,
         ...(slippagePct !== undefined ? { slippagePct } : {}),
+        expectedOutRaw,
+        minOutRaw,
+        ...(quote.quoteId ? { quoteId: quote.quoteId } : {}),
       },
       {
         onSuccess: (res) => {
@@ -116,6 +128,13 @@ export function ConfirmSwap({
           onSent(orders)
         },
         onError: (err) => {
+          if (errorCode(err) === PRICE_MOVED) {
+            // Nothing was sent. The sheet stays open on a fresh price so the
+            // person can read the new numbers and decide again.
+            toast.warning(t('trading.confirm.priceMoved'), { id: 'trd-swap' })
+            refresh()
+            return
+          }
           toast.error(`${t('trading.swap.error')}: ${errorText(err)}`, { id: 'trd-swap' })
         },
       },

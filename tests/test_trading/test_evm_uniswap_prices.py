@@ -442,6 +442,27 @@ class TestPriceService:
     async def test_missing_price_is_none(self, svc: PriceService) -> None:
         assert await svc.price(BASE, OTHER) is None
 
+    async def test_native_of_an_eth_chain_borrows_base_eth(
+        self, svc: PriceService, fake: FakePrices
+    ) -> None:
+        """Robinhood has no WETH pool to price its gas coin; ETH is ETH, so Base's stands in."""
+        assert ROBINHOOD.weth is None and ROBINHOOD.native_symbol == "ETH"
+        prices = await svc.prices(ROBINHOOD, [NATIVE_ADDRESS, AAPL])
+        assert prices[NATIVE_ADDRESS].price_usd == 2000.0
+        assert prices[NATIVE_ADDRESS].change_24h_pct == 2.5
+        assert prices[AAPL].price_usd == 150.0  # the chain's own feed is untouched
+        assert await svc.price(ROBINHOOD, NATIVE_ADDRESS) == 2000.0
+        # Borrowed per call, never written into Robinhood's cache: a second
+        # call within the TTL reads Base's cached ETH and asks nothing new.
+        calls = len(fake.requests)
+        assert (await svc.prices(ROBINHOOD, [NATIVE_ADDRESS]))[NATIVE_ADDRESS].price_usd == 2000.0
+        assert len(fake.requests) == calls
+        assert (4663, NATIVE_ADDRESS) in svc._prices and svc._prices[
+            (4663, NATIVE_ADDRESS)
+        ].price_usd is None
+        # Base's own ETH price never goes through the fallback.
+        assert (await svc.prices(BASE, [NATIVE_ADDRESS]))[NATIVE_ADDRESS].pair_address
+
     async def test_token_list_and_stock_flag(self, svc: PriceService) -> None:
         tokens = await svc.token_list(ROBINHOOD)
         assert tokens[AAPL].stock_token is True and tokens[AAPL].verified is True

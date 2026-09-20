@@ -62,7 +62,8 @@ def evaluate(
       ``spent_today_usd`` includes orders still in flight, so a burst cannot
       slip under the cap by racing its own confirmations.
     * Above the per-order threshold, or above the price-impact ceiling, the
-      swap waits for a human.
+      swap waits for a human — and so does one whose price impact could not
+      be computed at all.
     """
     spent = max(0.0, float(spent_today_usd))
     cap = float(daily_cap_usd)
@@ -101,6 +102,10 @@ def evaluate(
             f"price impact {float(price_impact_pct):.2f}% is above "
             f"{float(max_price_impact_pct):.2f}%",
         )
+    if price_impact_pct is None:
+        # No reference price for one side means the impact ceiling could not
+        # be checked at all; an agent does not get to trade blind.
+        return verdict("needs_approval", "price impact unknown (no reference price for one side)")
     return verdict("allow", "within limits")
 
 

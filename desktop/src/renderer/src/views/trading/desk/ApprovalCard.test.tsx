@@ -69,6 +69,26 @@ describe('ApprovalCard', () => {
     vi.useRealTimers()
   })
 
+  it('says why the engine is asking while the card is still live', () => {
+    renderDesk(
+      <ApprovalCard
+        order={order({ reason: 'price moved 2.4% since the quote' })}
+        wallets={[WALLET]}
+        deciding={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        focusOnMount={false}
+      />,
+    )
+    // Live: the buttons are there, and so is the reason — it is what decides
+    // the decision, so it may not wait for the outcome to be shown.
+    expect(screen.getByTestId('card-approve')).toBeInTheDocument()
+    expect(screen.getByTestId('card-reason')).toHaveTextContent('price moved 2.4% since the quote')
+    // The impact fact wears the honest label: a quote against a reference, not a measured move.
+    expect(screen.getByTestId('approval-card')).toHaveTextContent('Price vs reference')
+    expect(screen.getByTestId('approval-card')).not.toHaveTextContent('Price impact')
+  })
+
   it('rejects with a note the agent will read', () => {
     const onReject = vi.fn()
     renderDesk(

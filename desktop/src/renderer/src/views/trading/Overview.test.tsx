@@ -14,10 +14,14 @@ const TOTALS: Totals = {
   change24hPct: 1.53,
 }
 
-function render(extra: Partial<Totals> = {}, opts: { loading?: boolean; syncing?: boolean } = {}) {
+function render(
+  extra: Partial<Totals> = {},
+  opts: { loading?: boolean; syncing?: boolean; unpricedCount?: number } = {},
+) {
   const onSync = vi.fn()
   renderDesk(
     <Overview
+      unpricedCount={opts.unpricedCount}
       totals={{ ...TOTALS, ...extra }}
       holdings={[
         holding({ token: USDC, valueUsd: 900, allocationPct: 72.5 }),
@@ -79,5 +83,32 @@ describe('Overview · the desk head', () => {
   it('shows a half-cent day as no move at all, not as a win', () => {
     render({ change24hUsd: 0.002, change24hPct: 0.0003 })
     expect(screen.getByTestId('portfolio-delta')).toHaveAttribute('data-tone', 'flat')
+  })
+
+  it('colours the head by the book’s PnL, and the chip by the day’s move', () => {
+    // Up on the day, but the book as a whole is under water.
+    render({ realizedUsd: -30, unrealizedUsd: -70, change24hUsd: 18.75, change24hPct: 2.1 })
+    const delta = screen.getByTestId('portfolio-delta')
+    expect(delta).toHaveAttribute('data-tone', 'up')
+    expect(delta).toHaveAttribute('title', expect.stringContaining('24h price move'))
+    expect(screen.getByLabelText('Portfolio value')).toHaveAttribute('data-tone', 'down')
+    // And the other way round: a red day on a book that is ahead.
+    render({ realizedUsd: 30, unrealizedUsd: 70, change24hUsd: -18.75, change24hPct: -2.1 })
+    const [, second] = screen.getAllByLabelText('Portfolio value')
+    expect(second).toHaveAttribute('data-tone', 'up')
+    expect(second!.querySelector('[data-testid=portfolio-delta]')).toHaveAttribute(
+      'data-tone',
+      'down',
+    )
+  })
+
+  it('counts the positions the totals could not price, beside the figure', () => {
+    render({}, { unpricedCount: 2 })
+    expect(screen.getByTestId('portfolio-unpriced')).toHaveTextContent('2unpriced')
+  })
+
+  it('says nothing about unpriced positions when every one has a price', () => {
+    render({}, { unpricedCount: 0 })
+    expect(screen.queryByTestId('portfolio-unpriced')).toBeNull()
   })
 })

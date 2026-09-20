@@ -64,7 +64,11 @@ legal reasons upstream. You get `trading.token_not_tradeable`. Do **not**
 retry, do not shrink the size, do not pass the contract address instead of
 the symbol, and do not silently substitute a different asset: tell the user
 this venue will not trade that token. ETH, WETH and USDG trade normally
-there.
+there. On Robinhood Chain size orders in token units (`--amount`): `--usd`
+may be refused with `trading.unpriced` (no native USD price there yet), and
+the bare symbol `USDC` resolves to unverified lookalikes — use ETH or an
+address from `agentos trade tokens --chain robinhood … --json` marked
+`verified: true`.
 
 **BEFORE ANY TRADE:** run `agentos trade status --json`. If `enabled` is
 false, `unlocked` is false, or the active provider is `uniswap` and
@@ -137,8 +141,8 @@ these guardrails on agent-initiated swaps and **you cannot switch them off**
 | Guardrail | Config key (default) | What happens |
 |---|---|---|
 | Per-order approval threshold | `trading.approval_threshold_usd` (100) | An order above it is queued as `awaiting_approval`; the user approves or rejects it in the app. It expires after `trading.approval_ttl_seconds` (15 min). |
-| Per-wallet daily cap | `trading.daily_cap_usd` (1,000) | An order that would exceed today's cap is `rejected` with a reason starting `daily cap`. `spentTodayUsd` counts orders still in flight (queued, approved, submitted), so a burst cannot race the cap. **0 means agent swaps are switched off**: every agent order is rejected. Do not split an order to get under the cap. |
-| Price-impact ceiling | `trading.agent_max_price_impact_pct` (5) | An order whose `priceImpactPct` is above it waits for approval even under the USD threshold. |
+| Per-wallet daily cap | `trading.daily_cap_usd` (1,000) | An order that would exceed today's cap is `rejected` with a reason starting `daily cap`. The cap is **per wallet** — `--all-wallets` spends up to N caps — and counts the order's value as max(in, out). `spentTodayUsd` counts orders still in flight (queued, approved, submitted), so a burst cannot race the cap. **0 means agent swaps are switched off**: every agent order is rejected. Do not split an order to get under the cap. |
+| Price-impact ceiling | `trading.agent_max_price_impact_pct` (5) | An order whose `priceImpactPct` — the price vs reference (includes the venue fee and feed skew), not pool depth alone — is above it waits for approval even under the USD threshold. |
 | Slippage ceiling | `trading.agent_max_slippage_pct` (5) | `--slippage` above it is refused with `trading.slippage_too_high`; nothing is queued. |
 | Unpriced order | — | If the engine cannot price the order in USD it waits for approval (fails closed). |
 
@@ -183,9 +187,10 @@ agentos trade tokens --chain base 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 --j
 agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet ADDR] [--slippage P] --json
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --note "user asked" --wait --wait-seconds 600 --json
 agentos trade swap  --chain base --in ETH --out USDC --usd 5 --note "user: $5 of ETH" --wait --wait-seconds 600 --json   # dollars of --in, sized by the engine
-agentos trade swap  --chain robinhood --in USDC --out 0x1b0e…153e --pct 50 --wallet 0xA… --wallet 0xB… --json
+agentos trade swap  --chain robinhood --in ETH --out 0x1b0e…153e --amount 0.01 --wallet 0xA… --wallet 0xB… --json   # Robinhood: --amount, and an address (bare USDC resolves to lookalikes there)
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --json
-agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-2026-09-20 --json   # idempotency key: the same id returns the same order, never a second trade
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-eth-$(date +%Y%m%dT%H%M) --json   # idempotency key: the same id returns the same order, never a second trade
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --expected-out-raw <quote.expectedOutRaw> --min-out-raw <quote.minOutRaw> --json   # pin the fill to the quote you showed; worse than 2× slippage → trading.price_moved
 
 # Orders
 agentos trade orders [--status awaiting_approval] [--wallet ADDR] [--kind swap|send|revoke] [--limit N] --json
@@ -231,9 +236,18 @@ for the provider's auto slippage, and never above `agentMaxSlippagePct`.
 
 Quote freshness: every quote carries `expiresAt` (epoch ms; about 20 s
 ahead for the aggregator, 30 s for Uniswap). Swap before it passes or quote
-again; the swap
-re-quotes for itself, so a stale quote only means the numbers you showed
-the user may differ from the fill.
+again; the swap re-quotes for itself, so a stale quote only means the
+numbers you showed the user may differ from the fill. To pin the fill to
+the quote you showed, pass the quote's `expectedOutRaw` / `minOutRaw` to
+`swap` (`--expected-out-raw`, `--min-out-raw`): the engine then refuses
+with `trading.price_moved` when the fill would be more than 2× the slippage
+worse than that quote. Quote again and send once more with the same
+`--client-id` only if the user's instruction still holds at the new price.
+
+After an upgrade, run `agentos trade status --json` once: if it carries
+`ledgerRepair` ("full sync required" after a ledger repair migration), tell
+the user to run `agentos trade sync --full` once (operator-only) before
+trusting balances or PnL.
 
 ## Reading a swap result
 
@@ -292,9 +306,10 @@ read at that moment is not to be trusted, and a swap should wait.
 ## Mission playbooks
 
 **Swap A → B once.** `trade status` → `trade tokens` for anything that is not
-ETH/USDC → `trade quote` (show the user rate, price impact, gas, and
-`guard.decision`, which is computed for you as the agent) → `trade swap
---wait --wait-seconds 600`. Warn before swapping when `priceImpactPct` > 2 or
+ETH/USDC → `trade quote` (show the user rate, price impact — price vs
+reference, venue fee and feed skew included — gas, and `guard.decision`,
+which is computed for you as the agent) → `trade swap --wait --wait-seconds
+600`. Warn before swapping when `priceImpactPct` > 2 or
 `guard.decision` is not `allow` (`needs_approval` means it will queue;
 `blocked_daily_cap` means it will be rejected — do not send it).
 
@@ -305,8 +320,11 @@ and runs one `trade swap`:
 ```sh
 agentos cron add --every 24h --job-kind agent_turn --name "DCA ETH" \
   --session-key "$AGENTOS_SESSION_KEY" \
-  --text "DCA tick: swap 20 USDC to ETH on Base once (agentos trade swap --chain base --in USDC --out ETH --amount 20 --note DCA --client-id dca-eth-$(date +%F) --wait --wait-seconds 600 --json). Report the order id and status; do nothing else."
+  --text "DCA tick: swap 20 USDC to ETH on Base once (agentos trade swap --chain base --in USDC --out ETH --amount 20 --note DCA --client-id dca-eth-$(date +%Y%m%dT%H%M) --wait --wait-seconds 600 --json). Report the order id and status; do nothing else."
 ```
+
+`--client-id`: one id per intended order; minute resolution so sub-daily
+jobs never collide, and the same id on every retry of that order.
 
 The turn reports into that chat. "DCA only if the price is below X" is the
 same job with the condition in `--text`: quote, compare, and only then swap.
@@ -356,7 +374,9 @@ that needs their click.
 `totals.unrealizedUsd`, `totals.realizedUsd`, `totals.gasUsd`, per-holding
 `avgCostUsd` and `unrealizedPct`. `costUsd: null` on a holding means the
 engine could not price a deposit; say so instead of inventing a number. If
-the ledger looks behind the chain, `agentos trade sync --json` first.
+the ledger looks behind the chain, `agentos trade sync --json` first; if
+`trade status --json` shows `ledgerRepair`, only `agentos trade sync --full`
+(the user's to run) fixes it.
 
 ## Don'ts
 

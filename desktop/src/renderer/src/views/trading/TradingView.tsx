@@ -403,6 +403,7 @@ function Desk({
           <Overview
             totals={totals}
             holdings={holdings}
+            unpricedCount={portfolio.data?.unpricedCount ?? 0}
             syncing={Boolean(portfolio.data?.syncing || status.data?.syncing)}
             lastSyncAt={status.data?.lastSyncAt ?? null}
             now={now}

@@ -1,9 +1,7 @@
 import {
   ArrowDownRight,
   Bell,
-  Brush,
   CalendarClock,
-  Coins,
   Inbox,
   LineChart,
   PiggyBank,
@@ -27,7 +25,6 @@ import type { Interval, MissionForm, StopRule } from './desk-logic'
  */
 
 const BASE = 8453
-const ROBINHOOD = 4663
 
 export type KnobKind = 'token' | 'ticker' | 'usd' | 'pct' | 'price' | 'minutes' | 'choice'
 
@@ -126,7 +123,8 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
       `Watch the price of ${sym(p, 'token', 'ETH')}. Read it with \`agentos trade tokens\` (or a quote) and ` +
       `compare it with ${num(p, 'price', '2300')} USD. If it is ${p.direction === 'above' ? 'at or above' : 'at or below'} ` +
       `that level, say so in one line with the price you saw; otherwise reply "no alert" in one line. ` +
-      'Never swap: this mission only watches.',
+      'Never swap: this mission only watches. Alert once per crossing: after you have alerted, reply `no alert` ' +
+      `until the price has moved back at least 1% to the other side of ${num(p, 'price', '2300')}. Say the price every run.`,
     interval: every(900),
   },
   {
@@ -208,28 +206,6 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
     budgetPerOrderUsd: '10',
     stop: { kind: 'runs', runs: 30 },
   },
-  {
-    id: 'dca-stock',
-    group: 'schedule',
-    name: 'trading.preset.dcaStock.name',
-    hint: 'trading.preset.dcaStock.hint',
-    icon: Coins,
-    readOnly: false,
-    knobs: [
-      { key: 'ticker', kind: 'ticker', label: 'trading.knob.ticker', value: 'AAPL' },
-      { key: 'usd', kind: 'usd', label: 'trading.knob.usdPerRun', value: '25' },
-    ],
-    title: (p) => `DCA ${sym(p, 'ticker', 'AAPL')}`,
-    goal: (p) =>
-      `Buy ${num(p, 'usd', '25')} USD of ${sym(p, 'ticker', 'AAPL')} with USDC on Robinhood Chain this run, once. ` +
-      `Resolve the token with \`agentos trade tokens --chain robinhood ${sym(p, 'ticker', 'AAPL')} --json\` and use the ` +
-      'address it returns; quote before you swap and report the order id.',
-    interval: every(86_400),
-    chains: [ROBINHOOD],
-    budgetTotalUsd: '500',
-    budgetPerOrderUsd: '25',
-    stop: { kind: 'runs', runs: 20 },
-  },
 
   /* ── Reacting to price, and keeping the shape of the book ────────────── */
   {
@@ -247,7 +223,8 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
     title: (p) => `Buy ${sym(p, 'token', 'ETH')} at ${num(p, 'price', '2300')}`,
     goal: (p) =>
       `If ${sym(p, 'token', 'ETH')} is at or below ${num(p, 'price', '2300')} USD, buy ${num(p, 'usd', '25')} USD of it ` +
-      'with USDC on Base; otherwise do nothing and say the price you saw. State the price and the trigger in every reply.',
+      'with USDC on Base once, then reply `MISSION COMPLETE` on its own line. Otherwise do nothing and say the price ' +
+      'you saw and the trigger.',
     interval: every(300),
     budgetTotalUsd: '100',
     budgetPerOrderUsd: '25',
@@ -269,7 +246,9 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
     goal: (p) =>
       `Read the ${sym(p, 'token', 'ETH')} holding with \`agentos trade portfolio --json\`. If its unrealized return is ` +
       `at or above +${num(p, 'gainPct', '25')}%, sell ${num(p, 'sellPct', '50')}% of the position into USDC on Base ` +
-      '(`--pct`), once. Otherwise do nothing and report the return you saw. Never sell a position you cannot price.',
+      'once (`--pct`), then reply `MISSION COMPLETE`. Otherwise do nothing and report the return you saw. ' +
+      'Reference: the unrealized % comes from `unrealizedPct` of that holding in `agentos trade portfolio --json`; ' +
+      'never sell a holding whose `priceUsd` is null.',
     interval: every(3600),
     budgetTotalUsd: '',
     budgetPerOrderUsd: '',
@@ -289,34 +268,21 @@ export const MISSION_PRESETS: readonly MissionPreset[] = [
     ],
     title: (p) => `Rebalance ${sym(p, 'token', 'ETH')}/USDC`,
     goal: (p) => {
-      const target = num(p, 'targetPct', '70')
-      const rest = String(Math.max(0, 100 - Number(target)))
+      const token = sym(p, 'token', 'ETH')
+      const target = Number(num(p, 'targetPct', '70'))
+      const drift = Number(num(p, 'driftPct', '5'))
+      const low = String(Math.max(0, target - drift))
+      const high = String(Math.min(100, target + drift))
       return (
-        `Keep the wallet at ${target}% ${sym(p, 'token', 'ETH')} / ${rest}% USDC by value on Base. ` +
-        `Read the split with \`agentos trade portfolio --json\` and trade only when a side has drifted more than ` +
-        `${num(p, 'driftPct', '5')} points. One swap per leg, largest first, each waited out before the next.`
+        `Keep ${token} between ${low}% and ${high}% of (${token}+USDC) value on Base, ignoring every other token. ` +
+        `Read the split with \`agentos trade portfolio --json\`. If ${token} is above the band, sell just enough ${token} ` +
+        `to reach ${target}%; if below, buy just enough with USDC. One swap per run at most, and never spend the last ` +
+        '0.002 ETH (gas). Inside the band do nothing and say the split.'
       )
     },
     interval: every(3600),
     budgetTotalUsd: '500',
     budgetPerOrderUsd: '100',
-  },
-  {
-    id: 'dust-sweep',
-    group: 'react',
-    name: 'trading.preset.dustSweep.name',
-    hint: 'trading.preset.dustSweep.hint',
-    icon: Brush,
-    readOnly: false,
-    knobs: [{ key: 'underUsd', kind: 'usd', label: 'trading.knob.underUsd', value: '5' }],
-    title: () => 'Dust sweep',
-    goal: (p) =>
-      `Read the portfolio and find every priced holding worth less than ${num(p, 'underUsd', '5')} USD on Base, ` +
-      'ignoring USDC and anything the engine could not price. Sell each one in full into USDC, one swap at a time, ' +
-      'and list what you swept. If there is no dust, say so and do nothing.',
-    interval: every(86_400),
-    budgetTotalUsd: '',
-    budgetPerOrderUsd: '',
   },
 ]
 
@@ -333,7 +299,8 @@ export function presetDefaults(preset: MissionPreset): Record<string, string> {
 
 /**
  * A preset plus its knob values, as the contract form. Watch-only missions
- * carry no budget and never dry-run: there is no swap to hold back.
+ * carry no budget. Dry run stays off by default: the contract keeps the
+ * manual toggle for a user who wants the first run held back.
  */
 export function formFromPreset(
   preset: MissionPreset,
@@ -351,6 +318,6 @@ export function formFromPreset(
     budgetPerOrderUsd: preset.readOnly ? '' : (preset.budgetPerOrderUsd ?? ''),
     stop: preset.stop ?? { kind: 'none' },
     interval: preset.interval,
-    dryRun: !preset.readOnly,
+    dryRun: false,
   }
 }

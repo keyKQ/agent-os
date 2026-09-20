@@ -227,6 +227,11 @@ function Legs({ order }: { order: Order }) {
       </>
     )
   }
+  // A confirmed swap shows what the receipt delivered; anything earlier is
+  // still the quote's guess, and says so. Only an older engine's receipt
+  // (no `receivedOut` at all) falls back to the estimate once confirmed.
+  const confirmed = order.status === 'confirmed'
+  const out = confirmed ? (order.receivedOut ?? order.expectedOut) : order.expectedOut
   return (
     <>
       <span className="trd-order__leg">
@@ -234,8 +239,11 @@ function Legs({ order }: { order: Order }) {
         <Sym symbol={order.tokenIn.symbol} className="trd-order__sym" />
       </span>
       <ArrowRight className="trd-order__arrow size-3" strokeWidth={2} aria-hidden />
-      <span className="trd-order__leg">
-        {order.expectedOut ? `${formatAmount(order.expectedOut)} ` : ''}
+      <span className="trd-order__leg" data-estimate={!confirmed && out ? 'true' : undefined}>
+        {out && !confirmed ? (
+          <small className="trd-order__est">{t('trading.orders.est')} </small>
+        ) : null}
+        {out ? `${formatAmount(out)} ` : ''}
         <Sym symbol={order.tokenOut.symbol} className="trd-order__sym" />
       </span>
     </>
@@ -387,7 +395,14 @@ function OrderRow({
           </Fact>
         ) : null}
         {order.gasUsd !== null ? (
-          <Fact label={t('trading.orders.fact.fee')} title={t('trading.swap.gas')}>
+          <Fact
+            label={t(
+              order.status === 'confirmed'
+                ? 'trading.orders.fact.fee'
+                : 'trading.orders.fact.feeEst',
+            )}
+            title={t('trading.swap.gas')}
+          >
             {formatUsd(order.gasUsd)}
           </Fact>
         ) : null}

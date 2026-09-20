@@ -87,8 +87,12 @@ the order's amount, never unlimited.
 The tokenised stocks on Robinhood Chain (29 of the 34 listed: AAPL, TSLA,
 NVDA, SPY, …) cannot be routed in either direction, at any size, at any time
 — 0x refuses them for legal reasons. That surfaces as
-`trading.token_not_tradeable`, and retrying does not help. ETH, WETH and
-USDG trade normally there.
+`trading.token_not_tradeable`, and retrying does not help — not by address
+either. ETH, WETH and USDG trade normally there. Two more Robinhood Chain
+facts: the engine has no native USD price there yet, so `--usd` may be
+refused with `trading.unpriced` (size with `--amount`), and the bare symbol
+`USDC` resolves to unverified lookalikes (`TOKEN_UNVERIFIED`) — use an
+address the token search marks `verified: true`.
 
 The provider is read from `trading.provider` on **every** call, so switching
 takes effect immediately, no gateway restart. There is one canonical way to
@@ -234,8 +238,8 @@ around and one it cannot.
 | Rule | Default | Outcome when hit |
 | --- | --- | --- |
 | Per-order threshold | 100 USD | order parks as `awaiting_approval`; desktop notifies you |
-| Daily cap per wallet | 1,000 USD (local calendar day) | order is `rejected` outright, not queued; `spentTodayUsd` counts confirmed spend plus orders still in flight, so a burst cannot race its own confirmations; **0 switches agent swaps off** (there is no "unlimited") |
-| Price-impact ceiling | 5 % (`agent_max_price_impact_pct`) | order parks as `awaiting_approval` even under the USD threshold |
+| Daily cap per wallet | 1,000 USD (local calendar day) | order is `rejected` outright, not queued; the cap is per wallet, so `--all-wallets` spends up to N caps; an order counts as max(in, out) in USD; `spentTodayUsd` counts confirmed spend plus orders still in flight, so a burst cannot race its own confirmations; **0 switches agent swaps off** (there is no "unlimited") |
+| Price-impact ceiling | 5 % (`agent_max_price_impact_pct`) | order parks as `awaiting_approval` even under the USD threshold. "Price impact" here is the price vs reference (it includes the venue fee and feed skew), not pool depth alone |
 | Slippage ceiling | 5 % (`agent_max_slippage_pct`) | quote or swap refused with `trading.slippage_too_high`; nothing is queued |
 | Unpriced order | — | treated as above threshold (fails closed) |
 | Approval TTL | 15 min | `expired`; agent is told |
@@ -243,7 +247,11 @@ around and one it cannot.
 Manual swaps from the app or CLI are your own decision: they never queue
 and do not count toward the agent's cap; if the price moved more than twice
 the slippage between the quote and the send they fail with
-`trading.price_moved` so you re-quote with open eyes. Approving an agent
+`trading.price_moved` so you re-quote with open eyes. `trading.swap` (and
+`agentos trade swap --expected-out-raw … --min-out-raw …`) accepts the
+quote's `expectedOutRaw` / `minOutRaw` so the fill is checked against the
+quote you actually saw: it refuses with `trading.price_moved` when the fill
+would be more than 2× the slippage worse. Approving an agent
 order re-quotes it; if the market moved that much since you approved, it
 goes back to `awaiting_approval` with reason `price moved since approval;
 please re-approve` instead of executing. `trading.limits` and
@@ -279,9 +287,10 @@ once it lands). Every change is broadcast on the gateway WebSocket
 The bundled `wallet-trading` skill drives the `agentos wallet` and
 `agentos trade` commands with `--json`. Typical missions:
 
-- "Swap 50 USDC to ETH on Base" — `agentos trade swap --chain base --in USDC --out ETH --amount 50 --json`, then `agentos trade order <id> --wait`.
-- "DCA 20 USDC into AAPL every day" — a cron job running the swap; each
-  run is a separate order under the same limits.
+- "Swap 50 USDC to ETH on Base" — `agentos trade swap --chain base --in USDC --out ETH --amount 50 --wait --wait-seconds 600 --json`; a parked order is waited out with `agentos trade order <id> --wait --wait-seconds 600 --json` (`--wait-seconds` without `--wait` returns at once).
+- "DCA 20 USDC into ETH every day" — a cron job running the swap; each
+  run is a separate order under the same limits, with its own
+  `--client-id` (minute resolution: `dca-eth-$(date +%Y%m%dT%H%M)`).
 - "Buy WETH if it drops 5%" — quote/price checks on a schedule, swap when the
   condition holds, report the tx hash and explorer link.
 - "Rebalance wallets A and B" — `--wallet A --wallet B` or
@@ -310,7 +319,11 @@ Every client goes through the same gateway methods:
 
 `~/.agentos/state/trading.sqlite` holds tokens, entries (history), FIFO
 lots, realized PnL, orders, daily spend, sync cursors, balance cache, the
-outcome of each wallet/chain read (`chain_reads`) and price snapshots. Cost basis for a deposit is the token's USD price at that
+outcome of each wallet/chain read (`chain_reads`) and price snapshots. A
+release that ships a ledger repair migration flags it: `agentos trade
+status --json` (and `trading.status`) then carries `ledgerRepair` ("full
+sync required"); run `agentos trade sync --full` once after upgrading and
+the flag clears. Cost basis for a deposit is the token's USD price at that
 block (CoinGecko range; spot price with `cost_basis_source = "approx"` when
 history is unavailable). A holding's cost can be corrected by hand with
 `trading.lot.setCost`. Selling consumes the oldest lots first; the

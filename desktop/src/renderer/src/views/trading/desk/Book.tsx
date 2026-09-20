@@ -124,8 +124,13 @@ export function Book({
     entering && !portfolio.isPending,
   )
   const pendingCount = orders.orders.filter(isAwaitingApproval).length
-  const tone = pnlTone(totals.change24hUsd)
-  const Arrow = tone === 'down' ? TrendingDown : TrendingUp
+  // The hero is coloured by the book's own result — what was banked plus
+  // what is still open — never by the day's price move, which is only the
+  // chip's business.
+  const tone = pnlTone((totals.realizedUsd ?? 0) + (totals.unrealizedUsd ?? 0))
+  const deltaTone = pnlTone(totals.change24hUsd)
+  const Arrow = deltaTone === 'down' ? TrendingDown : TrendingUp
+  const unpriced = portfolio.data?.unpricedCount ?? 0
   const segments = allocationSegments(holdings)
   // The switcher names every wallet and what it holds. A portfolio scoped to
   // one wallet only carries that one, and a dropdown that showed one figure
@@ -319,14 +324,21 @@ export function Book({
                 {totals.change24hUsd !== null ? (
                   <span
                     className="trd-delta"
-                    data-tone={tone}
-                    title={`${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
+                    data-tone={deltaTone}
+                    data-testid="book-delta"
+                    aria-label={t('trading.overview.move24h')}
+                    title={`${t('trading.overview.move24h')}: ${formatUsd(totals.change24hUsd, { signed: true })} ${t('trading.overview.today')}`}
                   >
-                    {tone !== 'flat' ? (
+                    {deltaTone !== 'flat' ? (
                       <Arrow className="size-3" strokeWidth={2.25} aria-hidden />
                     ) : null}
                     <Money value={totals.change24hUsd} signed cell />
                     <em className="trd-num">{formatPct(totals.change24hPct, { signed: true })}</em>
+                  </span>
+                ) : null}
+                {unpriced > 0 ? (
+                  <span className="trd-delta" data-tone="flat" data-testid="book-unpriced">
+                    <em className="trd-num">{unpriced}</em> {t('trading.overview.unpriced')}
                   </span>
                 ) : null}
               </div>

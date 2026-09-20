@@ -189,6 +189,23 @@ describe('missions', () => {
     expect(prompt).toContain('orders above $100.00 wait for approval')
     expect(prompt).toContain('every 5 min')
     expect(prompt).toContain(MISSION_COMPLETE_MARKER)
+    // `--wait-seconds` without `--wait` returns at once; the prompt says both.
+    expect(prompt).toContain('`agentos trade order <id> --wait --wait-seconds 600 --json`')
+    expect(prompt).not.toMatch(/order <id> --wait-seconds/)
+    // A budgeted mission counts what it already spent from the ledger, by note prefix.
+    expect(prompt).toContain(
+      'Before any order in a mission with a budget: `agentos trade orders --json`, sum `valueUsd` of `confirmed` orders whose `note` starts with `Buy the dip:`;',
+    )
+    expect(prompt).toContain(
+      `if that sum plus this order would exceed the total budget, do nothing and reply \`${MISSION_COMPLETE_MARKER}\`. Every order's \`--note\` starts with \`Buy the dip:\`.`,
+    )
+    // No budget, no bookkeeping clause.
+    const free = composeMissionPrompt(
+      { ...form, budgetTotalUsd: '', budgetPerOrderUsd: '' },
+      { wallets: [WALLET], limits: null },
+    )
+    expect(free).not.toContain('Budget:')
+    expect(free).not.toContain('Before any order in a mission with a budget')
     expect(isDryRunText(prompt)).toBe(true)
     const stripped = withoutDryRun(prompt)
     expect(isDryRunText(stripped)).toBe(false)
@@ -445,6 +462,9 @@ describe('composerPlaceholder', () => {
         steering: 'steer',
       }),
     ).toBe(PLACEHOLDERS[1])
+    // Stock Tokens are refused on Robinhood Chain, so the desk never suggests one.
+    expect(PLACEHOLDERS).toContain('Sell 0.01 ETH for USDC on Base')
+    expect(PLACEHOLDERS.join('\n')).not.toMatch(/AAPL|Robinhood/)
   })
 })
 

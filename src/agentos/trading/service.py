@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 import sqlite3
 import time
@@ -123,6 +124,9 @@ CHAIN_CATCHUP_POLL_S = 1.0
 # Pause between wallets in a batch so a multi-wallet swap stays under the
 # Trading API's per-endpoint rate limit.
 BATCH_PAUSE_S = 0.35
+# Selling 100% of the gas coin keeps this much back so the swap itself (and
+# the next one) can still pay for gas.
+NATIVE_GAS_RESERVE_WEI = 10**15
 # ``wallet.balances`` with ``refresh`` forces a chain read at most this often
 # per wallet; between forced reads the sync loop keeps the ledger current.
 MANUAL_SYNC_MIN_S = 10.0
@@ -263,6 +267,44 @@ def _client_order_id(value: str | None) -> str | None:
             "clientOrderId must be 1-64 characters of letters, digits, '.', '_', ':' or '-'",
         )
     return text
+
+
+def _client_quote_json(
+    expected_out_raw: int | None, min_out_raw: int | None, quote_id: str | None
+) -> str | None:
+    """The quote a client confirmed, as stored in ``orders.quote_json``; ``None`` when none."""
+    if expected_out_raw is None and min_out_raw is None and quote_id is None:
+        return None
+    for name, value in (("expectedOutRaw", expected_out_raw), ("minOutRaw", min_out_raw)):
+        if value is not None and int(value) < 0:
+            raise TradingError("trading.invalid", f"{name} must not be negative")
+    return json.dumps(
+        {
+            "quoteId": quote_id,
+            "expectedOutRaw": str(expected_out_raw) if expected_out_raw is not None else None,
+            "minOutRaw": str(min_out_raw) if min_out_raw is not None else None,
+        }
+    )
+
+
+def _client_expected_out(row: dict[str, Any]) -> int | None:
+    """``expectedOutRaw`` from the order's client quote, or ``None`` when the client sent none."""
+    raw = row.get("quote_json")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(str(raw))
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("expectedOutRaw")
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sign_permit(permit: dict[str, Any], key: bytes) -> str:
@@ -572,7 +614,16 @@ class TradingService:
             "syncing": self.syncing,
             "rebuild": self.syncer.rebuild_progress,
             "lastSyncAt": int(self.last_sync_at * 1000) if self.last_sync_at else None,
+            "ledgerRepair": self._ledger_repair(),
         }
+
+    def _ledger_repair(self) -> str | None:
+        """What the ledger says it needs (``"full sync required"``), or ``None``."""
+        repair = getattr(self.ledger, "repair_pending", None)
+        if repair is None:
+            return None
+        result = repair()
+        return str(result) if result else None
 
     def _limits_dict(self) -> dict[str, Any]:
         return {
@@ -1273,9 +1324,12 @@ class TradingService:
         pos_by_key = {(p.chain_id, p.wallet, p.token): p for p in positions}
         holdings: list[dict[str, Any]] = []
         hidden_count = 0
+        unpriced_count = 0
         per_wallet: dict[str, dict[str, float]] = {
-            r.key: {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0} for r in records
+            r.key: {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0, "unpriced": 0}
+            for r in records
         }
+        counted: set[tuple[int, str, str]] = set()
         for chain_id, wallet_key, token in sorted(holdings_keys):
             is_hidden = token in hidden_by_chain.get(chain_id, set())
             if is_hidden:
@@ -1340,13 +1394,31 @@ class TradingService:
                 # Shown on request, never counted: junk has no place in a total.
                 continue
             bucket = per_wallet.setdefault(
-                wallet_key, {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0}
+                wallet_key,
+                {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0, "unpriced": 0},
             )
-            bucket["value"] += value or 0.0
-            if not unsellable:
-                bucket["cost"] += cost
+            counted.add((chain_id, wallet_key, token))
+            if value is None:
+                # No price, so no value: its cost must stay out of the totals
+                # too, or the hero shows a loss the market never priced.
+                unpriced_count += 1
+                bucket["unpriced"] += 1
+            else:
+                bucket["value"] += value
+                if not unsellable:
+                    bucket["cost"] += cost
             bucket["realized"] += pnl.realized_usd
             bucket["change"] += change_usd or 0.0
+        # A position sold down to nothing is no longer a holding, but what
+        # it made or lost is still this wallet's realised PnL.
+        for (chain_id, wallet_key, token), realized_usd in realized.items():
+            if (chain_id, wallet_key, token) in counted or wallet_key not in keys:
+                continue
+            if chain_id not in hidden_by_chain:
+                hidden_by_chain[chain_id] = self.ledger.hidden_tokens(chain_id)
+            if token in hidden_by_chain[chain_id]:
+                continue
+            per_wallet[wallet_key]["realized"] += realized_usd
         total_value = sum(h["valueUsd"] or 0.0 for h in holdings if not h["hidden"])
         for h in holdings:
             h["allocationPct"] = (
@@ -1373,6 +1445,7 @@ class TradingService:
                         self.ledger.gas_total(record.key),
                         bucket["change"],
                     ),
+                    "unpricedCount": int(bucket["unpriced"]),
                 }
             )
         totals = self._totals(
@@ -1386,6 +1459,7 @@ class TradingService:
             "totals": totals,
             "holdings": holdings,
             "hiddenCount": hidden_count,
+            "unpricedCount": unpriced_count,
             "wallets": wallets_out,
             "updatedAt": int(self._now() * 1000),
             "syncing": self.syncing,
@@ -1422,7 +1496,8 @@ class TradingService:
         return {
             "valueUsd": value,
             "costUsd": cost,
-            "unrealizedUsd": (value - cost) if cost > 0 else 0.0,
+            # An airdrop has a cost of 0 and a value: that is a gain, not nothing.
+            "unrealizedUsd": value - cost,
             "realizedUsd": realized,
             "gasUsd": gas,
             "change24hUsd": change,
@@ -1822,6 +1897,7 @@ class TradingService:
             "amountOut": format_amount(quote.amount_out_raw, meta_out.decimals),
             "amountOutRaw": str(quote.amount_out_raw),
             "minOut": format_amount(quote.min_out_raw, meta_out.decimals),
+            "minOutRaw": str(quote.min_out_raw),
             "priceImpactPct": quote.price_impact_pct,
             "gasUsd": quote.gas_usd,
             "valueUsd": value,
@@ -2598,6 +2674,9 @@ class TradingService:
         wait: bool = False,
         amount_usd: float | None = None,
         client_order_id: str | None = None,
+        expected_out_raw: int | None = None,
+        min_out_raw: int | None = None,
+        quote_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Swap from one or many wallets; one order per wallet.
 
@@ -2605,6 +2684,12 @@ class TradingService:
         same key returns the orders it created the first time and creates
         nothing — a client that lost the reply to a timeout can ask again
         without a second swap going out.
+
+        ``expected_out_raw`` / ``min_out_raw`` / ``quote_id`` are the quote
+        the client confirmed. The engine always re-quotes, but the client's
+        quote is the one the user agreed to: an execution that would deliver
+        more than twice the slippage below it is refused (manual) or parked
+        for approval (agent) instead of going out on a number nobody saw.
         """
         if not getattr(self.config, "enabled", True):
             raise TradingError("trading.disabled", "Trading is disabled in config")
@@ -2632,6 +2717,7 @@ class TradingService:
             raise TradingError("trading.invalid", "amountPct must be between 0 and 100")
         slippage = slippage_pct if slippage_pct is not None else self.config.default_slippage_pct
         self._check_agent_slippage(initiator, slippage)
+        client_quote = _client_quote_json(expected_out_raw, min_out_raw, quote_id)
         results: list[dict[str, Any]] = []
         for index, record in enumerate(records):
             if index and BATCH_PAUSE_S > 0:
@@ -2654,6 +2740,7 @@ class TradingService:
                         session_key,
                         note,
                         client_order_id=client_id,
+                        quote_json=client_quote,
                     )
                 except sqlite3.IntegrityError:
                     # Two identical calls raced past the lookup above: the
@@ -2722,7 +2809,15 @@ class TradingService:
             balance = await self._balance_raw(chain, record, meta_in)
             if meta_in.native and float(amount_pct or 0) >= 100:
                 # Keep a gas reserve when spending the whole native balance.
-                balance = max(0, balance - 10**15)
+                if balance - NATIVE_GAS_RESERVE_WEI <= 0:
+                    raise TradingError(
+                        "trading.invalid",
+                        f"balance {format_amount(balance, meta_in.decimals)} "
+                        f"{meta_in.symbol or 'ETH'} is below the "
+                        f"{format_amount(NATIVE_GAS_RESERVE_WEI, 18)} "
+                        f"{meta_in.symbol or 'ETH'} gas reserve; nothing to sell",
+                    )
+                balance -= NATIVE_GAS_RESERVE_WEI
             raw = balance * int(float(amount_pct or 0) * 100) // 10_000
         if raw <= 0:
             raise TradingError("trading.invalid", "amount must be greater than zero")
@@ -2747,6 +2842,7 @@ class TradingService:
         session_key: str | None,
         note: str | None,
         client_order_id: str | None = None,
+        quote_json: str | None = None,
     ) -> dict[str, Any]:
         now = self._now()
         row = {
@@ -2767,6 +2863,8 @@ class TradingService:
             "provider": self.provider_id(),
             "client_order_id": client_order_id,
         }
+        if quote_json is not None:
+            row["quote_json"] = quote_json
         self.ledger.insert_order(row)
         return row
 
@@ -2810,6 +2908,32 @@ class TradingService:
             if quote.slippage_pct is not None
             else row.get("slippage_pct"),
         )
+        # The client confirmed a number; the engine's fresh quote must not
+        # be far below it, or the user is executing a trade they never saw.
+        client_expected = _client_expected_out(row)
+        if client_expected is not None:
+            slip = float(row.get("slippage_pct") or quote.slippage_pct or 0.5)
+            floor = client_expected * (1 - 2 * slip / 100.0)
+            if quote.amount_out_raw < floor:
+                reason = (
+                    "price moved more than twice the slippage since you confirmed "
+                    f"(expected {format_amount(client_expected, meta_out.decimals)}, "
+                    f"now {format_amount(quote.amount_out_raw, meta_out.decimals)} "
+                    f"{meta_out.symbol or ''}".rstrip()
+                    + "); quote again"
+                )
+                if row["initiator"] == "agent":
+                    self.ledger.update_order(
+                        row["order_id"],
+                        status="awaiting_approval",
+                        reason=reason,
+                        expires_at=self._now() + int(self.config.approval_ttl_seconds),
+                    )
+                    await self._emit(
+                        "trading.approval.requested", {"order": self.get_order(row["order_id"])}
+                    )
+                    return
+                raise TradingError("trading.price_moved", reason)
         # The row is still ``quoted`` here, so its own value is not yet in
         # ``open_agent_value_usd``; the verdict adds it on top of everything
         # else in flight for this wallet.
@@ -2912,7 +3036,12 @@ class TradingService:
                             "trading.tx_failed", f"approval transaction failed ({tx_hash})"
                         )
                     await self._record_gas(
-                        chain, record, receipt, kind="approval", order_id=order_id
+                        chain,
+                        record,
+                        receipt,
+                        kind="approval",
+                        order_id=order_id,
+                        initiator=str(row["initiator"]),
                     )
                     await self._await_allowance(
                         evm,
@@ -2934,32 +3063,8 @@ class TradingService:
                     slippage_pct=row.get("slippage_pct"),
                     decision_origin=origin,
                 )
-            # The guardrail judged a price; if the market has moved past
-            # twice the slippage since, that judgement is stale. An agent
-            # order goes back to the human; a manual order is refused so the
-            # user re-quotes with open eyes.
-            if row.get("expected_out_raw"):
-                expected = int(row["expected_out_raw"])
-                slip = float(row.get("slippage_pct") or quote.slippage_pct or 0.5)
-                floor = expected * (1 - 2 * slip / 100.0)
-                if quote.amount_out_raw < floor:
-                    if row["initiator"] == "agent":
-                        self.ledger.update_order(
-                            order_id,
-                            status="awaiting_approval",
-                            reason="price moved since approval; please re-approve",
-                            expected_out_raw=str(quote.amount_out_raw),
-                            min_out_raw=str(quote.min_out_raw),
-                            expires_at=self._now() + int(self.config.approval_ttl_seconds),
-                        )
-                        await self._emit(
-                            "trading.approval.requested", {"order": self.get_order(order_id)}
-                        )
-                        return
-                    raise TradingError(
-                        "trading.price_moved",
-                        "price moved more than twice the slippage since the quote; quote again",
-                    )
+            if not await self._enforce_floor(row, quote):
+                return
             value = row.get("value_usd")
             if value is None:
                 # Parked without a price and approved later: price it now so
@@ -2976,13 +3081,27 @@ class TradingService:
                 value_usd=value,
             )
 
-            # 3. Calldata, sign, broadcast.
+            # 3. Calldata, sign, broadcast. A provider whose quote went
+            # stale re-fetches inside ``build``; that re-quote is judged
+            # by the same floor as the one before it, and the row keeps
+            # the numbers that are actually about to be signed.
+            fetched_before = quote.fetched_at
             tx = await provider.build(
                 quote,
                 deadline=int(self._now()) + 600,
                 sign_permit=lambda permit: self._sign_permit(permit, key),
                 decision_origin=origin,
             )
+            if quote.fetched_at != fetched_before:
+                if not await self._enforce_floor(row, quote):
+                    return
+                self.ledger.update_order(
+                    order_id,
+                    expected_out_raw=str(quote.amount_out_raw),
+                    min_out_raw=str(quote.min_out_raw),
+                    price_impact_pct=quote.price_impact_pct,
+                    gas_usd=quote.gas_usd,
+                )
             validate_transaction(tx)
             self._check_swap_tx(
                 tx,
@@ -3002,6 +3121,38 @@ class TradingService:
         await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         await self._watch(
             order_id, tx_hash, {"in": pre_in, "out": pre_out, "native": pre_native}, wait=wait
+        )
+
+    async def _enforce_floor(self, row: dict[str, Any], quote: ProviderQuote) -> bool:
+        """Refuse or park an order whose fresh quote fell too far below the judged one.
+
+        The guardrail judged a price; if the market has moved past twice the
+        slippage since, that judgement is stale. An agent order goes back to
+        the human (``False``: the caller stops); a manual order is refused so
+        the user re-quotes with open eyes. ``True`` means carry on.
+        """
+        if not row.get("expected_out_raw"):
+            return True
+        order_id = str(row["order_id"])
+        expected = int(row["expected_out_raw"])
+        slip = float(row.get("slippage_pct") or quote.slippage_pct or 0.5)
+        floor = expected * (1 - 2 * slip / 100.0)
+        if quote.amount_out_raw >= floor:
+            return True
+        if row["initiator"] == "agent":
+            self.ledger.update_order(
+                order_id,
+                status="awaiting_approval",
+                reason="price moved since approval; please re-approve",
+                expected_out_raw=str(quote.amount_out_raw),
+                min_out_raw=str(quote.min_out_raw),
+                expires_at=self._now() + int(self.config.approval_ttl_seconds),
+            )
+            await self._emit("trading.approval.requested", {"order": self.get_order(order_id)})
+            return False
+        raise TradingError(
+            "trading.price_moved",
+            "price moved more than twice the slippage since the quote; quote again",
         )
 
     async def _watch(self, order_id: str, tx_hash: str, pre: dict[str, int], *, wait: bool) -> None:
@@ -3331,6 +3482,7 @@ class TradingService:
         *,
         kind: str,
         order_id: str | None,
+        initiator: str = "manual",
     ) -> float | None:
         if not receipt:
             return None
@@ -3347,7 +3499,7 @@ class TradingService:
                 tx_hash=tx_hash,
                 log_index=0,
                 gas_usd=gas_usd,
-                initiator="manual",
+                initiator=initiator,
                 order_id=order_id,
             )
         return gas_usd

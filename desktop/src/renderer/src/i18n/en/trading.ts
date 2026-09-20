@@ -75,6 +75,11 @@ export const trading = {
   'trading.overview.chains.all': 'All',
   'trading.overview.allocation': 'Allocation',
   'trading.overview.other': 'Other',
+  // The delta chip is the day's price move, not the book's PnL: the hero's
+  // tone follows realized + unrealized, the chip says what it is.
+  'trading.overview.move24h': '24h price move',
+  // "3 unpriced": positions held but worth nothing in the totals for want of a price.
+  'trading.overview.unpriced': 'unpriced',
 
   // Holdings
   'trading.holdings.title': 'Holdings',
@@ -157,8 +162,11 @@ export const trading = {
   'trading.orders.value': 'Value',
   // Short labels for the row's caption line; the full wording is the tooltip.
   'trading.orders.fact.min': 'min',
-  'trading.orders.fact.impact': 'impact',
+  'trading.orders.fact.impact': 'vs ref',
   'trading.orders.fact.fee': 'fee',
+  // Until the receipt lands the fee and the outcome are the quote's guesses.
+  'trading.orders.fact.feeEst': 'est. fee',
+  'trading.orders.est': 'est.',
 
   // Swap panel
   'trading.swap.title': 'Swap',
@@ -172,7 +180,9 @@ export const trading = {
   'trading.swap.pick': 'Choose token',
   'trading.swap.flip': 'Swap direction',
   'trading.swap.rate': 'Rate',
-  'trading.swap.impact': 'Price impact',
+  // The provider's figure is the quote against a reference price, not a
+  // measured move of the pool; the label may not promise more than that.
+  'trading.swap.impact': 'Price vs reference',
   'trading.swap.minOut': 'Minimum received',
   'trading.swap.gas': 'Network fee',
   'trading.swap.slippage': 'Slippage',
@@ -210,9 +220,10 @@ export const trading = {
   'trading.confirm.cancel': 'Cancel',
   'trading.confirm.cta': 'Swap now',
   'trading.confirm.sending': 'Sending…',
-  'trading.confirm.impactHigh': 'High price impact. You are moving the market.',
+  'trading.confirm.impactHigh': 'Far from the reference price. Check the route before you confirm.',
   'trading.confirm.stale': 'The price expired. Refresh before sending.',
   'trading.confirm.refreshFailed': 'Could not refresh the price',
+  'trading.confirm.priceMoved': 'Price moved since you confirmed — re-quoting',
 
   // Token picker
   'trading.picker.title': 'Choose a token',
@@ -616,19 +627,14 @@ export const trading = {
   'trading.preset.dca.hint': 'Buy the same amount every run',
   'trading.preset.dcaCapped.name': 'DCA under a price',
   'trading.preset.dcaCapped.hint': 'Same, but skip runs when it is too expensive',
-  'trading.preset.dcaStock.name': 'DCA a stock',
-  'trading.preset.dcaStock.hint': 'AAPL, TSLA and friends, on Robinhood Chain',
   'trading.preset.dip.name': 'Buy the dip',
   'trading.preset.dip.hint': 'Buy when the price falls to a level',
   'trading.preset.takeProfit.name': 'Take profit',
   'trading.preset.takeProfit.hint': 'Sell part of a position once it is up enough',
   'trading.preset.rebalance.name': 'Rebalance',
   'trading.preset.rebalance.hint': 'Hold a ratio, trade only on real drift',
-  'trading.preset.dustSweep.name': 'Dust sweep',
-  'trading.preset.dustSweep.hint': 'Clear tiny leftovers back into USDC',
 
   'trading.knob.token': 'Token',
-  'trading.knob.ticker': 'Ticker',
   'trading.knob.usdPerRun': 'USD per run',
   'trading.knob.price': 'Price (USD)',
   'trading.knob.maxPrice': 'Only buy below (USD)',
@@ -638,7 +644,6 @@ export const trading = {
   'trading.knob.sellPct': 'Sell this much of it (%)',
   'trading.knob.targetPct': 'Target share (%)',
   'trading.knob.driftPct': 'Allowed drift (points)',
-  'trading.knob.underUsd': 'Dust is under (USD)',
   'trading.knob.minutes': 'Waiting longer than (min)',
   'trading.knob.direction': 'When it goes',
   'trading.knob.direction.below': 'at or below',
@@ -737,7 +742,7 @@ export const trading = {
   'trading.card.fact.minimum': 'Receive (minimum)',
   'trading.card.fact.rate': 'Rate',
   'trading.card.fact.value': 'Value',
-  'trading.card.fact.impact': 'Price impact',
+  'trading.card.fact.impact': 'Price vs reference',
   'trading.card.fact.gas': 'Gas',
   'trading.card.fact.provider': 'Route via',
   'trading.card.fact.order': 'Order',

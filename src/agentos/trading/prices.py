@@ -26,7 +26,7 @@ from typing import Any
 
 import httpx
 
-from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec, is_native, normalize_address
+from agentos.trading.chains import BASE, NATIVE_ADDRESS, ChainSpec, is_native, normalize_address
 from agentos.trading.evm import USER_AGENT
 
 DEXSCREENER_BASE = "https://api.dexscreener.com"
@@ -282,7 +282,32 @@ class PriceService:
             )
             self._prices[(chain.chain_id, lookup)] = resolved
             out[requested] = resolved
+        native = out.get(NATIVE_ADDRESS)
+        if native is not None and native.price_usd is None:
+            borrowed = await self._native_price_fallback(chain)
+            if borrowed is not None:
+                out[NATIVE_ADDRESS] = borrowed
         return out
+
+    async def _native_price_fallback(self, chain: ChainSpec) -> PriceInfo | None:
+        """The gas coin of an ETH-denominated L2 is ETH: price it from Base.
+
+        Robinhood Chain has no wrapped-ETH pool DexScreener indexes, so its
+        native feed is empty; ETH is ETH, and Base's WETH price is the same
+        asset. Looked up per call (Base's own cache answers within its
+        TTL), never written into this chain's cache, so a feed that comes
+        alive is used the moment it does.
+        """
+        if chain.chain_id == BASE.chain_id or chain.native_symbol != BASE.native_symbol:
+            return None
+        base = (await self.prices(BASE, [NATIVE_ADDRESS])).get(NATIVE_ADDRESS)
+        if base is None or base.price_usd is None:
+            return None
+        return PriceInfo(
+            price_usd=base.price_usd,
+            change_24h_pct=base.change_24h_pct,
+            fetched_at=base.fetched_at,
+        )
 
     async def price(self, chain: ChainSpec, address: str) -> float | None:
         result = await self.prices(chain, [address])

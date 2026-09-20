@@ -756,3 +756,70 @@ class TestSendAndToolsRpc:
         rows = network.payload["chains"]
         assert [r["chainId"] for r in rows] == [8453, 4663]
         assert rows[0]["blockNumber"] == 100 and rows[0]["latencyMs"] is not None
+
+
+class TestClientQuote:
+    """``expectedOutRaw`` / ``minOutRaw`` / ``quoteId`` reach the engine as ints and a string."""
+
+    async def _funded(self, ctx: RpcContext, stack: dict[str, Any]) -> str:
+        await call("wallet.setup", {"password": PASSWORD}, ctx)
+        address = (await call("wallet.create", {"label": "Main"}, ctx)).payload["wallet"]["address"]
+        stack["base"].set_native(address, 10**18)
+        stack["base"].set_erc20(USDC, address, 1000 * 10**6)
+        return address
+
+    async def test_reaches_the_service(
+        self, ctx: RpcContext, stack: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await self._funded(ctx, stack)
+        seen: list[dict[str, Any]] = []
+
+        async def fake_swap(
+            self,
+            *,
+            expected_out_raw: int | None = None,
+            min_out_raw: int | None = None,
+            quote_id: str | None = None,
+            **kwargs: Any,
+        ) -> list[dict[str, Any]]:
+            seen.append(
+                {
+                    "expected_out_raw": expected_out_raw,
+                    "min_out_raw": min_out_raw,
+                    "quote_id": quote_id,
+                }
+            )
+            return [{"orderId": "ord_swap"}]
+
+        monkeypatch.setattr(TradingService, "swap", fake_swap)
+        base = {"chainId": 8453, "tokenIn": "USDC", "tokenOut": "WETH", "amountIn": "1"}
+        res = await call(
+            "trading.swap",
+            {
+                **base,
+                "expectedOutRaw": "5000000000000000",
+                "minOutRaw": " 4975000000000000 ",
+                "quoteId": "q-1",
+            },
+            ctx,
+        )
+        assert res.ok, res.error
+        # Integers are accepted too; a JSON client may send either.
+        res = await call("trading.swap", {**base, "expectedOutRaw": 42}, ctx)
+        assert res.ok, res.error
+        res = await call("trading.swap", base, ctx)
+        assert res.ok, res.error
+        assert seen == [
+            {
+                "expected_out_raw": 5_000_000_000_000_000,
+                "min_out_raw": 4_975_000_000_000_000,
+                "quote_id": "q-1",
+            },
+            {"expected_out_raw": 42, "min_out_raw": None, "quote_id": None},
+            {"expected_out_raw": None, "min_out_raw": None, "quote_id": None},
+        ]
+        # Not an integer string: refused, never silently dropped.
+        for bad in ("0.005", "abc", 1.5, True, "-1"):
+            res = await call("trading.swap", {**base, "expectedOutRaw": bad}, ctx)
+            assert res.ok is False, bad
+        assert len(seen) == 3

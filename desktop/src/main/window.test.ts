@@ -20,7 +20,7 @@ describe('isAllowedExternalUrl', () => {
     for (const url of [
       'javascript:alert(1)',
       'file:///etc/passwd',
-      'file:///Users/me/Library/Application%20Support/agentos/vault.json',
+      'file:///var/app-support/agentos/vault.json',
       'data:text/html,<script>alert(1)</script>',
       'agentos-qr:0xabc',
       'ftp://example.com/x',

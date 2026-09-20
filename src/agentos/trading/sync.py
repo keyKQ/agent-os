@@ -78,6 +78,11 @@ SYNC_OVERLAP_BLOCKS = 10
 
 Priced = tuple[float | None, str]
 
+# Dollar-pegged tokens whose price is the most trustworthy leg of a swap.
+STABLE_SYMBOLS = frozenset({"USDC", "USDT", "USDG", "DAI"})
+# A deposit of an unlisted token from a stranger is a lot at cost zero.
+AIRDROP_SOURCE = "airdrop"
+
 
 @dataclass
 class BalanceRead:
@@ -99,6 +104,10 @@ class TxGroup:
     ts: float
     ins: dict[str, int] = field(default_factory=dict)
     outs: dict[str, int] = field(default_factory=dict)
+    # Every address that sent a Transfer in this transaction. The wallet's
+    # own presence here means it took part (a self-transfer, a contract it
+    # called); an inbound token whose senders are all strangers is an airdrop.
+    senders: set[str] = field(default_factory=set)
 
 
 class WalletSyncer:
@@ -489,7 +498,7 @@ class WalletSyncer:
                 self.ledger.set_balance(chain.chain_id, address, token, raw)
             self.ledger.set_balance(chain.chain_id, address, NATIVE_ADDRESS, native_now)
             self.ledger.set_sync_state(
-                chain.chain_id, address, last_block=latest, oldest_block=oldest
+                chain.chain_id, address, last_block=latest, oldest_block=oldest, full=True
             )
             self.ledger.clear_rebuild(chain.chain_id, address)
         self._record_read(chain, address, BalanceRead(changed=True, failed=unread))
@@ -507,7 +516,9 @@ class WalletSyncer:
         for tx_hash, group in by_tx.items():
             ins: dict[str, int] = defaultdict(int)
             outs: dict[str, int] = defaultdict(int)
+            senders: set[str] = set()
             for transfer in group:
+                senders.add(transfer.sender)
                 if transfer.recipient == address and transfer.sender != address:
                     ins[transfer.token] += transfer.amount
                 elif transfer.sender == address and transfer.recipient != address:
@@ -525,6 +536,7 @@ class WalletSyncer:
                     ts=await self._timestamp(chain, block),
                     ins=dict(ins),
                     outs=dict(outs),
+                    senders=senders,
                 )
             )
         groups.sort(key=lambda g: (g.block, g.log_index))
@@ -561,6 +573,13 @@ class WalletSyncer:
         ins, outs = group.ins, group.outs
         if ins and not outs:
             for token, amount in ins.items():
+                meta = _pick(metas, token) or await self._token_meta(chain, token)
+                # Unlisted tokens that arrive from strangers are airdrops:
+                # nothing was paid, so the lot costs nothing, whatever a
+                # thin pool says it is worth. The wallet's own hand in the
+                # transaction (a self-send, a contract it called) makes it
+                # a real acquisition.
+                airdrop = not meta.native and not meta.verified and wallet.key not in group.senders
                 if await self._book_deposit(
                     wallet,
                     chain,
@@ -569,8 +588,9 @@ class WalletSyncer:
                     group.ts,
                     tx_hash=group.tx_hash,
                     log_index=group.log_index,
-                    meta=_pick(metas, token),
+                    meta=meta,
                     priced=_pick(priced, (token, int(group.ts))),
+                    airdrop=airdrop,
                 ):
                     changed = True
         elif outs and not ins:
@@ -648,10 +668,18 @@ class WalletSyncer:
         note: str | None = None,
         meta: TokenMeta | None = None,
         priced: Priced | None = None,
+        airdrop: bool = False,
     ) -> bool:
+        """Book an inbound amount as a deposit and open its lot.
+
+        An ``airdrop`` keeps the spot price for information but has no
+        value and a lot at cost zero: the whole holding is unrealized gain.
+        """
         meta = meta or await self._token_meta(chain, token)
         price, source = priced if priced is not None else await self._price_for(chain, token, ts)
         value = float(to_human(amount, meta.decimals)) * price if price is not None else None
+        if airdrop:
+            value, source = None, AIRDROP_SOURCE
         entry_id = self.ledger.insert_entry(
             ts=ts,
             chain_id=chain.chain_id,
@@ -674,7 +702,9 @@ class WalletSyncer:
             wallet.key,
             token,
             amount_raw=amount,
-            cost_usd_per_raw=per_raw(price, meta.decimals) if price is not None else 0.0,
+            cost_usd_per_raw=(
+                per_raw(price, meta.decimals) if value is not None and price is not None else 0.0
+            ),
             acquired_at=ts,
             entry_id=entry_id,
         )
@@ -752,16 +782,19 @@ class WalletSyncer:
         price_out, source_out = (
             pout if pout is not None else await self._price_for(chain, token_out, ts)
         )
-        human_in = float(to_human(amount_in, meta_in.decimals))
-        human_out = float(to_human(amount_out, meta_out.decimals))
-        value: float | None
-        source: str
-        if price_in is not None:
-            value, source = human_in * price_in, source_in
-        elif price_out is not None:
-            value, source = human_out * price_out, source_out
+        value, leg = swap_value(
+            chain,
+            meta_in=meta_in,
+            amount_in=amount_in,
+            price_in=price_in,
+            meta_out=meta_out,
+            amount_out=amount_out,
+            price_out=price_out,
+        )
+        if value is None:
+            source = "unknown"
         else:
-            value, source = None, "unknown"
+            source = f"{source_in if leg == 'in' else source_out}:{leg}"
         entry_id = self.ledger.insert_entry(
             ts=ts,
             chain_id=chain.chain_id,
@@ -1061,13 +1094,82 @@ def _send_leg(order: dict[str, Any]) -> tuple[str, int, str, int]:
 
 
 def _order_legs(order: dict[str, Any]) -> tuple[int, int, str, str, int]:
-    """(spent_raw, received_raw, token_in, token_out, gas_wei) of a confirmed *swap*."""
+    """(spent_raw, received_raw, token_in, token_out, gas_wei) of a confirmed *swap*.
+
+    A native receipt below the quote's minimum that the settlement did not
+    flag as a short fill is a mis-measured balance diff, not a bad trade
+    (the swap would have reverted): the quote's expected amount stands in
+    for it, so a rebuild does not re-derive a lot priced off a stray number.
+    """
     spent = int(order.get("spent_in_raw") or order.get("amount_raw") or 0)
     received = int(order.get("received_out_raw") or order.get("expected_out_raw") or 0)
     token_in = str(order["token_in"]).lower()
     token_out = str(order.get("delivered_token") or order["token_out"]).lower()
     gas_wei = int(order.get("gas_wei") or 0)
+    min_out = int(order.get("min_out_raw") or 0)
+    expected = int(order.get("expected_out_raw") or 0)
+    if (
+        token_out == NATIVE_ADDRESS
+        and str(order.get("status") or "") == "confirmed"
+        and 0 < received < min_out
+        and expected > 0
+        and "short fill" not in str(order.get("reason") or "")
+    ):
+        log.warning(
+            "trading.native_receipt_implausible",
+            order=order.get("order_id"),
+            received=received,
+            min_out=min_out,
+            using=expected,
+        )
+        received = expected
     return spent, received, token_in, token_out, gas_wei
+
+
+def _leg_rank(chain: ChainSpec, meta: TokenMeta) -> int:
+    """How much to trust a leg's price: stable 3, native 2, listed 1, else 0."""
+    if meta.native:
+        return 2
+    address = meta.address.lower()
+    if chain.usdc and address == chain.usdc.lower():
+        return 3
+    if meta.verified and meta.symbol.upper() in STABLE_SYMBOLS:
+        return 3
+    return 1 if meta.verified else 0
+
+
+def swap_value(
+    chain: ChainSpec,
+    *,
+    meta_in: TokenMeta,
+    amount_in: int,
+    price_in: float | None,
+    meta_out: TokenMeta,
+    amount_out: int,
+    price_out: float | None,
+) -> tuple[float | None, str]:
+    """USD value of a swap by its most reliable priced leg, and which leg (``in``/``out``).
+
+    A stablecoin leg is the trade's dollar amount to the cent; the native
+    coin's price is deep and everywhere; a listed token's is usually fine;
+    an unlisted token's comes from whatever pool DexScreener found and can
+    be off by orders of magnitude. Both proceeds of the sold leg and cost
+    of the bought lot are this one number. Equal trust goes to the in-leg.
+    ``(None, "in")`` when neither leg has a price.
+    """
+    best: tuple[int, str, float] | None = None
+    for leg, meta, amount, price in (
+        ("in", meta_in, amount_in, price_in),
+        ("out", meta_out, amount_out, price_out),
+    ):
+        if price is None:
+            continue
+        rank = _leg_rank(chain, meta)
+        if best is None or rank > best[0]:
+            best = (rank, leg, float(to_human(amount, meta.decimals)) * price)
+    if best is None:
+        return None, "in"
+    return best[2], best[1]
 
 
 def _pick(table: dict[Any, Any] | None, key: Any) -> Any:

@@ -111,6 +111,42 @@ describe('Book · the desk beside the chat', () => {
     await screen.findByTestId('wallet-switcher')
     expect(screen.queryByTestId('rail-toggle')).toBeNull()
   })
+
+  it('colours the hero by the book’s PnL, and the chip by the day’s move', async () => {
+    // Up on the day, but the book as a whole is under water.
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'trading.portfolio')
+        return {
+          totals: {
+            ...totals(900),
+            realizedUsd: -30,
+            unrealizedUsd: -70,
+            change24hUsd: 18.75,
+            change24hPct: 2.1,
+          },
+          holdings: [holding({ token: USDC })],
+          wallets: [{ wallet: WALLET, totals: totals(900) }],
+          unpricedCount: 3,
+          syncing: false,
+        }
+      if (method === 'trading.status') return { enabled: true, chains: [], providers: [] }
+      if (method === 'wallet.list') return { wallets: [WALLET], primary: WALLET.address }
+      return {}
+    })
+    render()
+    const delta = await screen.findByTestId('book-delta')
+    expect(delta).toHaveAttribute('data-tone', 'up')
+    expect(delta).toHaveAttribute('title', expect.stringContaining('24h price move'))
+    expect(delta.closest('.trd-hero')).toHaveAttribute('data-tone', 'down')
+    // Three positions the totals could not price, said beside the figure.
+    expect(screen.getByTestId('book-unpriced')).toHaveTextContent('3 unpriced')
+  })
+
+  it('says nothing about unpriced positions when every one has a price', async () => {
+    render()
+    await screen.findByTestId('wallet-switcher')
+    expect(screen.queryByTestId('book-unpriced')).toBeNull()
+  })
 })
 
 describe('Book · rejecting from the Orders tab', () => {

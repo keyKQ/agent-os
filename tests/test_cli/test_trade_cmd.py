@@ -1177,3 +1177,68 @@ def test_orders_kind_filter(client: _FakeClient) -> None:
 
 async def _no_sleep(_seconds: float) -> None:
     return None
+
+
+def test_swap_hidden_client_quote_options_reach_the_gateway(client: _FakeClient) -> None:
+    result = runner.invoke(
+        trade_cmd.app,
+        [
+            "swap",
+            "--chain",
+            "base",
+            "--in",
+            "USDC",
+            "--out",
+            "WETH",
+            "--amount",
+            "10",
+            "--expected-out-raw",
+            "5000000000000000",
+            "--min-out-raw",
+            " 4975000000000000 ",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    params = client.calls_to("trading.swap")[0]
+    assert params["expectedOutRaw"] == "5000000000000000"
+    assert params["minOutRaw"] == "4975000000000000"
+    # Absent: not sent at all.
+    runner.invoke(
+        trade_cmd.app,
+        ["swap", "--chain", "base", "--in", "USDC", "--out", "WETH", "--amount", "10"],
+    )
+    assert "expectedOutRaw" not in client.calls_to("trading.swap")[1]
+    assert "minOutRaw" not in client.calls_to("trading.swap")[1]
+    # Hidden from --help: they are for the desktop and scripts, not people.
+    help_text = runner.invoke(trade_cmd.app, ["swap", "--help"]).output
+    assert "--expected-out-raw" not in help_text and "--min-out-raw" not in help_text
+    # And a value that is not a base-unit integer is refused before any call.
+    bad = runner.invoke(
+        trade_cmd.app,
+        [
+            "swap",
+            "--chain",
+            "base",
+            "--in",
+            "USDC",
+            "--out",
+            "WETH",
+            "--amount",
+            "10",
+            "--expected-out-raw",
+            "0.005",
+        ],
+    )
+    assert bad.exit_code != 0
+    assert "whole number" in bad.output
+    assert len(client.calls_to("trading.swap")) == 2
+
+
+def test_status_shows_a_pending_ledger_repair(client: _FakeClient) -> None:
+    result = runner.invoke(trade_cmd.app, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "full sync required" not in result.output
+    client.payloads["trading.status"]["ledgerRepair"] = "full sync required"
+    result = runner.invoke(trade_cmd.app, ["status"])
+    assert result.exit_code == 0, result.output
+    assert "ledger" in result.output and "full sync required" in result.output

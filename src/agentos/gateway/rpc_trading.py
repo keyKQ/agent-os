@@ -180,6 +180,23 @@ def _number(params: dict[str, Any], key: str) -> float | None:
         raise ValueError(f"params.{key} must be a number") from exc
 
 
+def _raw_amount(params: dict[str, Any], key: str) -> int | None:
+    """A token amount in base units: an integer or an int-like string, never a float."""
+    value = params.get(key)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or isinstance(value, float):
+        raise ValueError(f"params.{key} must be an integer string")
+    if isinstance(value, str):
+        value = value.strip()
+        if not value.isdigit():
+            raise ValueError(f"params.{key} must be an integer string")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"params.{key} must be an integer string") from exc
+
+
 def _int(params: dict[str, Any], key: str, default: int) -> int:
     value = params.get(key)
     if value is None or value == "":
@@ -583,6 +600,9 @@ async def _trading_swap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
             session_key=session_key,
             note=_note(p),
             wait=bool(p.get("wait")),
+            expected_out_raw=_raw_amount(p, "expectedOutRaw"),
+            min_out_raw=_raw_amount(p, "minOutRaw"),
+            quote_id=_str(p, "quoteId"),
             **_client_order_id(service, "swap", p),
         )
     except Exception as exc:

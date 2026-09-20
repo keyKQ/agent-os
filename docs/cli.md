@@ -793,7 +793,7 @@ agentos wallet export <addr> --private-key   # prints the raw key; always asks t
 agentos wallet list / rename <addr> <label> / primary <addr> / remove <addr> --yes|-y
 agentos wallet balances [<addr>] [--chain base|robinhood] [--refresh] [--hidden] [--json]   # ledger view; --refresh re-reads the chain first (throttled to once per 10 s per wallet); --hidden lists junk tokens too
 
-agentos trade status                        # provider, API key, chains, limits, vault state
+agentos trade status                        # provider, API key, chains, limits, vault state; --json adds ledgerRepair ("full sync required") after a ledger repair migration
 agentos trade provider                      # show the swap provider (aggregator | uniswap)
 agentos trade provider uniswap              # switch it (= config set trading.provider uniswap)
 agentos trade probe [--provider aggregator|uniswap] [--api-key <key>]   # reachable? key valid? (--json exits 1 when not ok; --api-key is operator-only)
@@ -801,11 +801,12 @@ agentos trade tokens --chain robinhood AAPL # search; verified Stock Tokens are 
 agentos trade quote --chain base --in ETH --out USDC (--amount 0.01 | --usd 5) [--wallet <addr>] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --wait [--wait-seconds 1..900] [--slippage <pct>]
 agentos trade swap  --chain base --in ETH --out USDC --usd 5     # "$5 of ETH": the engine sizes it at the current price
-agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <a> --wallet <b>
-agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
-agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-2026-09-20   # idempotency key: the same id returns the same order instead of trading twice
+agentos trade swap  --chain robinhood --in ETH --out <addr> --amount 0.01 --wallet <a> --wallet <b>   # Robinhood Chain: --amount (no native USD price yet → --usd may answer trading.unpriced); bare USDC resolves to lookalikes there, use the verified address
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]   # the daily cap is per wallet: this spends up to N caps
+agentos trade swap  --chain base --in USDC --out ETH --amount 20 --client-id dca-eth-$(date +%Y%m%dT%H%M)   # idempotency key: one id per intended order, the same id on every retry; minute resolution so sub-daily jobs never collide
+agentos trade swap  --chain base --in ETH --out USDC --amount 0.01 --expected-out-raw <quote.expectedOutRaw> --min-out-raw <quote.minOutRaw>   # pin the fill to the quote shown; worse than 2× slippage → trading.price_moved
 agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
-agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
+agentos trade order <id> --wait --wait-seconds 600 / approve <id> / reject <id> [--reason <text>]   # --wait-seconds without --wait returns at once
 agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--client-id <id>] [--wait] [--wait-seconds 1..900] [--as-agent]
 agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
 agentos trade send --chain base --token USDC --to <a>=10 --to <b>=20 --file recipients.txt   # ADDR=AMOUNT per --to; file lines 'ADDR' or 'ADDR,AMOUNT'
@@ -816,7 +817,7 @@ agentos trade network [--fresh]             # head block, block age, gas, RPC la
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
 agentos trade portfolio [--wallet <addr>] [--hidden]   # holdings, cost basis, realized + unrealized PnL; --hidden lists junk tokens too
 agentos trade hide --chain base <addr> / unhide --chain base <addr>   # your call on a token's visibility; the engine never reverses it
-agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it (operator-only)
+agentos trade sync [--wallet <addr>] [--full]   # re-read the chain into the ledger; --full rebuilds it (operator-only) — run it once after an upgrade when `trade status` shows ledgerRepair
 agentos trade limits [<addr>]               # guardrails + today's agent spend (default: the primary wallet)
 ```
 
@@ -849,8 +850,12 @@ trading.uniswap_api_key <key>`, or Settings › Trading in the desktop app.
 
 29 of the 34 listed tokens on Robinhood Chain (the tokenised stocks — AAPL,
 TSLA, SPY and the rest) cannot be routed at all: the aggregator answers
-`trading.token_not_tradeable`, a legal refusal upstream that no retry, size
-or time of day changes. ETH, WETH and USDG trade normally there.
+`trading.token_not_tradeable`, a legal refusal upstream that no retry, size,
+address or time of day changes. ETH, WETH and USDG trade normally there.
+Robinhood Chain has no native USD price feed yet, so `--usd` may be refused
+with `trading.unpriced` (size with `--amount`), and the bare symbol `USDC`
+resolves to unverified lookalikes there (`TOKEN_UNVERIFIED`): use an
+address `agentos trade tokens --chain robinhood …` marks `verified: true`.
 
 `--in`/`--out` take `ETH`, an address, or a symbol; a symbol must resolve to
 exactly one *verified* token or the command exits 2 (`TOKEN_AMBIGUOUS`,
@@ -873,10 +878,13 @@ gateway is local; against a remote gateway it presents nothing and gets the
 agent's rules. An agent-bound connection is an agent whatever it declares
 (`--as-agent` only forces the agent rules for a person). For the agent: an
 order above `trading.approval_threshold_usd` (default 100) or above
-`trading.agent_max_price_impact_pct` (default 5) waits as
+`trading.agent_max_price_impact_pct` (default 5; "price impact" is the
+price vs reference, venue fee and feed skew included) waits as
 `awaiting_approval` for `trading.approval_ttl_seconds` (15 minutes); an
 order that would push a wallet past `trading.daily_cap_usd` (default 1,000
-per calendar day, orders in flight included; 0 switches agent swaps off) is
+per wallet per calendar day — `--all-wallets` spends up to N caps — with an
+order counted as max(in, out) in USD, orders in flight included; 0 switches
+agent swaps off) is
 rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
 refused with `trading.slippage_too_high`. `agentos trade approve` /
 `reject`, `hide` / `unhide`, `probe --api-key`, `sync --full` and every
@@ -887,12 +895,19 @@ invalid request). Those are the user's actions, in the app or their own
 terminal. `wallet status` and `trade status` leave out `vaultPath` for an
 agent. Swaps typed by a person are neither queued nor capped; if the price
 moves more than twice the slippage between quote and send they fail with
-`trading.price_moved` instead. `--wait` blocks until each order settles
-(`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order survives
-a gateway restart and is marked `failed` after 6 hours without a receipt.
-`--client-id <id>` on `swap` and `send` is an idempotency key: a second
-call with the same id returns the existing order instead of placing another,
-so a retry after a timeout cannot trade twice. A swap's target and the
+`trading.price_moved` instead. `swap` also accepts the quote's
+`expectedOutRaw` / `minOutRaw` (`--expected-out-raw`, `--min-out-raw`) and
+refuses with `trading.price_moved` when the fill would be more than 2× the
+slippage worse than that quote. `--wait --wait-seconds N` blocks until each
+order settles (`confirmed`, `failed`, `rejected`, `expired`) or N seconds
+pass; `--wait-seconds` alone, without `--wait`, returns at once. A
+`submitted` order survives a gateway restart and is marked `failed` after 6
+hours without a receipt. `--client-id <id>` on `swap` and `send` is an
+idempotency key: a second call with the same id returns the existing order
+instead of placing another, so a retry after a timeout cannot trade twice
+— one id per intended order, the same id on every retry of it. After
+upgrading, if `agentos trade status --json` shows `ledgerRepair`, run
+`agentos trade sync --full` once. A swap's target and the
 approval's spender are pinned to the contracts the desk knows for the
 provider (a quote naming any other address is refused, not signed); the gas
 limit is the provider's or the estimate plus 20 %, and the order is refused

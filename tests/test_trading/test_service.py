@@ -1668,3 +1668,402 @@ class TestUnwrapGuards:
         assert not lock.locked()
         cached = service.ledger.get_balance(BASE.chain_id, record.key, NATIVE_ADDRESS)
         assert cached == base_chain.native[wallet.lower()]
+
+
+class TestClientQuoteIsTheExecutedQuote:
+    """A1: the number the user confirmed is the number that is enforced."""
+
+    async def _swap(self, service: TradingService, **extra):
+        return await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            session_key=None,
+            note=None,
+            wait=True,
+            **extra,
+        )
+
+    async def test_manual_requote_far_under_the_confirmed_quote_is_refused(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        # The client confirmed ~3% more than the engine now quotes; with the
+        # aggregator's 0.5% slippage the floor is 1% under.
+        confirmed = fake_aggregator.amount_out * 100 // 97
+        orders = await self._swap(
+            service,
+            initiator="manual",
+            expected_out_raw=confirmed,
+            min_out_raw=confirmed * 995 // 1000,
+            quote_id="q-desktop-1",
+        )
+        assert orders[0]["status"] == "failed"
+        assert "trading.price_moved" in orders[0]["reason"]
+        assert "since you confirmed" in orders[0]["reason"]
+        assert "quote again" in orders[0]["reason"]
+        assert base_chain.sent == []
+        stored = json.loads(service.ledger.get_order(orders[0]["orderId"])["quote_json"])
+        assert stored == {
+            "quoteId": "q-desktop-1",
+            "expectedOutRaw": str(confirmed),
+            "minOutRaw": str(confirmed * 995 // 1000),
+        }
+
+    async def test_manual_requote_within_the_floor_executes_on_the_engine_quote(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        confirmed = fake_aggregator.amount_out * 1005 // 1000  # 0.5% over: inside 2x slippage
+        orders = await self._swap(service, initiator="manual", expected_out_raw=confirmed)
+        assert orders[0]["status"] == "confirmed"
+        row = service.ledger.get_order(orders[0]["orderId"])
+        # The engine's own quote is what was recorded and signed, not the client's.
+        assert row["expected_out_raw"] == str(fake_aggregator.amount_out)
+        assert json.loads(row["quote_json"])["expectedOutRaw"] == str(confirmed)
+
+    async def test_agent_requote_far_under_the_confirmed_quote_is_parked(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        confirmed = fake_aggregator.amount_out * 100 // 97
+        orders = await self._swap(service, initiator="agent", expected_out_raw=confirmed)
+        order = orders[0]
+        assert order["status"] == "awaiting_approval"
+        assert "since you confirmed" in order["reason"]
+        assert order["expiresAt"] and base_chain.sent == []
+        assert (
+            _events(service, "trading.approval.requested")[-1]["order"]["orderId"]
+            == order["orderId"]
+        )
+
+    async def test_without_a_client_quote_nothing_changes(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        orders = await self._swap(service, initiator="manual")
+        assert orders[0]["status"] == "confirmed"
+        assert service.ledger.get_order(orders[0]["orderId"])["quote_json"] is None
+
+    async def test_negative_client_quote_is_refused(self, funded_service: TradingService) -> None:
+        with pytest.raises(TradingError, match="expectedOutRaw must not be negative"):
+            await self._swap(funded_service, initiator="manual", expected_out_raw=-1)
+
+    async def test_quote_dict_carries_min_out_raw(
+        self, funded_service: TradingService, fake_aggregator: FakeAggregator
+    ) -> None:
+        quote = await funded_service.quote(
+            chain=BASE, wallet=None, token_in="USDC", token_out="WETH", amount_in="10"
+        )
+        assert quote["minOutRaw"] == str(fake_aggregator.amount_out * 995 // 1000)
+        assert quote["amountOutRaw"] == str(fake_aggregator.amount_out)
+
+
+class TestFloorAfterBuildRequote:
+    """A11: a provider that re-quotes inside ``build`` is judged by the same floor."""
+
+    async def test_build_requote_below_the_floor_is_refused(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        monkeypatch,
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        real_build = service_module.AggregatorProvider.build
+
+        async def build_with_a_worse_quote(self, quote, **kwargs):
+            quote.amount_out_raw = quote.amount_out_raw * 95 // 100
+            quote.min_out_raw = quote.min_out_raw * 95 // 100
+            quote.fetched_at = quote.fetched_at + 1.0
+            return await real_build(self, quote, **kwargs)
+
+        monkeypatch.setattr(service_module.AggregatorProvider, "build", build_with_a_worse_quote)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "failed"
+        assert "trading.price_moved" in orders[0]["reason"]
+        assert base_chain.sent == []
+
+    async def test_build_requote_within_the_floor_rewrites_the_row(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+        monkeypatch,
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        real_build = service_module.AggregatorProvider.build
+        slightly_less = fake_aggregator.amount_out * 998 // 1000
+
+        async def build_with_a_slightly_worse_quote(self, quote, **kwargs):
+            quote.amount_out_raw = slightly_less
+            quote.fetched_at = quote.fetched_at + 1.0
+            return await real_build(self, quote, **kwargs)
+
+        monkeypatch.setattr(
+            service_module.AggregatorProvider, "build", build_with_a_slightly_worse_quote
+        )
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed"
+        assert service.ledger.get_order(orders[0]["orderId"])["expected_out_raw"] == str(
+            slightly_less
+        )
+
+
+class TestPortfolioTotals:
+    LISTED = "0x5555000000000000000000000000000000000055"
+
+    def _list(self, fake_prices: FakePrices, base_chain: FakeChain) -> None:
+        base_chain.tokens[self.LISTED] = ("LST", "Listed Coin", 18)
+        fake_prices.lists["base"].append(
+            {
+                "chainId": 8453,
+                "address": self.LISTED,
+                "symbol": "LST",
+                "name": "Listed Coin",
+                "decimals": 18,
+            }
+        )
+
+    async def test_realized_pnl_survives_closing_the_position(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+        fake_prices: FakePrices,
+    ) -> None:
+        """A3: sell every last USDC; it leaves the holdings, not the realised total."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        await service.sync_all()  # opening lots at spot: 1,000 USDC costs $1,000
+        fake_prices.spot[("base", USDC)] = 1.2  # then USDC "rallies": selling it all is +$200
+        out_amount = 6 * 10**17  # 0.6 WETH = $1,200
+        fake_aggregator.amount_out = out_amount
+
+        def on_send(raw: str) -> str:
+            tx = decode_fake_raw(raw)
+            base_chain._seq += 1
+            tx_hash = "0x" + format(0xFEED00 + base_chain._seq, "x").rjust(64, "0")
+            base_chain.nonces[wallet.lower()] = tx.get("nonce", 0) + 1
+            base_chain.native[wallet.lower()] -= 100_000 * 10**8
+            if tx["to"].lower() in SWAP_TARGETS:
+                base_chain.set_erc20(USDC, wallet, 0)
+                base_chain.set_erc20(WETH, wallet, out_amount)
+                logs = [
+                    transfer_log(
+                        tx_hash=tx_hash,
+                        log_index=3,
+                        block=base_chain.block,
+                        token=WETH,
+                        sender=ROUTER,
+                        recipient=wallet,
+                        amount=out_amount,
+                    )
+                ]
+                base_chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8, logs=logs)
+            else:
+                base_chain.apply_approve(wallet, tx)
+                base_chain.receipt(tx_hash, status=1, gas_used=100_000, gas_price=10**8)
+            return tx_hash
+
+        base_chain.on_send = on_send
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in=None,
+            amount_pct=100,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed"
+        realized = service.ledger.realized_by_position(wallet.lower())
+        usdc_realized = realized[(8453, wallet.lower(), USDC)]
+        assert usdc_realized == pytest.approx(200.0)
+        portfolio = await service.portfolio()
+        assert not any(h["token"]["address"] == USDC for h in portfolio["holdings"])
+        assert portfolio["totals"]["realizedUsd"] == pytest.approx(usdc_realized)
+        assert portfolio["wallets"][0]["totals"]["realizedUsd"] == pytest.approx(usdc_realized)
+        # And per-wallet selection agrees with the whole.
+        assert (await service.portfolio(wallet))["totals"]["realizedUsd"] == pytest.approx(
+            usdc_realized
+        )
+
+    async def test_an_unpriced_holding_keeps_its_cost_out_of_the_totals(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_prices: FakePrices,
+    ) -> None:
+        """A9: no price, no value — and no cost in the total either, or it reads as a loss."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        self._list(fake_prices, base_chain)
+        fake_prices.spot[("base", self.LISTED)] = 3.0
+        base_chain.set_erc20(self.LISTED, wallet, 100 * 10**18)
+        base_chain.add_transfer(
+            token=self.LISTED, sender=OTHER, recipient=wallet, amount=100 * 10**18
+        )
+        await service.sync_all()  # opening lot: 100 LST at $3 = $300 of cost
+        priced = await service.portfolio(wallet)
+        assert priced["totals"]["costUsd"] == pytest.approx(3300.0)
+        assert priced["unpricedCount"] == 0
+
+        del fake_prices.spot[("base", self.LISTED)]
+        portfolio = await service.portfolio(wallet)
+        row = next(h for h in portfolio["holdings"] if h["token"]["address"] == self.LISTED)
+        assert row["valueUsd"] is None and row["costUsd"] == pytest.approx(300.0)
+        assert portfolio["totals"]["costUsd"] == pytest.approx(3000.0)
+        assert portfolio["totals"]["valueUsd"] == pytest.approx(3000.0)
+        assert portfolio["totals"]["unrealizedUsd"] == pytest.approx(0.0)
+        assert portfolio["unpricedCount"] == 1
+        assert portfolio["wallets"][0]["unpricedCount"] == 1
+
+    async def test_a_free_lot_with_a_price_is_an_unrealised_gain(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_prices: FakePrices,
+    ) -> None:
+        """X2: an airdrop costs 0; once it has a price that is a gain, not nothing."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        self._list(fake_prices, base_chain)
+        base_chain.set_erc20(self.LISTED, wallet, 100 * 10**18)
+        base_chain.add_transfer(
+            token=self.LISTED, sender=OTHER, recipient=wallet, amount=100 * 10**18
+        )
+        await service.sync_all()  # no price yet: the lot is booked free
+        fake_prices.spot[("base", self.LISTED)] = 3.0
+        portfolio = await service.portfolio(wallet)
+        row = next(h for h in portfolio["holdings"] if h["token"]["address"] == self.LISTED)
+        assert row["valueUsd"] == pytest.approx(300.0) and row["costUsd"] is None
+        assert portfolio["totals"]["valueUsd"] == pytest.approx(3300.0)
+        assert portfolio["totals"]["costUsd"] == pytest.approx(3000.0)
+        assert portfolio["totals"]["unrealizedUsd"] == pytest.approx(300.0)
+        assert portfolio["wallets"][0]["totals"]["unrealizedUsd"] == pytest.approx(300.0)
+        assert portfolio["unpricedCount"] == 0
+
+
+class TestApprovalGasInitiator:
+    async def test_agent_erc20_sell_books_the_approval_under_the_agent(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        """A15: the approval leg's gas entry names who caused it."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        fake_aggregator.approval_needed = True
+        _wire_swap_effects(base_chain, wallet)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key="agent:main:x",
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed"
+        approvals = service.ledger.list_entries(wallet=wallet, kind="approval")
+        assert len(approvals) == 1
+        assert approvals[0]["initiator"] == "agent"
+        assert approvals[0]["order_id"] == orders[0]["orderId"]
+
+
+class TestGasReserveMessage:
+    async def test_selling_all_of_a_dust_balance_says_why(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        """B7: 0.0005 ETH minus the 0.001 reserve is not 'amount must be greater than zero'."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        base_chain.set_native(wallet, 5 * 10**14)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="ETH",
+            token_out="USDC",
+            amount_in=None,
+            amount_pct=100,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+        )
+        assert orders[0]["status"] == "failed"
+        assert (
+            "balance 0.0005 ETH is below the 0.001 ETH gas reserve; nothing to sell"
+            in orders[0]["reason"]
+        )
+        assert base_chain.sent == []
+
+
+class TestLedgerRepairStatus:
+    async def test_status_surfaces_what_the_ledger_needs(self, service: TradingService) -> None:
+        """A2: ``ledgerRepair`` is None until the ledger says otherwise."""
+        ledger = service.ledger
+        if not hasattr(type(ledger), "repair_pending"):
+            assert (await service.status())["ledgerRepair"] is None
+        ledger.repair_pending = lambda: None  # type: ignore[method-assign]
+        assert (await service.status())["ledgerRepair"] is None
+        ledger.repair_pending = lambda: "full sync required"  # type: ignore[method-assign]
+        assert (await service.status())["ledgerRepair"] == "full sync required"

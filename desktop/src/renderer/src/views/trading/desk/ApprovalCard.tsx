@@ -244,8 +244,12 @@ export function ApprovalCard({
           </p>
         </section>
       ) : null}
-      {order.reason && !live ? (
-        <section className="trd-card__note">
+      {order.reason ? (
+        // On a settled card this is why it ended as it did; on a live one it
+        // is why the engine is asking (over the threshold, a heavy impact,
+        // the price moved since the quote) — the one fact that decides the
+        // decision, so it may not wait for the outcome to be shown.
+        <section className="trd-card__note" data-testid="card-reason">
           <p className="trd-card__note-body">{order.reason}</p>
         </section>
       ) : null}

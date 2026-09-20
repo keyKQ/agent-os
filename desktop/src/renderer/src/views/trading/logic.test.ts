@@ -292,6 +292,31 @@ describe('quote freshness and confirm rules', () => {
     expect(quoteCountdown(t0, t0 + 15_000)).toEqual({ seconds: 0, fraction: 0, expired: true })
     expect(quoteCountdown(0, t0).expired).toBe(true)
   })
+  it("expires exactly at the engine's expiresAt when the quote carries one", () => {
+    const t0 = 1_000_000
+    const expiresAt = t0 + 30_000
+    // Longer than the 15 s TTL: the engine's word wins, and the ring runs the whole span.
+    expect(quoteCountdown(t0, t0, expiresAt)).toEqual({ seconds: 30, fraction: 1, expired: false })
+    expect(quoteCountdown(t0, t0 + 15_000, expiresAt)).toEqual({
+      seconds: 15,
+      fraction: 0.5,
+      expired: false,
+    })
+    expect(quoteCountdown(t0, expiresAt - 1, expiresAt).expired).toBe(false)
+    expect(quoteCountdown(t0, expiresAt, expiresAt)).toEqual({
+      seconds: 0,
+      fraction: 0,
+      expired: true,
+    })
+    // Shorter than the TTL: also honoured.
+    expect(quoteCountdown(t0, t0 + 5_000, t0 + 5_000).expired).toBe(true)
+    expect(quoteCountdown(t0, t0 + 5_000).expired).toBe(false)
+    // A stamp not after the fetch (clock skew, or an older engine's 0) is
+    // ignored, and the TTL stands in; a placeholder fetch is still expired.
+    expect(quoteCountdown(t0, t0 + 1_000, t0 - 5_000).expired).toBe(false)
+    expect(quoteCountdown(t0, t0 + 1_000, null).seconds).toBe(14)
+    expect(quoteCountdown(0, t0, t0 + 30_000).expired).toBe(true)
+  })
   it('asks for a retype above 1,000 USD only', () => {
     expect(needsRetype(999.99)).toBe(false)
     expect(needsRetype(1000)).toBe(false)

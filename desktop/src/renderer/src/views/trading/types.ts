@@ -90,20 +90,28 @@ export interface Order {
   amountInRaw: string
   expectedOut: string | null
   minOut: string | null
+  /** What the receipt actually delivered; null until the swap is confirmed. */
+  receivedOut?: string | null
   valueUsd: number | null
   priceImpactPct: number | null
   gasUsd: number | null
   status: OrderStatus
+  /** Why it failed, was rejected, or — while it waits — why it is asking
+   *  (over the threshold, a heavy impact, the price moved since the quote). */
   reason: string | null
   initiator: Initiator
   sessionKey: string | null
   note: string | null
   txHash: string | null
+  /** The ERC-20 approve that preceded the swap, when one was needed. */
+  approvalTxHash?: string | null
   explorerUrl: string | null
   expiresAt: number | null
   /** A swap to native ETH on an L2 that delivered WETH instead names it here. */
   deliveredToken?: Token | null
   provider?: ProviderId
+  /** The caller's idempotency key, when it gave one. */
+  clientOrderId?: string | null
 }
 
 export type EntryKind = 'swap' | 'deposit' | 'withdraw' | 'approval' | 'gas' | 'unwrap'
@@ -166,7 +174,9 @@ export interface Portfolio {
   holdings: Holding[]
   /** Held junk tokens left out of `holdings` and the totals. */
   hiddenCount?: number
-  wallets: { wallet: Wallet; totals: Totals }[]
+  /** Positions with no known price: held, listed, but worth nothing in the totals. */
+  unpricedCount?: number
+  wallets: { wallet: Wallet; totals: Totals; unpricedCount?: number }[]
   updatedAt: number
   syncing: boolean
 }
@@ -182,7 +192,11 @@ export interface Quote {
   tokenOut: Token
   amountIn: string
   amountOut: string
+  /** The same figures in base units, as the confirm sends them back so the
+   *  engine can refuse a swap whose price moved since this was read. */
+  amountOutRaw?: string
   minOut: string
+  minOutRaw?: string
   priceImpactPct: number | null
   gasUsd: number | null
   valueUsd: number | null
@@ -190,6 +204,7 @@ export interface Quote {
    *  no input amount to divide by. */
   rate: string | null
   slippagePct: number
+  /** When the engine stops honouring this price (ms). */
   expiresAt: number
   provider?: ProviderId
   /** Provider-side notes (a clamped slippage, a route that could not be fully

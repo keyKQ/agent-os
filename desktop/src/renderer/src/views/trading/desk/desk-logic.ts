@@ -683,6 +683,7 @@ export function composeMissionPrompt(
   if (total) budget.push(`at most ${total} in total for this mission`)
   if (per) budget.push(`at most ${per} per order`)
   if (budget.length) lines.push(`Budget: ${budget.join(' and ')}. Never exceed it.`)
+  const budgeted = budget.length > 0
   if (ctx.limits) {
     lines.push(
       `Engine limits (not yours to change): orders above ${formatUsd(ctx.limits.thresholdUsd)} wait for approval; ${formatUsd(ctx.limits.dailyCapUsd)} per wallet per day.`,
@@ -695,10 +696,16 @@ export function composeMissionPrompt(
         : `Cadence: this message arrives on the schedule "${form.interval.expr}" from a scheduled job.`,
     )
   }
+  const name = form.name.trim() || 'Untitled'
   lines.push(
     'Rules: use the wallet-trading skill (`agentos trade … --json`). Quote before you swap. ' +
-      'If a swap needs approval, wait for it with `agentos trade order <id> --wait-seconds 600 --json` and report the outcome. ' +
-      'If nothing should be done this run, say so in one line. Always report order ids and explorer links.',
+      'If a swap needs approval, wait for it with `agentos trade order <id> --wait --wait-seconds 600 --json` and report the outcome. ' +
+      'If nothing should be done this run, say so in one line. Always report order ids and explorer links.' +
+      (budgeted
+        ? ' Before any order in a mission with a budget: `agentos trade orders --json`, sum `valueUsd` of `confirmed` orders ' +
+          `whose \`note\` starts with \`${name}:\`; if that sum plus this order would exceed the total budget, do nothing and reply \`${MISSION_COMPLETE_MARKER}\`. ` +
+          `Every order's \`--note\` starts with \`${name}:\`.`
+        : ''),
   )
   const stop = stopLine(form.stop)
   if (stop) lines.push(stop)
@@ -1020,7 +1027,7 @@ export function bookConcession(
 export const PLACEHOLDERS: readonly string[] = [
   'Swap 20 USDC to ETH on Base',
   'What is my portfolio worth right now?',
-  'Buy 10 USD of AAPL on Robinhood Chain',
+  'Sell 0.01 ETH for USDC on Base',
   'Sell half my ETH if it drops 5% today',
 ]
 

@@ -142,6 +142,18 @@ class TestFifo:
         assert holding.unrealized_pct == pytest.approx(20.0)
         unknown = holding_from_lots(lots, decimals=18, price_usd=None, realized_usd=0.0)
         assert unknown.value_usd is None and unknown.unrealized_pct is None
+        assert unknown.unrealized_usd is None
+
+    def test_free_lots_are_all_unrealized_gain(self) -> None:
+        """An airdrop (cost 0) with a price is pure gain; its percentage is undefined."""
+        free = holding_from_lots(
+            [Lot(1, 10**18, 0.0, 1)], decimals=18, price_usd=3.0, realized_usd=0.0
+        )
+        assert free.cost_usd == 0.0
+        assert free.value_usd == pytest.approx(3.0)
+        assert free.unrealized_usd == pytest.approx(3.0)
+        assert free.unrealized_pct is None
+        assert free.avg_cost_usd is None
 
 
 class TestGuardrails:
@@ -152,6 +164,8 @@ class TestGuardrails:
             "threshold_usd": 100.0,
             "daily_cap_usd": 1000.0,
             "spent_today_usd": 0.0,
+            # A known, small impact: these cases are about value, not impact.
+            "price_impact_pct": 0.5,
         }
         base.update(kw)
         return guardrails.evaluate(**base)  # type: ignore[arg-type]

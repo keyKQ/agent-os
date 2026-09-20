@@ -138,12 +138,53 @@ describe('Orders · approvals', () => {
     // The row's own value column, then the caption's short-labelled figures.
     expect(row).toHaveTextContent('$500.00')
     expect([...row.querySelectorAll('.trd-order__fact')].map((el) => el.textContent)).toEqual(
-      expect.arrayContaining(['min497', 'impact4.20%', 'fee$0.04']),
+      expect.arrayContaining(['min497', 'vs ref4.20%', 'fee$0.04']),
     )
     // A heavy impact is toned rather than left in the caption's grey.
     expect(row.querySelector('b[data-tone="warn"]')).toHaveTextContent('4.20%')
     // Nothing waits, so no timer and no decision buttons.
     expect(screen.queryByTestId('order-approve')).toBeNull()
+  })
+
+  it('shows what the receipt delivered once confirmed, and the estimate — marked — before', () => {
+    renderDesk(
+      <Orders
+        orders={[
+          order({
+            orderId: 'done',
+            status: 'confirmed',
+            expectedOut: '500',
+            receivedOut: '498.6',
+            expiresAt: null,
+          }),
+          order({ orderId: 'sent', status: 'submitted', expectedOut: '500', receivedOut: null }),
+          order({ orderId: 'old', status: 'confirmed', expectedOut: '500', expiresAt: null }),
+        ]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    const [done, sent, old] = screen.getAllByTestId('order-row')
+    // Confirmed: the receipt's figure, no "est.", and the fee is the fee.
+    expect(done).toHaveTextContent('498.6 USDC')
+    expect(done).not.toHaveTextContent('500 USDC')
+    expect(done).not.toHaveTextContent('est.')
+    expect(done!.querySelector('.trd-order__leg[data-estimate]')).toBeNull()
+    expect([...done!.querySelectorAll('.trd-order__fact')].map((el) => el.textContent)).toContain(
+      'fee$0.04',
+    )
+    // Still in flight: the quote's guess, said to be one, and an estimated fee.
+    expect(sent).toHaveTextContent('est. 500 USDC')
+    expect(sent!.querySelector('.trd-order__leg[data-estimate="true"]')).not.toBeNull()
+    expect([...sent!.querySelectorAll('.trd-order__fact')].map((el) => el.textContent)).toContain(
+      'est. fee$0.04',
+    )
+    // An older engine's receipt with no receivedOut: the estimate, unmarked.
+    expect(old).toHaveTextContent('500 USDC')
+    expect(old).not.toHaveTextContent('est.')
   })
 
   it('locks the buttons while a decision is in flight', () => {

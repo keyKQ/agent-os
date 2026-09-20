@@ -50,9 +50,10 @@ describe('mission presets', () => {
       expect(built.dryRun).toBe(false)
       expect(built.goal.toLowerCase()).toMatch(/never swap|never approve|do not swap/)
     }
-    // And every trading preset does arrive with the first run held back.
+    // Trading presets start live too: the contract keeps the manual dry-run
+    // toggle for a user who wants the first run held back.
     for (const preset of MISSION_PRESETS.filter((p) => !p.readOnly)) {
-      expect(formFromPreset(preset, presetDefaults(preset), CTX).dryRun).toBe(true)
+      expect(formFromPreset(preset, presetDefaults(preset), CTX).dryRun).toBe(false)
     }
   })
 
@@ -65,8 +66,55 @@ describe('mission presets', () => {
     expect(alert.goal).toContain('at or above')
     expect(alert.goal).toContain('4000 USD')
 
-    const rebalance = form('rebalance', { targetPct: '60' })
-    expect(rebalance.goal).toContain('60% ETH / 40% USDC')
+    const rebalance = form('rebalance', { targetPct: '60', driftPct: '5' })
+    expect(rebalance.goal).toContain('Keep ETH between 55% and 65% of (ETH+USDC) value on Base')
+  })
+
+  it('tells a one-shot mission to end itself, and a watcher to alert once per crossing', () => {
+    // A dip buy that never said MISSION COMPLETE bought on every run under
+    // the trigger; a price alert that never re-armed nagged every 15 min.
+    const dip = form('dip', { token: 'ETH', price: '2300', usd: '25' })
+    expect(dip.goal).toContain(
+      'buy 25 USD of it with USDC on Base once, then reply `MISSION COMPLETE` on its own line. Otherwise do nothing and say the price you saw and the trigger.',
+    )
+    expect(dip.stop).toEqual({ kind: 'goal' })
+
+    const tp = form('take-profit', { token: 'ETH', gainPct: '25', sellPct: '50' })
+    expect(tp.goal).toContain(
+      'sell 50% of the position into USDC on Base once (`--pct`), then reply `MISSION COMPLETE`.',
+    )
+    expect(tp.goal).toContain(
+      'Reference: the unrealized % comes from `unrealizedPct` of that holding in `agentos trade portfolio --json`; never sell a holding whose `priceUsd` is null.',
+    )
+
+    const alert = form('price-alert', { token: 'ETH', direction: 'below', price: '2300' })
+    expect(alert.goal).toContain(
+      'Alert once per crossing: after you have alerted, reply `no alert` until the price has moved back at least 1% to the other side of 2300. Say the price every run.',
+    )
+  })
+
+  it('rebalances one leg per run inside a band it spells out, keeping gas back', () => {
+    const rebalance = form('rebalance', { token: 'ETH', targetPct: '70', driftPct: '5' })
+    expect(rebalance.goal).toBe(
+      'Keep ETH between 65% and 75% of (ETH+USDC) value on Base, ignoring every other token. ' +
+        'Read the split with `agentos trade portfolio --json`. If ETH is above the band, sell just enough ETH ' +
+        'to reach 70%; if below, buy just enough with USDC. One swap per run at most, and never spend the last ' +
+        '0.002 ETH (gas). Inside the band do nothing and say the split.',
+    )
+    // The band never leaves 0..100.
+    expect(form('rebalance', { targetPct: '98', driftPct: '5' }).goal).toContain(
+      'between 93% and 100%',
+    )
+  })
+
+  it('no longer offers a stock DCA or a dust sweep', () => {
+    // Stock Tokens answer `trading.token_not_tradeable` on Robinhood Chain,
+    // and a dust sweep sells unpriced leftovers the engine cannot size.
+    expect(presetById('dca-stock')).toBeNull()
+    expect(presetById('dust-sweep')).toBeNull()
+    for (const preset of MISSION_PRESETS) {
+      expect(preset.goal(presetDefaults(preset))).not.toMatch(/Robinhood Chain/)
+    }
   })
 
   it('falls back rather than writing a zero into the prompt', () => {
@@ -78,13 +126,6 @@ describe('mission presets', () => {
     expect(junk.goal).toContain('10 USD of ETH')
     const negative = form('dip', { price: '-5' })
     expect(negative.goal).toContain('2300 USD')
-  })
-
-  it('points the stock preset at Robinhood Chain and resolves the ticker first', () => {
-    const stock = form('dca-stock', { ticker: 'tsla' })
-    expect(stock.chains).toEqual([4663])
-    expect(stock.name).toBe('DCA TSLA')
-    expect(stock.goal).toContain('--chain robinhood TSLA')
   })
 
   it('composes a prompt the agent can act on, with no budget line when there is no budget', () => {

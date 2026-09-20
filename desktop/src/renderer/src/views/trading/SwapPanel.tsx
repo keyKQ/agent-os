@@ -187,7 +187,9 @@ export function SwapPanel({
   // one loads. That price is about another swap: nothing on the ticket may
   // show it, and Review must not open on it.
   const fresh: Quote | null = quote.data && !quote.isPlaceholderData ? quote.data : null
-  const countdown = quoteCountdown(quote.fetchedAt, now)
+  // The engine says when it stops honouring the price; the 15 s refetch
+  // cadence is unchanged, this only decides when the ring reads "expired".
+  const countdown = quoteCountdown(quote.fetchedAt, now, fresh?.expiresAt)
   const quoteError = quote.error
     ? quote.error instanceof Error
       ? quote.error.message

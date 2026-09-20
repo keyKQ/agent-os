@@ -21,10 +21,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import structlog
+
 from agentos.paths import state_dir
+from agentos.trading.chains import NATIVE_ADDRESS
 from agentos.trading.pnl import Lot
 
-SCHEMA_VERSION = 5
+log = structlog.get_logger(__name__)
+
+SCHEMA_VERSION = 6
+
+# Version 6 repair: a native receipt booked as a separate deposit is matched
+# to its swap within this many seconds, and a phantom withdrawal to the swap
+# it double-counts within the same window.
+REPAIR_WINDOW_S = 120.0
+# A repaired receipt may exceed the quote's expected amount by this much
+# (positive slippage); more than that is not the same swap.
+REPAIR_MAX_OVER_EXPECTED = 1.05
+# A phantom withdrawal matches a swap's spent + gas within this fraction.
+REPAIR_WITHDRAW_TOLERANCE = 0.01
+REPAIR_PENDING_MESSAGE = "full sync required"
 
 OPENING_NOTE = "opening balance"
 
@@ -210,7 +226,21 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_block INTEGER NOT NULL,
     oldest_block INTEGER,
     updated_at REAL NOT NULL,
+    -- When the last *full* rebuild of this wallet/chain swapped in; NULL
+    -- until one has. A data repair (ledger_repairs) is only settled once a
+    -- rebuild newer than it has re-derived lots and realized rows.
+    full_synced_at REAL,
     PRIMARY KEY (chain_id, wallet)
+);
+
+-- Migrations that rewrote booked data, one row per wallet/chain touched.
+-- The derived rows (lots, realized) are not patched in place; a full sync
+-- re-derives them, and repair_pending() nags until one has run.
+CREATE TABLE IF NOT EXISTS ledger_repairs (
+    version INTEGER NOT NULL,
+    wallet TEXT NOT NULL,
+    chain_id INTEGER NOT NULL,
+    at REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS price_snapshots (
@@ -354,6 +384,9 @@ class Ledger:
                     self._add_order_kind_columns()
                 if version < 5:
                     self._add_order_client_column()
+                if version < 6:
+                    self._add_full_synced_column()
+                    self._repair_native_receipts()
                 if version < SCHEMA_VERSION:
                     self._conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
             self._conn.execute(_OPENING_INDEX)
@@ -389,6 +422,181 @@ class Ledger:
         have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(orders)")}
         if "client_order_id" not in have:
             self._conn.execute("ALTER TABLE orders ADD COLUMN client_order_id TEXT")
+
+    def _add_full_synced_column(self) -> None:
+        """Version 6: when the last full rebuild of a wallet/chain landed."""
+        have = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(sync_state)")}
+        if "full_synced_at" not in have:
+            self._conn.execute("ALTER TABLE sync_state ADD COLUMN full_synced_at REAL")
+
+    def _repair_native_receipts(self) -> None:
+        """Version 6: undo two ways the native leg of an own swap was double-booked.
+
+        Before the fix, a swap *into* native could settle with a bogus
+        ``received_out_raw`` (a stray number such as the gas paid) while the
+        real receipt was booked seconds later, by the native reconciliation,
+        as an external deposit with no tx hash. The lot for that deposit
+        then carried the swap's whole cost, so the position looked bought at
+        tens of thousands of dollars per ETH. Here the deposit is folded back
+        into the swap (received = deposit + gas) when the sum lands between
+        the quote's minimum and its expected amount plus slippage.
+
+        The mirror image: a swap *out of* native was followed by a phantom
+        external withdrawal equal to what the swap spent plus its gas. Those
+        rows go too.
+
+        Only ``orders`` and ``entries`` are corrected; ``lots`` and
+        ``realized`` derived from them are left for the full rebuild, which
+        re-derives everything from the orders and the chain. The repaired
+        wallet/chains are recorded in ``ledger_repairs`` so
+        :meth:`repair_pending` can say so until that rebuild has run.
+        Idempotent: a repaired order no longer matches, a deleted row is gone.
+        """
+        repaired: set[tuple[str, int]] = set()
+        with self.transaction():
+            for order in _rows(
+                self._conn.execute(
+                    "SELECT * FROM orders WHERE kind = 'swap' AND status = 'confirmed' "
+                    "AND token_out = ? AND COALESCE(delivered_token, ?) = ? "
+                    "AND received_out_raw IS NOT NULL AND min_out_raw IS NOT NULL",
+                    (NATIVE_ADDRESS, NATIVE_ADDRESS, NATIVE_ADDRESS),
+                )
+            ):
+                if self._repair_native_receipt(order):
+                    repaired.add((str(order["wallet"]), int(order["chain_id"])))
+            for row in _rows(
+                self._conn.execute(
+                    "SELECT * FROM entries WHERE kind = 'withdraw' AND tx_hash IS NULL "
+                    "AND token_in = ? AND note IS NULL ORDER BY ts, id",
+                    (NATIVE_ADDRESS,),
+                )
+            ):
+                if self._repair_phantom_withdraw(row):
+                    repaired.add((str(row["wallet"]), int(row["chain_id"])))
+            now = time.time()
+            for wallet, chain_id in sorted(repaired):
+                self._conn.execute(
+                    "INSERT INTO ledger_repairs (version, wallet, chain_id, at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (6, wallet, chain_id, now),
+                )
+        if repaired:
+            log.warning(
+                "trading.ledger_repaired",
+                version=6,
+                positions=[f"{w}@{c}" for w, c in sorted(repaired)],
+                action="run `agentos trade sync --full` to re-derive lots and realized P&L",
+            )
+
+    def _repair_native_receipt(self, order: dict[str, Any]) -> bool:
+        received_before = int(order["received_out_raw"])
+        min_out = int(order["min_out_raw"])
+        if received_before >= min_out:
+            return False
+        order_id = str(order["order_id"])
+        swap = self._conn.execute(
+            "SELECT id, ts FROM entries WHERE order_id = ? AND kind = 'swap' ORDER BY id LIMIT 1",
+            (order_id,),
+        ).fetchone()
+        if swap is None:
+            log.warning("trading.ledger_repair_skipped", order=order_id, why="no swap entry")
+            return False
+        deposit = self._conn.execute(
+            "SELECT id, amount_out_raw FROM entries WHERE kind = 'deposit' AND tx_hash IS NULL "
+            "AND token_out = ? AND note IS NULL AND wallet = ? AND chain_id = ? "
+            "AND ts >= ? AND ts <= ? ORDER BY ts, id LIMIT 1",
+            (
+                NATIVE_ADDRESS,
+                str(order["wallet"]),
+                int(order["chain_id"]),
+                float(swap["ts"]),
+                float(swap["ts"]) + REPAIR_WINDOW_S,
+            ),
+        ).fetchone()
+        if deposit is None:
+            log.warning("trading.ledger_repair_skipped", order=order_id, why="no deposit")
+            return False
+        received = int(deposit["amount_out_raw"]) + int(order.get("gas_wei") or 0)
+        expected = int(order.get("expected_out_raw") or 0)
+        ceiling = expected * REPAIR_MAX_OVER_EXPECTED if expected > 0 else None
+        if received < min_out or (ceiling is not None and received > ceiling):
+            log.warning(
+                "trading.ledger_repair_skipped",
+                order=order_id,
+                why="deposit + gas outside the quote",
+                received=received,
+                min_out=min_out,
+                expected=expected,
+            )
+            return False
+        self._conn.execute(
+            "UPDATE orders SET received_out_raw = ? WHERE order_id = ?",
+            (str(received), order_id),
+        )
+        self._conn.execute(
+            "UPDATE entries SET amount_out_raw = ? WHERE id = ?",
+            (str(received), int(swap["id"])),
+        )
+        self._delete_entry_rows(int(deposit["id"]))
+        log.info(
+            "trading.ledger_repaired_receipt",
+            order=order_id,
+            received_before=received_before,
+            received=received,
+            deposit_entry=int(deposit["id"]),
+        )
+        return True
+
+    def _repair_phantom_withdraw(self, row: dict[str, Any]) -> bool:
+        amount = int(row.get("amount_in_raw") or 0)
+        if amount <= 0:
+            return False
+        ts = float(row["ts"])
+        swaps = _rows(
+            self._conn.execute(
+                "SELECT e.id AS entry_id, e.order_id, o.spent_in_raw, o.gas_wei FROM entries e "
+                "JOIN orders o ON o.order_id = e.order_id "
+                "WHERE e.kind = 'swap' AND e.wallet = ? AND e.chain_id = ? AND e.token_in = ? "
+                "AND e.ts >= ? AND e.ts <= ? ORDER BY e.ts DESC, e.id DESC",
+                (
+                    str(row["wallet"]),
+                    int(row["chain_id"]),
+                    NATIVE_ADDRESS,
+                    ts - REPAIR_WINDOW_S,
+                    ts,
+                ),
+            )
+        )
+        for swap in swaps:
+            expected = int(swap.get("spent_in_raw") or 0) + int(swap.get("gas_wei") or 0)
+            if expected <= 0:
+                continue
+            if abs(amount - expected) <= expected * REPAIR_WITHDRAW_TOLERANCE:
+                self._delete_entry_rows(int(row["id"]))
+                log.info(
+                    "trading.ledger_repaired_withdraw",
+                    entry=int(row["id"]),
+                    order=swap["order_id"],
+                    amount=amount,
+                    swap_total=expected,
+                )
+                return True
+        return False
+
+    def repair_pending(self) -> str | None:
+        """Why the operator should run a full sync, or ``None``.
+
+        A data migration that rewrote booked rows leaves the derived lots
+        and realized rows stale until a full rebuild newer than the repair
+        has swapped in for every wallet/chain it touched.
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM ledger_repairs r LEFT JOIN sync_state s "
+                "ON s.wallet = r.wallet AND s.chain_id = r.chain_id "
+                "WHERE s.full_synced_at IS NULL OR s.full_synced_at < r.at LIMIT 1"
+            ).fetchone()
+        return REPAIR_PENDING_MESSAGE if row is not None else None
 
     def _dedupe_openings(self) -> None:
         """Version 1 could book the same opening twice; keep the newest per position."""
@@ -484,6 +692,7 @@ class Ledger:
                 "rebuild_logs",
                 "allowances",
                 "allowance_scan",
+                "ledger_repairs",
             ):
                 column = "address" if table == "wallets" else "wallet"
                 self._conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (key,))  # noqa: S608
@@ -1353,15 +1562,35 @@ class Ledger:
             )
 
     def set_sync_state(
-        self, chain_id: int, wallet: str, *, last_block: int, oldest_block: int | None
+        self,
+        chain_id: int,
+        wallet: str,
+        *,
+        last_block: int,
+        oldest_block: int | None,
+        full: bool = False,
     ) -> None:
+        """Record where a sweep stopped; ``full`` also stamps ``full_synced_at``.
+
+        An incremental pass keeps whatever full-sync stamp the row already
+        has; only a rebuild's swap-in sets a new one.
+        """
+        now = time.time()
         with self._lock:
             self._conn.execute(
-                "INSERT INTO sync_state (chain_id, wallet, last_block, oldest_block, updated_at) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(chain_id, wallet) DO UPDATE SET "
-                "last_block = excluded.last_block, oldest_block = excluded.oldest_block, "
-                "updated_at = excluded.updated_at",
-                (chain_id, wallet.lower(), int(last_block), oldest_block, time.time()),
+                "INSERT INTO sync_state (chain_id, wallet, last_block, oldest_block, updated_at, "
+                "full_synced_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(chain_id, wallet) DO UPDATE "
+                "SET last_block = excluded.last_block, oldest_block = excluded.oldest_block, "
+                "updated_at = excluded.updated_at, "
+                "full_synced_at = COALESCE(excluded.full_synced_at, sync_state.full_synced_at)",
+                (
+                    chain_id,
+                    wallet.lower(),
+                    int(last_block),
+                    oldest_block,
+                    now,
+                    now if full else None,
+                ),
             )
             self._commit()
 

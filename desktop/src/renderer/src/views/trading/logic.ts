@@ -400,14 +400,26 @@ export interface Countdown {
   expired: boolean
 }
 
+/**
+ * How long a price is still good for. The engine names the moment it stops
+ * honouring a quote (`expiresAt`, ms); when it does, that is the expiry and
+ * the ring runs from the fetch to it. Without one — an older engine, or a
+ * stamp that is not after the fetch (clock skew) — the fetch plus the TTL
+ * stands in. A fetch time of 0 is a placeholder and is already expired.
+ */
 export function quoteCountdown(
   fetchedAt: number,
   now: number,
+  expiresAt: number | null | undefined = undefined,
   ttlMs = QUOTE_REFRESH_MS,
 ): Countdown {
-  const left = fetchedAt + ttlMs - now
+  const engineExpiry =
+    typeof expiresAt === 'number' && Number.isFinite(expiresAt) && expiresAt > fetchedAt
+  const expiry = engineExpiry ? expiresAt : fetchedAt + ttlMs
+  const span = engineExpiry ? expiresAt - fetchedAt : ttlMs
+  const left = fetchedAt > 0 ? expiry - now : 0
   if (left <= 0) return { seconds: 0, fraction: 0, expired: true }
-  return { seconds: Math.ceil(left / 1000), fraction: Math.min(1, left / ttlMs), expired: false }
+  return { seconds: Math.ceil(left / 1000), fraction: Math.min(1, left / span), expired: false }
 }
 
 /** Above this the confirm sheet asks the amount to be typed again. */
@@ -483,6 +495,18 @@ export function walletLabel(wallet: { label: string; address: string }): string 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
+
+/** The engine's error code ("trading.price_moved"), when the failure carries one. */
+export function errorCode(err: unknown): string | null {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code?: unknown }).code
+    return typeof code === 'string' && code ? code : null
+  }
+  return null
+}
+
+/** The engine refused to fill at the price the person confirmed. */
+export const PRICE_MOVED = 'trading.price_moved'
 
 // ── Addresses ───────────────────────────────────────────────────────────────
 

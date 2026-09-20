@@ -159,13 +159,15 @@ class HoldingPnl:
 
     @property
     def unrealized_usd(self) -> float | None:
+        """Value minus cost whenever there is a value; an airdrop at cost 0 is all gain."""
         value = self.value_usd
-        if value is None or self.cost_usd <= 0:
+        if value is None:
             return None
         return value - self.cost_usd
 
     @property
     def unrealized_pct(self) -> float | None:
+        """Gain over cost; undefined (``None``) when nothing was paid."""
         unrealized = self.unrealized_usd
         if unrealized is None or self.cost_usd <= 0:
             return None

@@ -410,10 +410,13 @@ class TestWalletSyncer:
     async def test_unknown_price_books_zero_cost(
         self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
     ) -> None:
+        # An unlisted token from a stranger is an airdrop (see test_booking.py);
+        # with no price at all it is still a lot at cost zero.
         chain.add_transfer(token=AAPL, sender=OTHER, recipient=WALLET, amount=10**18, block=9_990)
         await syncer.sync(_wallet(), BASE)
         entry = ledger.list_entries(wallet=WALLET, kind="deposit")[0]
-        assert entry["value_usd"] is None and entry["cost_basis_source"] == "unknown"
+        assert entry["value_usd"] is None and entry["cost_basis_source"] == "airdrop"
+        assert entry["price_out_usd"] is None
         assert ledger.positions(WALLET)[0].cost_usd == 0.0
 
     def test_summarize_helper(self) -> None:
