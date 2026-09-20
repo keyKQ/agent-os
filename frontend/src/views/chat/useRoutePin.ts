@@ -93,6 +93,14 @@ export interface RoutePinApi extends RoutePinState {
   pin: (tier: string) => void
   pinModel: (model: string) => void
   clear: () => void
+  /**
+   * Re-read the tier list, the model catalog and the pin. Tiers are CONFIG, and
+   * config is editable while the chat stays mounted: after a save the picker's
+   * copy names models the router no longer routes to. There is no config-changed
+   * broadcast to hang this on, so the caller re-reads at the only moment the
+   * staleness can be seen — when the menu opens.
+   */
+  reload: () => void
 }
 
 interface HoldGetResult {
@@ -232,31 +240,47 @@ export function useRoutePin(
   // refetch the whole catalog for a fact that did not change.
   const [models, setModels] = useState<RoutePinModel[]>(EMPTY_MODELS)
   const provider = hold.provider
+  // Latest-wins across overlapping reads: the effect below and an explicit
+  // `reload` can both be in flight, and a slow earlier answer must not land on
+  // top of a newer one.
+  const modelsSeq = useRef(0)
+  const refreshModels = useCallback(
+    (forProvider: string) => {
+      if (!forProvider) return
+      const seq = ++modelsSeq.current
+      rpc
+        .call('models.list', { provider: forProvider })
+        .then((res: unknown) => {
+          if (seq !== modelsSeq.current) return
+          const rows = Array.isArray(res) ? (res as Record<string, unknown>[]) : []
+          setModels(
+            rows
+              .map((row) => ({
+                id: String(row?.id ?? ''),
+                name: String(row?.name || row?.id || ''),
+              }))
+              .filter((row) => row.id),
+          )
+        })
+        .catch(() => {
+          // No catalog is a usable state: the tier rows still pin.
+          if (seq === modelsSeq.current) setModels(EMPTY_MODELS)
+        })
+    },
+    [rpc],
+  )
   useEffect(() => {
-    if (!provider) return
-    let ignore = false
-    rpc
-      .call('models.list', { provider })
-      .then((res: unknown) => {
-        if (ignore) return
-        const rows = Array.isArray(res) ? (res as Record<string, unknown>[]) : []
-        setModels(
-          rows
-            .map((row) => ({
-              id: String(row?.id ?? ''),
-              name: String(row?.name || row?.id || ''),
-            }))
-            .filter((row) => row.id),
-        )
-      })
-      .catch(() => {
-        // No catalog is a usable state: the tier rows still pin.
-        if (!ignore) setModels(EMPTY_MODELS)
-      })
-    return () => {
-      ignore = true
-    }
-  }, [rpc, provider])
+    refreshModels(provider)
+  }, [refreshModels, provider])
+
+  // Config is editable while the chat stays mounted, and the tier rows ARE
+  // config: a `c0` model changed in settings leaves this copy naming a model
+  // the router no longer routes to. Both reads go out again, since a provider
+  // swap in the same save also rewrites the pinnable catalog.
+  const reload = useCallback(() => {
+    refresh()
+    refreshModels(provider)
+  }, [refresh, refreshModels, provider])
 
   // Track what the router actually did, which is the only honest source for the
   // Auto label and for noticing that an image turn bypassed the pin. Re-subscribed
@@ -393,5 +417,6 @@ export function useRoutePin(
     pin,
     pinModel,
     clear,
+    reload,
   }
 }

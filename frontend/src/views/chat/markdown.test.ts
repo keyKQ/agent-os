@@ -70,6 +70,40 @@ describe('chat markdown renderer', () => {
     expect(button?.dataset.target).toBe(pre?.id)
   })
 
+  it('draws an agentos-qr image here instead of asking a web service for it', () => {
+    const root = fragment('![QR Key main](agentos-qr:0x89E034A6AD22CE6Cd46e907E090bfB17DFa0da97)')
+    const image = root.querySelector('img')
+
+    expect(image?.getAttribute('alt')).toBe('QR Key main')
+    const src = image?.getAttribute('src') || ''
+    expect(src.startsWith('data:image/svg+xml;base64,')).toBe(true)
+    expect(atob(src.slice('data:image/svg+xml;base64,'.length))).toContain('<svg')
+  })
+
+  it('turns a remote image into a link, so no host is told about the chat', () => {
+    // What an assistant reaches for unprompted: the wallet address handed to a
+    // QR service in a query string, which also never loads under the CSP.
+    const root = fragment(
+      '![QR](https://api.qrserver.com/v1/create-qr-code/?data=0x89E034A6AD22CE6Cd46e907E090bfB17DFa0da97)',
+    )
+
+    expect(root.querySelector('img')).toBeNull()
+    const link = root.querySelector('.msg-extimg a')
+    expect(link?.getAttribute('href')).toContain('api.qrserver.com')
+    expect(link?.getAttribute('rel')).toBe('noreferrer noopener')
+    expect(link?.textContent).toBe('QR')
+  })
+
+  it('names the host when a remote image has no alt text to show', () => {
+    const root = fragment('![](https://example.com/a.png)')
+    expect(root.querySelector('.msg-extimg a')?.textContent).toBe('example.com')
+  })
+
+  it('leaves data: and blob: images alone — they are already in hand', () => {
+    const root = fragment('![a](data:image/png;base64,iVBORw0KGgo=)')
+    expect(root.querySelector('img')?.getAttribute('src')).toContain('data:image/png')
+  })
+
   it('restores LaTeX-ish spans without letting marked consume them', () => {
     const root = fragment('Keep $x^2$ and $$y_1 + y_2$$ intact.')
     const math = Array.from(root.querySelectorAll('code.math-raw')).map((node) => node.textContent)

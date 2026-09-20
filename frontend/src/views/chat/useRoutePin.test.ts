@@ -65,7 +65,9 @@ function fakeRpc(overrides: Record<string, unknown> = {}, options: { connected?:
       })
     }),
   }
-  return { rpc: rpc as unknown as WsRpcClient, calls, emit }
+  // `responses` is handed back mutable so a test can change what the gateway
+  // answers mid-life — which is exactly what a config edit does to the tier list.
+  return { rpc: rpc as unknown as WsRpcClient, calls, emit, responses }
 }
 
 describe('useRoutePin', () => {
@@ -175,6 +177,36 @@ describe('useRoutePin', () => {
     rerender({ key: 'agent:main:two' })
 
     expect(result.current.pinned).toBeNull()
+  })
+
+  it('picks up a tier model edited in config when asked to reload', async () => {
+    const { rpc, responses } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.tiers[0]?.model).toBe('deepseek-v4-flash'))
+
+    // The user rewires c0 in settings; the gateway applies it live, so the
+    // picker's copy is now the only stale thing in the system.
+    responses['router.hold.get'] = {
+      ...HOLD_GET_OK,
+      tiers: [
+        { tier: 'c0', model: 'grok-5' },
+        { tier: 'c3', model: 'claude-opus-5' },
+      ],
+    }
+    act(() => result.current.reload())
+
+    await waitFor(() => expect(result.current.tiers[0]?.model).toBe('grok-5'))
+  })
+
+  it('re-reads the pinnable model catalog on reload, not just the tiers', async () => {
+    const { rpc, responses } = fakeRpc()
+    const { result } = renderHook(() => useRoutePin(rpc, 'agent:main:main'))
+    await waitFor(() => expect(result.current.models).toHaveLength(2))
+
+    responses['models.list'] = [...MODELS_OK, { id: 'glm-5.3', name: 'glm-5.3' }]
+    act(() => result.current.reload())
+
+    await waitFor(() => expect(result.current.models.map((m) => m.id)).toContain('glm-5.3'))
   })
 
   it('tracks the tier the router actually used', async () => {
