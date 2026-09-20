@@ -233,6 +233,12 @@ describe('ApprovalCard for sends, batches and revokes', () => {
     expect(screen.getByTestId('card-legs')).toHaveTextContent('0x2222…2222')
     expect(card).toHaveTextContent(A)
     expect(screen.queryByTestId('card-legs-list')).toBeNull()
+    // The recipient fact is a wide row (its own line, never ellipsised).
+    const wide = card.querySelector('.trd-card__fact--wide')
+    expect(wide).not.toBeNull()
+    expect(wide).toHaveTextContent(A)
+    // The expiry fact: time and offset, never a year that pushes it off the row.
+    expect(card).not.toHaveTextContent('2026')
   })
 
   it('shows a multisend as one card with every leg and one Approve for the batch', () => {

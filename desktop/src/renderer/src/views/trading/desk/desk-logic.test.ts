@@ -11,6 +11,15 @@ import {
   SEND_TAG,
   validateSend,
   type SendForm,
+  alreadyDecided,
+  batchIdsOf,
+  formatExpiryShort,
+  missionStopDue,
+  missionStopRule,
+  orderKindWord,
+  orderLine,
+  untilEpoch,
+  withBatchLegs,
   composeMissionPrompt,
   composerPlaceholder,
   formatExpiryWhole,
@@ -514,7 +523,9 @@ describe('sends and batches', () => {
       'order',
       'expires',
     ])
-    expect(revoke.find((f) => f.key === 'spender')!.value).toBe('Permit2 · 0x2222…2222')
+    expect(revoke.find((f) => f.key === 'spender')!.value).toBe(
+      'Permit2 · 0x2222222222222222222222222222222222222222',
+    )
     expect(revoke.find((f) => f.key === 'allowance')).toMatchObject({
       value: 'unlimited',
       tone: 'danger',
@@ -642,5 +653,159 @@ describe('send form', () => {
     expect(single).toContain(`${SEND_TAG} Send`)
     expect(single).toContain('From: the primary wallet')
     expect(single).toContain(`- ${A} → 10 USDC`)
+  })
+})
+
+describe('validateSend · the USD field is a strict decimal', () => {
+  const A = '0x2222222222222222222222222222222222222222'
+  const base: SendForm = {
+    chainId: 8453,
+    wallet: null,
+    token: 'USDC',
+    recipients: [{ address: A, amount: '' }],
+    amount: '',
+    usd: '',
+    note: '',
+  }
+  it('refuses what Number() would happily read as money', () => {
+    // "1e3" is a thousand dollars and "0x10" is sixteen to Number(); nobody typed that.
+    for (const usd of ['1e3', '0x10', 'Infinity', '-5', 'abc']) {
+      expect(validateSend({ ...base, usd })).toMatchObject({ ok: false, error: 'amount' })
+    }
+  })
+  it('takes a plain decimal, with surrounding spaces', () => {
+    expect(validateSend({ ...base, usd: ' 5 ' })).toEqual({ ok: true })
+    expect(validateSend({ ...base, usd: '12.50' })).toEqual({ ok: true })
+  })
+})
+
+describe('mission stop rules are measured, not only described', () => {
+  const runsJob = (run_count: unknown) => ({
+    id: 'j1',
+    enabled: true,
+    run_count,
+    message:
+      'Goal: buy\nStop: after 3 runs. Count the previous runs in this conversation; on the last one, end your reply with "MISSION COMPLETE".',
+  })
+  it('reads the rule back from the prompt', () => {
+    expect(missionStopRule(runsJob(0))).toEqual({ kind: 'runs', runs: 3 })
+    expect(
+      missionStopRule({
+        message:
+          'Stop: after 2026-09-30. When that moment has passed, reply exactly "MISSION COMPLETE" and do nothing else.',
+      }),
+    ).toEqual({ kind: 'until', until: '2026-09-30' })
+    expect(missionStopRule({ message: 'Goal: buy' })).toEqual({ kind: 'none' })
+  })
+  it('is due once run_count reaches "after N runs", and not before', () => {
+    const now = Date.now()
+    expect(missionStopDue(runsJob(2), now)).toBe(false)
+    expect(missionStopDue(runsJob(3), now)).toBe(true)
+    expect(missionStopDue(runsJob(7), now)).toBe(true)
+    // No counter yet: nothing to measure.
+    expect(missionStopDue(runsJob(undefined), now)).toBe(false)
+  })
+  it('includes the whole "until" day, then is due', () => {
+    const job = {
+      message:
+        'Stop: after 2026-09-30. When that moment has passed, reply exactly "MISSION COMPLETE" and do nothing else.',
+    }
+    const endOfDay = new Date(2026, 8, 30, 23, 0).getTime()
+    const nextDay = new Date(2026, 9, 1, 0, 1).getTime()
+    expect(missionStopDue(job, endOfDay)).toBe(false)
+    expect(missionStopDue(job, nextDay)).toBe(true)
+    expect(untilEpoch('not a date')).toBeNull()
+  })
+  it('leaves a goal rule to the agent', () => {
+    expect(
+      missionStopDue(
+        { message: 'Stop: when the goal is reached, end your reply with "MISSION COMPLETE".' },
+        Date.now(),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('withBatchLegs · a card is built from the batch, not the page', () => {
+  const leg = (orderId: string, extra: Partial<ReturnType<typeof order>> = {}) =>
+    order({ orderId, kind: 'send', batchId: 'bat_1', recipient: '0x' + '2'.repeat(40), ...extra })
+  it('replaces the page legs with every awaiting leg of the batch, once, in place', () => {
+    const page = [order({ orderId: 'solo' }), leg('a')]
+    const batch = [leg('a'), leg('b'), leg('c'), leg('d', { status: 'rejected' })]
+    const out = withBatchLegs(page, new Map([['bat_1', batch]]))
+    expect(out.map((o) => o.orderId)).toEqual(['solo', 'a', 'b', 'c'])
+    expect(batchIdsOf(page)).toEqual(['bat_1'])
+  })
+  it('keeps the page legs while the batch lookup has not answered', () => {
+    const page = [leg('a'), leg('b')]
+    expect(withBatchLegs(page, new Map()).map((o) => o.orderId)).toEqual(['a', 'b'])
+  })
+})
+
+describe('orderLine and orderKindWord · what a toast names', () => {
+  const to = '0x6c83B17cBF1115735460cA0000000000000a8312'
+  it('names a send by its recipient, a revoke by its spender, a swap by its pair', () => {
+    expect(orderLine(order())).toBe('0.2 ETH → USDC')
+    expect(
+      orderLine(order({ kind: 'send', amountIn: '0.00001', recipient: to, recipientLabel: null })),
+    ).toBe('0.00001 ETH → 0x6c83…8312')
+    expect(
+      orderLine(
+        order({
+          kind: 'revoke',
+          tokenIn: order().tokenOut,
+          recipient: to,
+          recipientLabel: 'Permit2',
+        }),
+      ),
+    ).toBe('USDC ⛨ Permit2')
+    const legs = [
+      order({ kind: 'send', batchId: 'b', amountIn: '0.1' }),
+      order({ kind: 'send', batchId: 'b', amountIn: '0.15' }),
+    ]
+    expect(orderLine(legs[0]!, legs)).toBe('0.25 ETH → 2 recipients')
+    expect(orderKindWord(legs[0]!, 2)).toBe('multisend')
+    expect(orderKindWord(legs[0]!, 1)).toBe('send')
+    expect(orderKindWord(order())).toBe('swap')
+  })
+  it('recognises the engine refusing a second decision', () => {
+    expect(alreadyDecided('trading.invalid: order o1 is no longer awaiting approval')).toBe(true)
+    expect(alreadyDecided('trading.invalid: no batch x')).toBe(false)
+  })
+})
+
+describe('approval facts · addresses in full, expiry short', () => {
+  const to = '0x6c83B17cBF1115735460cA0000000000000a8312'
+  it('prints the recipient of a send whole, on a wide row', () => {
+    const facts = approvalFacts(
+      order({ kind: 'send', recipient: to, recipientLabel: null }),
+      [WALLET],
+      {},
+    )
+    const row = facts.find((f) => f.key === 'to')
+    expect(row).toMatchObject({ value: to, wide: true })
+  })
+  it('prints the spender of a revoke whole with its label, and the unlimited word from the labels', () => {
+    const facts = approvalFacts(
+      order({ kind: 'revoke', recipient: to, recipientLabel: 'Permit2', amountIn: 'unlimited' }),
+      [WALLET],
+      { unlimited: 'Unlimited' },
+    )
+    expect(facts.find((f) => f.key === 'spender')).toMatchObject({
+      value: `Permit2 · ${to}`,
+      wide: true,
+    })
+    expect(facts.find((f) => f.key === 'allowance')).toMatchObject({
+      value: 'Unlimited',
+      tone: 'danger',
+    })
+  })
+  it('shows the time alone when the expiry is today, the short date otherwise', () => {
+    const now = new Date(2026, 8, 20, 12, 0).getTime()
+    const later = new Date(2026, 8, 20, 14, 15).getTime()
+    const tomorrow = new Date(2026, 8, 21, 14, 15).getTime()
+    expect(formatExpiryShort(later, now, 'en-US')).toMatch(/^2:15 PM \(UTC[+−]\d/)
+    expect(formatExpiryShort(tomorrow, now, 'en-US')).toMatch(/^Sep 21, 2:15 PM \(UTC[+−]\d/)
+    expect(formatExpiryShort(tomorrow, now, 'en-US')).not.toContain('2026')
   })
 })

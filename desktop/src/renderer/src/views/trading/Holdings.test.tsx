@@ -117,6 +117,63 @@ describe('Holdings · junk tokens', () => {
     expect(rows.filter((r) => r.includes('JUNK'))).toHaveLength(1)
   })
 
+  it('says the read failed, with a retry, instead of "nothing held"', () => {
+    const onRetry = vi.fn()
+    renderDesk(
+      <Holdings
+        holdings={[]}
+        loading={false}
+        error={new Error('socket closed')}
+        onRetry={onRetry}
+        selected={null}
+        onSelect={noop}
+        onSwap={noop}
+        showChain
+      />,
+    )
+    expect(screen.queryByText('Nothing held yet')).toBeNull()
+    expect(screen.getByText('socket closed')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('trading-error-retry'))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the wallet on each row once the table mixes wallets', () => {
+    const other = '0x2222222222222222222222222222222222222222'
+    const wallets = [holding().wallet!, other].map((address, i) => ({
+      address,
+      label: i === 0 ? 'Main' : 'Ops',
+      primary: i === 0,
+      createdAt: 0,
+      chains: [8453],
+    }))
+    const { rerender } = renderDesk(
+      <Holdings
+        holdings={[holding()]}
+        loading={false}
+        wallets={wallets}
+        selected={null}
+        onSelect={noop}
+        onSwap={noop}
+        showChain
+      />,
+    )
+    // One wallet on screen: no label to clutter the cell.
+    expect(screen.queryByTestId('asset-wallet')).toBeNull()
+    rerender(
+      <Holdings
+        holdings={[holding(), holding({ wallet: other, amount: '5', valueUsd: 5 })]}
+        loading={false}
+        wallets={wallets}
+        selected={null}
+        onSelect={noop}
+        onSwap={noop}
+        showChain
+      />,
+    )
+    const chips = screen.getAllByTestId('asset-wallet').map((n) => n.textContent)
+    expect(chips).toEqual(['Main', 'Ops'])
+  })
+
   it('still shows the bar when nothing visible is held', () => {
     renderDesk(
       <Holdings

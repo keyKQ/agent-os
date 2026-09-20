@@ -87,6 +87,10 @@ describe('mission completion is reconciled, not only observed live', () => {
     renderHook(() => useMissions(SESSION), { wrapper })
     await settle()
     expect(methods()).toContain('cron.runOutput')
+    // The handler reads the job as `id` (and the run as `runId`); `jobId`
+    // was not read, the call was refused, and the mission never stopped.
+    const params = rpcCall.mock.calls.find(([m]) => m === 'cron.runOutput')?.[1]
+    expect(params).toEqual({ id: 'j1', runId: 'r9' })
     expect(updates()).toContainEqual({ id: 'j1', enabled: false })
   })
 
@@ -126,5 +130,100 @@ describe('mission completion is reconciled, not only observed live', () => {
     rerender()
     await settle()
     expect(methods().filter((m) => m === 'cron.runs')).toHaveLength(1)
+  })
+})
+
+describe('mission stop rules are enforced by the desk', () => {
+  beforeEach(() => {
+    useConnection.getState().setState('connected')
+    rpcCall.mockReset()
+  })
+  const RUNS =
+    'Goal: buy\nStop: after 3 runs. Count the previous runs in this conversation; on the last one, end your reply with "MISSION COMPLETE".'
+
+  it('pauses a mission whose run_count reached "after N runs", once', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'cron.list') return [job({ message: RUNS, run_count: 3 })]
+      if (method === 'cron.runs') return [{ id: 'r9', summary: 'bought' }]
+      return {}
+    })
+    const { rerender } = renderHook(() => useMissions(SESSION), { wrapper })
+    await settle()
+    rerender()
+    await settle()
+    expect(updates()).toEqual([{ id: 'j1', enabled: false }])
+    // Settled by the rule; the run text is not consulted.
+    expect(methods()).not.toContain('cron.runs')
+  })
+
+  it('leaves a mission short of its run count to the usual check', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'cron.list') return [job({ message: RUNS, run_count: 2 })]
+      if (method === 'cron.runs') return [{ id: 'r9', summary: 'bought' }]
+      return {}
+    })
+    renderHook(() => useMissions(SESSION), { wrapper })
+    await settle()
+    expect(updates()).toHaveLength(0)
+    expect(methods()).toContain('cron.runs')
+  })
+
+  it('pauses a mission whose "until" day has passed', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'cron.list')
+        return [
+          job({
+            message:
+              'Goal: buy\nStop: after 2020-01-01. When that moment has passed, reply exactly "MISSION COMPLETE" and do nothing else.',
+            run_count: 1,
+          }),
+        ]
+      return {}
+    })
+    renderHook(() => useMissions(SESSION), { wrapper })
+    await settle()
+    expect(updates()).toContainEqual({ id: 'j1', enabled: false })
+  })
+})
+
+describe('pauseAll', () => {
+  beforeEach(() => {
+    useConnection.getState().setState('connected')
+    rpcCall.mockReset()
+  })
+
+  it('pauses every enabled mission of the session and reports success', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'cron.list')
+        return [
+          job({ id: 'a', last_run: null }),
+          job({ id: 'b', last_run: null, enabled: false }),
+          job({ id: 'c', last_run: null, targetSessionKey: 'agent:other' }),
+        ]
+      return {}
+    })
+    const { result } = renderHook(() => useMissions(SESSION), { wrapper })
+    await settle()
+    let ok = false
+    await act(async () => {
+      ok = await result.current.pauseAll()
+    })
+    expect(ok).toBe(true)
+    expect(updates()).toEqual([{ id: 'a', enabled: false }])
+  })
+
+  it('reports failure when the scheduler refuses', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'cron.list') return [job({ last_run: null })]
+      if (method === 'cron.update') throw new Error('nope')
+      return {}
+    })
+    const { result } = renderHook(() => useMissions(SESSION), { wrapper })
+    await settle()
+    let ok = true
+    await act(async () => {
+      ok = await result.current.pauseAll()
+    })
+    expect(ok).toBe(false)
   })
 })

@@ -5,7 +5,15 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { cn } from '~/lib/utils'
 import { ChainBadge } from './ChainMark'
-import { formatUsd, formatUsdCell, orderTone, pnlTone, shortAddress, type PnlTone } from './logic'
+import {
+  errorText,
+  formatUsd,
+  formatUsdCell,
+  orderTone,
+  pnlTone,
+  shortAddress,
+  type PnlTone,
+} from './logic'
 import type { OrderStatus, Token } from './types'
 
 /** The desk's small vocabulary: a sheet, a status pill, a token cell, a figure that ticks. */
@@ -96,12 +104,16 @@ export function AssetCell({
   showChain,
   sub,
   tag,
+  wallet,
 }: {
   token: Token
   showChain?: boolean
   sub?: string
   /** A one-word state ahead of the name, e.g. "junk" for a row shown on request. */
   tag?: string
+  /** Whose row this is, when the table mixes wallets: the same token twice
+   *  otherwise reads as a duplicate. */
+  wallet?: string
 }) {
   // Not everything is indexed, and a row with two blanks in it reads as a bug.
   // Fall back to what is always true: the address, and that it has no name.
@@ -126,6 +138,11 @@ export function AssetCell({
         </span>
         <span className="trd-asset__name">
           {tag ? <span className="trd-asset__tag">{tag}</span> : null}
+          {wallet ? (
+            <span className="trd-asset__wallet trd-mono" data-testid="asset-wallet">
+              {wallet}
+            </span>
+          ) : null}
           {name || t('trading.token.unknown')}
         </span>
       </span>
@@ -249,18 +266,41 @@ export function Empty({
   title,
   body,
   action,
+  tone,
 }: {
   icon: ReactNode
   title: string
   body: string
   action?: ReactNode
+  tone?: 'error'
 }) {
   return (
-    <div className="trd-empty">
+    <div className="trd-empty" data-tone={tone}>
       {icon}
       <b>{title}</b>
       <p>{body}</p>
       {action ? <div className="mt-2 flex gap-2">{action}</div> : null}
     </div>
+  )
+}
+
+/**
+ * A read that failed is not an empty list: it says what the RPC said, and
+ * offers the one thing that helps. Every tab and sheet uses this rather than
+ * its own empty state, so a dead gateway never reads as "nothing here".
+ */
+export function ErrorState({ error, onRetry }: { error: unknown; onRetry: () => void }) {
+  return (
+    <Empty
+      tone="error"
+      icon={<TriangleAlert className="size-8" strokeWidth={1.25} aria-hidden />}
+      title={t('trading.error.title')}
+      body={errorText(error)}
+      action={
+        <Button variant="primary" onClick={onRetry} data-testid="trading-error-retry">
+          {t('trading.error.retry')}
+        </Button>
+      }
+    />
   )
 }

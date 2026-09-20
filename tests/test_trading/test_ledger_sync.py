@@ -3,11 +3,12 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from agentos.trading import chains
 from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.evm import EvmClient
 from agentos.trading.ledger import SCHEMA_VERSION, Ledger, local_day
 from agentos.trading.prices import PriceService, TokenMeta, native_token
-from agentos.trading.sync import WalletSyncer, summarize_transfers
+from agentos.trading.sync import SYNC_OVERLAP_BLOCKS, WalletSyncer, summarize_transfers
 from agentos.trading.vault import WalletRecord
 from tests.test_trading.fakes import AAPL, OTHER, USDC, WALLET, WETH, FakeChain, FakePrices
 
@@ -705,6 +706,97 @@ class TestLedgerRules:
         assert await syncer.sync(wallet, BASE) is False
         assert len(ledger.list_entries(wallet=WALLET)) == len(entries)
 
+    async def test_rebuild_books_sends_as_withdrawals_and_revokes_as_gas_only(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        """A confirmed send or revoke must never be replayed as a swap.
+
+        A revoke's ``amount_raw`` is the allowance it cleared — 2**256-1 for
+        the usual unlimited grant — and it has no ``spent_in_raw``. Fed into
+        the swap path it "sold" every lot the wallet had, and a send came out
+        as a swap for nothing. Now the send is the same withdrawal the
+        settlement booked, and the revoke contributes its gas and nothing
+        else.
+        """
+        wallet = _wallet(created_block=8_000)
+        # 100 USDC arrived from outside, then 30 went out through our own send.
+        chain.add_transfer(
+            token=USDC, sender=OTHER, recipient=WALLET, amount=100 * 10**6, block=9_100
+        )
+        send_tx = chain.add_transfer(
+            token=USDC, sender=WALLET, recipient=OTHER, amount=30 * 10**6, block=9_900, log_index=7
+        )
+        revoke_tx = "0x" + "ab" * 32
+        common = {
+            "created_at": 1_700_099_900.0,
+            "chain_id": 8453,
+            "wallet": WALLET,
+            "status": "confirmed",
+            "initiator": "agent",
+            "session_key": "agent:main:webchat:desk",
+        }
+        ledger.insert_order(
+            {
+                **common,
+                "order_id": "ord_send",
+                "updated_at": 1_700_099_950.0,
+                "token_in": USDC,
+                "token_out": USDC,
+                "amount_raw": str(30 * 10**6),
+                "amount_human": "30",
+                "kind": "send",
+                "recipient": OTHER,
+                "tx_hash": send_tx,
+                "spent_in_raw": str(30 * 10**6),
+                "gas_wei": str(10**12),
+            }
+        )
+        ledger.insert_order(
+            {
+                **common,
+                "order_id": "ord_revoke",
+                "updated_at": 1_700_099_990.0,
+                "token_in": USDC,
+                "token_out": USDC,
+                "amount_raw": str(2**256 - 1),
+                "amount_human": "unlimited",
+                "kind": "revoke",
+                "recipient": "0x0000000000001ff3684f28c67538d4d072c22734",
+                "tx_hash": revoke_tx,
+                "gas_wei": str(2 * 10**12),
+            }
+        )
+        chain.set_erc20(USDC, WALLET, 70 * 10**6)
+        chain.set_native(WALLET, 10**16)
+
+        await syncer.sync(wallet, BASE, full=True)
+        entries = ledger.list_entries(wallet=WALLET)
+        assert [e["kind"] for e in entries if e["kind"] == "swap"] == []
+        by_order = {e["order_id"]: e for e in entries if e.get("order_id")}
+        send = by_order["ord_send"]
+        assert send["kind"] == "withdraw" and send["tx_hash"] == send_tx
+        assert send["token_in"] == USDC and send["amount_in_raw"] == str(30 * 10**6)
+        assert send["initiator"] == "agent" and send["session_key"] == "agent:main:webchat:desk"
+        assert send["log_index"] == 7  # the Transfer's own index, as the settlement books it
+        assert send["note"] == f"sent to {chains.checksum_address(OTHER)}"
+        assert send["gas_usd"] == pytest.approx(0.000001 * 2000.0)
+        revoke = by_order["ord_revoke"]
+        assert revoke["kind"] == "approval" and revoke["tx_hash"] == revoke_tx
+        assert revoke["amount_in_raw"] == "0" and revoke["amount_out_raw"] is None
+        assert revoke["gas_usd"] == pytest.approx(0.000002 * 2000.0)
+        assert "AgentOS Aggregator" in revoke["note"]
+        # The send's Transfer log is not booked a second time from the chain.
+        assert len([e for e in entries if e["tx_hash"] == send_tx]) == 1
+        # Lots: 100 in, 30 out, nothing sold by the revoke; no USDC opening needed.
+        positions = {p.token: p for p in ledger.positions(WALLET)}
+        assert positions[USDC].amount_raw == 70 * 10**6
+        assert positions[USDC].cost_usd == pytest.approx(70.0)
+        assert ledger.opening_entry(8453, WALLET, USDC) is None
+        assert positions[NATIVE_ADDRESS].amount_raw == 10**16
+        # And the next incremental pass finds nothing new.
+        assert await syncer.sync(wallet, BASE) is False
+        assert len(ledger.list_entries(wallet=WALLET)) == len(entries)
+
 
 class TestLedgerMigration:
     def test_version_two_gains_the_hidden_columns(self, tmp_path) -> None:
@@ -924,6 +1016,19 @@ class TestOrderRails:
         assert ledger.spent_today(WALLET, "2026-09-15") == 0.0
         assert ledger.list_orders(wallet=WALLET) == []
 
+    def test_remove_wallet_forgets_allowances_and_their_scan(self, ledger: Ledger) -> None:
+        """A re-imported wallet must not inherit a stale allowance list, nor a scan cursor."""
+        ledger.upsert_allowance(8453, WALLET, USDC, OTHER, block=100, tx_hash="0x" + "1" * 64)
+        ledger.upsert_allowance(8453, OTHER, USDC, WALLET, block=100, tx_hash="0x" + "2" * 64)
+        ledger.set_allowance_scan(8453, WALLET, last_block=100)
+        ledger.set_allowance_scan(8453, OTHER, last_block=100)
+        ledger.remove_wallet(WALLET)
+        assert ledger.allowances(8453, WALLET) == []
+        assert ledger.allowance_scan(8453, WALLET) is None
+        # Another wallet's rows are untouched.
+        assert len(ledger.allowances(8453, OTHER)) == 1
+        assert ledger.allowance_scan(8453, OTHER) is not None
+
 
 class TestSyncRails:
     async def test_native_reconciliation_waits_for_open_orders(
@@ -959,3 +1064,43 @@ class TestSyncRails:
         await syncer.sync(_wallet(), BASE)
         latest = ledger.list_entries(wallet=WALLET)[0]
         assert latest["kind"] == "withdraw"
+
+    async def test_incremental_sync_rescans_an_overlap_without_double_booking(
+        self, syncer: WalletSyncer, chain: FakeChain, ledger: Ledger
+    ) -> None:
+        """A log a lagging node served late is picked up; a log seen twice is booked once.
+
+        ``latest`` comes from a load-balanced endpoint. The node that answers
+        the next ``eth_getLogs`` may not have the block yet, and a sync that
+        resumed strictly at ``last_block + 1`` would skip that log for good.
+        """
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=5, block=9_990)
+        chain.set_erc20(USDC, WALLET, 5)
+        await syncer.sync(_wallet(), BASE)
+        assert ledger.sync_state(8453, WALLET)["last_block"] == 10_000
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert [e["amount_out_raw"] for e in deposits if e["tx_hash"]] == ["5"]
+
+        # A transfer at block 9_995 the lagging node did not have on the first
+        # pass, plus a balance that now includes it.
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=7, block=9_995)
+        chain.set_erc20(USDC, WALLET, 12)
+        chain.block = 10_001
+        await syncer.sync(_wallet(), BASE)
+        spans = [
+            (int(c["params"][0]["fromBlock"], 16), int(c["params"][0]["toBlock"], 16))
+            for c in chain.calls
+            if c["method"] == "eth_getLogs"
+        ]
+        assert spans[-1] == (10_001 - SYNC_OVERLAP_BLOCKS, 10_001)
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert sorted(e["amount_out_raw"] for e in deposits if e["tx_hash"]) == ["5", "7"]
+        # The late log is explained by the sweep, so no opening covers it.
+        assert ledger.opening_entry(8453, WALLET, USDC) is None
+        assert {p.token: p.amount_raw for p in ledger.positions(WALLET)}[USDC] == 12
+
+        # A third pass re-reads the same overlap and books nothing twice.
+        chain.block = 10_002
+        assert await syncer.sync(_wallet(), BASE) is False
+        deposits = ledger.list_entries(wallet=WALLET, kind="deposit")
+        assert sorted(e["amount_out_raw"] for e in deposits if e["tx_hash"]) == ["5", "7"]

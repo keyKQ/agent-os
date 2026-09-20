@@ -15,15 +15,25 @@ vi.mock('~/lib/desktop-api', () => ({
   isDesktop: () => true,
 }))
 // The session filing is someone else's concern here.
+const startFresh = vi.fn()
 vi.mock('./useTradingSession', () => ({
-  useTradingSession: () => ({ sessionKey: 'sk', ensureFiled: vi.fn(), startFresh: vi.fn() }),
+  useTradingSession: () => ({ sessionKey: 'sk', ensureFiled: vi.fn(), startFresh }),
 }))
 
 const SESSION = 'agent:trading:webchat:trading-t1'
 const sendText = vi.fn()
+const queueText = vi.fn()
 
 /** The same wiring SessionRoute → ChatView does: one frame, its desk into the instruments. */
-function Harness({ active, mode = 'trading' }: { active: boolean; mode?: DeskMode }) {
+function Harness({
+  active,
+  mode = 'trading',
+  busy = false,
+}: {
+  active: boolean
+  mode?: DeskMode
+  busy?: boolean
+}) {
   const frame = useDeskFrame({
     sessionKey: SESSION,
     mode,
@@ -35,8 +45,9 @@ function Harness({ active, mode = 'trading' }: { active: boolean; mode?: DeskMod
   const inst = useDeskInstruments(frame.desk, {
     sessionKey: SESSION,
     sendText,
+    queueText,
     submitText: () => {},
-    busy: false,
+    busy,
     composerValue: '',
     idle: true,
     hasMessages: false,
@@ -49,6 +60,9 @@ function Harness({ active, mode = 'trading' }: { active: boolean; mode?: DeskMod
       {frame.banner}
       {inst.region}
       {inst.dockAbove}
+      <button type="button" onClick={frame.desk?.onStartFresh} data-testid="start-fresh">
+        fresh
+      </button>
     </div>
   )
 }
@@ -91,6 +105,8 @@ beforeEach(() => {
   rpcCall.mockReset()
   rpcOn.mockClear()
   sendText.mockClear()
+  queueText.mockClear()
+  startFresh.mockClear()
   rpcCall.mockImplementation(answers())
 })
 
@@ -167,5 +183,113 @@ describe('useDeskInstruments · reject', () => {
     await waitFor(() => expect(sendText).toHaveBeenCalledTimes(1))
     expect(String(sendText.mock.calls[0]?.[0])).toBe('Rejected order o1: not today')
     expect(rejects()).toHaveLength(1)
+  })
+})
+
+describe('useDeskInstruments · reject while the turn streams', () => {
+  it('queues the reason for the next turn instead of dropping it', async () => {
+    rpcCall.mockImplementation(
+      answers({ 'trading.orders.reject': () => ({ order: order({ status: 'rejected' }) }) }),
+    )
+    renderDesk(<Harness active busy />)
+    await screen.findByTestId('approval-card')
+    fireEvent.click(screen.getByTestId('card-reject'))
+    const reason = screen.getByTestId('reject-reason')
+    fireEvent.change(reason, { target: { value: 'not today' } })
+    fireEvent.keyDown(reason, { key: 'Enter' })
+    await waitFor(() => expect(queueText).toHaveBeenCalledTimes(1))
+    expect(String(queueText.mock.calls[0]?.[0])).toBe('Rejected order o1: not today')
+    // A direct send is a no-op while a turn streams; it must not be tried.
+    expect(sendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('useDeskInstruments · a multisend card is the whole batch', () => {
+  const A = '0x2222222222222222222222222222222222222222'
+  const leg = (orderId: string, recipient: string) =>
+    order({
+      orderId,
+      kind: 'send',
+      batchId: 'bat_1',
+      recipient,
+      recipientLabel: null,
+      tokenOut: order().tokenIn,
+      expectedOut: null,
+      minOut: null,
+      priceImpactPct: null,
+      amountIn: '0.1',
+      valueUsd: 10,
+      sessionKey: SESSION,
+    })
+  it("shows every awaiting leg of the batch, not only the page's, and rejects for all of them", async () => {
+    rpcCall.mockImplementation(
+      answers({
+        // The page holds one leg; the batch has three awaiting and one already settled.
+        'trading.orders.list': () => ({ orders: [leg('a', A)], pendingApprovals: 1 }),
+        'trading.orders.batch': () => ({
+          batchId: 'bat_1',
+          orders: [
+            leg('a', A),
+            leg('b', '0x3333333333333333333333333333333333333333'),
+            leg('c', '0x4444444444444444444444444444444444444444'),
+            { ...leg('d', '0x5555555555555555555555555555555555555555'), status: 'rejected' },
+          ],
+        }),
+        'trading.orders.reject': () => ({ order: leg('a', A) }),
+      }),
+    )
+    renderDesk(<Harness active />)
+    const legs = await screen.findByTestId('card-legs')
+    await waitFor(() => expect(legs).toHaveTextContent('3 recipients'))
+    expect(screen.getByTestId('card-legs')).toHaveTextContent('0.3 ETH')
+    expect(rpcCall.mock.calls.find((c) => c[0] === 'trading.orders.batch')?.[1]).toEqual({
+      batchId: 'bat_1',
+    })
+    expect(screen.getAllByTestId('approval-card')).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('card-reject'))
+    fireEvent.keyDown(screen.getByTestId('reject-reason'), { key: 'Enter' })
+    await waitFor(() => expect(sendText).toHaveBeenCalledTimes(1))
+    expect(String(sendText.mock.calls[0]?.[0])).toContain('batch bat_1 (3 sends)')
+  })
+})
+
+describe('useDeskFrame · start fresh', () => {
+  const job = { id: 'j1', name: 'DCA ETH', enabled: true, targetSessionKey: SESSION }
+  it('pauses the running missions of the old session before minting a new one', async () => {
+    rpcCall.mockImplementation(
+      answers({
+        'cron.list': () => ({ jobs: [job, { ...job, id: 'j2', name: 'Off', enabled: false }] }),
+      }),
+    )
+    renderDesk(<Harness active />)
+    await screen.findByTestId('approval-card')
+    await waitFor(() => expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.list')).toBe(true))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('start-fresh'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(startFresh).toHaveBeenCalledTimes(1))
+    const updates = rpcCall.mock.calls.filter((c) => c[0] === 'cron.update').map((c) => c[1])
+    expect(updates).toEqual([{ id: 'j1', enabled: false }])
+  })
+
+  it('stays put when a mission cannot be paused', async () => {
+    rpcCall.mockImplementation(
+      answers({
+        'cron.list': () => ({ jobs: [job] }),
+        'cron.update': () => {
+          throw new Error('scheduler down')
+        },
+      }),
+    )
+    renderDesk(<Harness active />)
+    await screen.findByTestId('approval-card')
+    await waitFor(() => expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.list')).toBe(true))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('start-fresh'))
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(rpcCall.mock.calls.some((c) => c[0] === 'cron.update')).toBe(true)
+    expect(startFresh).not.toHaveBeenCalled()
   })
 })

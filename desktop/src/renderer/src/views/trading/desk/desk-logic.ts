@@ -84,7 +84,7 @@ function sumUsd(orders: readonly Order[]): number | null {
 }
 
 /** Decimal-string sum of the legs' `amountIn`, in the token's own decimals. */
-export function sumAmounts(orders: readonly Order[]): string {
+export function sumAmounts(orders: readonly Pick<Order, 'amountIn' | 'tokenIn'>[]): string {
   const decimals = orders[0]?.tokenIn.decimals ?? 18
   let total = 0n
   // A malformed amount parses to 0n and adds nothing.
@@ -140,6 +140,17 @@ export interface Fact {
   label: string
   value: string
   tone?: 'warn' | 'danger'
+  /** An address: rendered on its own line, in full, never truncated. */
+  wide?: boolean
+}
+
+function utcOffset(d: Date): string {
+  const offsetMin = -d.getTimezoneOffset()
+  const sign = offsetMin >= 0 ? '+' : '−'
+  const abs = Math.abs(offsetMin)
+  const hh = Math.floor(abs / 60)
+  const mm = abs % 60
+  return mm ? `UTC${sign}${hh}:${String(mm).padStart(2, '0')}` : `UTC${sign}${hh}`
 }
 
 /** The engine owns expiry: print the moment whole, never a renderer countdown. */
@@ -148,13 +159,37 @@ export function formatExpiryWhole(ts: number, locale?: string): string {
   const when = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(
     d,
   )
-  const offsetMin = -d.getTimezoneOffset()
-  const sign = offsetMin >= 0 ? '+' : '−'
-  const abs = Math.abs(offsetMin)
-  const hh = Math.floor(abs / 60)
-  const mm = abs % 60
-  const offset = mm ? `UTC${sign}${hh}:${String(mm).padStart(2, '0')}` : `UTC${sign}${hh}`
-  return `${when} (${offset})`
+  return `${when} (${utcOffset(d)})`
+}
+
+/**
+ * The expiry as the card prints it: the time alone when it falls today, the
+ * short date and time otherwise — the year never, the offset always. The
+ * whole form did not fit a card fact and was cut mid-word.
+ */
+export function formatExpiryShort(ts: number, now: number, locale?: string): string {
+  const d = new Date(ts)
+  const today = new Date(now)
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate()
+  const when = sameDay
+    ? new Intl.DateTimeFormat(locale, { timeStyle: 'short' }).format(d)
+    : new Intl.DateTimeFormat(locale, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }).format(d)
+  return `${when} (${utcOffset(d)})`
+}
+
+/** The recipient (send) or spender (revoke) fact: the label, then the address in full. */
+function addressFact(order: Pick<Order, 'recipient' | 'recipientLabel'>): string {
+  const address = order.recipient ?? ''
+  if (!address) return ''
+  return order.recipientLabel ? `${order.recipientLabel} · ${address}` : address
 }
 
 export function walletDisplay(address: string, wallets: readonly Wallet[]): string {
@@ -171,37 +206,50 @@ export function approvalFacts(
   wallets: readonly Wallet[],
   labels: Record<string, string>,
   locale?: string,
+  now: number = Date.now(),
 ): Fact[] {
   const facts: Fact[] = []
-  const push = (key: string, value: string | null | undefined, tone?: Fact['tone']) => {
+  const push = (
+    key: string,
+    value: string | null | undefined,
+    tone?: Fact['tone'],
+    wide?: boolean,
+  ) => {
     if (value === null || value === undefined || value === '') return
-    facts.push({ key, label: labels[key] ?? key, value, ...(tone ? { tone } : {}) })
+    facts.push({
+      key,
+      label: labels[key] ?? key,
+      value,
+      ...(tone ? { tone } : {}),
+      ...(wide ? { wide } : {}),
+    })
   }
   push('wallet', walletDisplay(order.wallet, wallets))
   push('chain', chainName(order.chainId))
   const kind = orderKind(order)
   if (kind === 'send') {
-    push('to', recipientDisplay(order))
+    // Where the money goes is the one fact that may never be shortened.
+    push('to', addressFact(order), undefined, true)
     push('send', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
     if (order.valueUsd !== null) push('value', formatUsd(order.valueUsd))
     if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
     push('order', order.orderId)
-    if (order.expiresAt) push('expires', formatExpiryWhole(order.expiresAt, locale))
+    if (order.expiresAt) push('expires', formatExpiryShort(order.expiresAt, now, locale))
     return facts
   }
   if (kind === 'revoke') {
     push('token', order.tokenIn.symbol || shortAddress(order.tokenIn.address))
-    push('spender', recipientDisplay(order))
+    push('spender', addressFact(order), undefined, true)
     push(
       'allowance',
       order.amountIn === 'unlimited'
-        ? 'unlimited'
+        ? (labels.unlimited ?? 'unlimited')
         : `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`,
       order.amountIn === 'unlimited' ? 'danger' : undefined,
     )
     if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
     push('order', order.orderId)
-    if (order.expiresAt) push('expires', formatExpiryWhole(order.expiresAt, locale))
+    if (order.expiresAt) push('expires', formatExpiryShort(order.expiresAt, now, locale))
     return facts
   }
   push('pay', `${formatAmount(order.amountIn)} ${order.tokenIn.symbol}`)
@@ -232,7 +280,7 @@ export function approvalFacts(
   if (order.gasUsd !== null) push('gas', formatUsd(order.gasUsd))
   if (order.provider) push('provider', providerLabel(order.provider))
   push('order', order.orderId)
-  if (order.expiresAt) push('expires', formatExpiryWhole(order.expiresAt, locale))
+  if (order.expiresAt) push('expires', formatExpiryShort(order.expiresAt, now, locale))
   return facts
 }
 
@@ -245,6 +293,7 @@ export function batchFacts(
   wallets: readonly Wallet[],
   labels: Record<string, string>,
   locale?: string,
+  now: number = Date.now(),
 ): Fact[] {
   const facts: Fact[] = []
   const push = (key: string, value: string | null | undefined, tone?: Fact['tone']) => {
@@ -260,7 +309,7 @@ export function batchFacts(
   const gas = ask.orders.reduce((s, o) => s + (o.gasUsd ?? 0), 0)
   if (gas > 0) push('gas', formatUsd(gas))
   push('batch', ask.key)
-  if (lead.expiresAt) push('expires', formatExpiryWhole(lead.expiresAt, locale))
+  if (lead.expiresAt) push('expires', formatExpiryShort(lead.expiresAt, now, locale))
   return facts
 }
 
@@ -269,6 +318,90 @@ export function ordersForSession<T extends Pick<Order, 'sessionKey'>>(
   sessionKey: string,
 ): T[] {
   return orders.filter((o) => o.sessionKey === sessionKey)
+}
+
+/**
+ * The page of awaiting orders, with every batch replaced by its full set of
+ * awaiting legs. The engine approves and rejects every awaiting leg of a
+ * batch as one, so a card built from the legs that happened to land in the
+ * page would show fewer recipients than Approve executes. A batch the
+ * lookup has not answered yet keeps the page's legs meanwhile.
+ */
+export function withBatchLegs(
+  orders: readonly Order[],
+  batches: ReadonlyMap<string, readonly Order[]>,
+): Order[] {
+  const out: Order[] = []
+  const done = new Set<string>()
+  for (const order of orders) {
+    const id = order.batchId
+    if (!id) {
+      out.push(order)
+      continue
+    }
+    if (done.has(id)) continue
+    done.add(id)
+    const legs = batches.get(id)
+    if (!legs) {
+      out.push(...orders.filter((o) => o.batchId === id))
+      continue
+    }
+    const awaiting = legs.filter((o) => o.status === 'awaiting_approval')
+    out.push(...(awaiting.length ? awaiting : orders.filter((o) => o.batchId === id)))
+  }
+  return out
+}
+
+/** Every distinct batch id among these orders, in first-seen order. */
+export function batchIdsOf(orders: readonly Pick<Order, 'batchId'>[]): string[] {
+  const ids: string[] = []
+  for (const o of orders) if (o.batchId && !ids.includes(o.batchId)) ids.push(o.batchId)
+  return ids
+}
+
+/**
+ * One line naming what an order moves, for a toast or a notification:
+ * "0.2 ETH → USDC", "0.00001 ETH → 0x6c83…8312", "USDC ⛨ Permit2",
+ * "0.25 ETH → 3 recipients". `legs` is every leg of a multisend.
+ */
+export function orderLine(
+  order: Pick<
+    Order,
+    'kind' | 'amountIn' | 'tokenIn' | 'tokenOut' | 'recipient' | 'recipientLabel' | 'batchId'
+  >,
+  legs?: readonly Pick<Order, 'amountIn' | 'tokenIn'>[],
+  recipientsWord = 'recipients',
+): string {
+  const kind = orderKind(order)
+  const symbol = order.tokenIn?.symbol ?? ''
+  if (kind === 'revoke') {
+    const spender = order.recipientLabel || shortAddress(order.recipient ?? '')
+    return `${symbol || shortAddress(order.tokenIn?.address ?? '')} ⛨ ${spender}`.trim()
+  }
+  if (kind === 'send') {
+    if (order.batchId && legs && legs.length > 1) {
+      const total = sumAmounts(legs)
+      return `${formatAmount(total)} ${symbol} → ${legs.length} ${recipientsWord}`
+    }
+    const to = order.recipientLabel || shortAddress(order.recipient ?? '')
+    return `${formatAmount(order.amountIn)} ${symbol} → ${to}`.trim()
+  }
+  return `${formatAmount(order.amountIn)} ${symbol} → ${order.tokenOut?.symbol ?? ''}`.trim()
+}
+
+/** The word a toast or notification leads with: Swap, Send, Multisend, Revoke. */
+export function orderKindWord(
+  order: Pick<Order, 'kind' | 'batchId'>,
+  legs = 1,
+): 'swap' | 'send' | 'multisend' | 'revoke' {
+  const kind = orderKind(order)
+  if (kind === 'send' && order.batchId && legs > 1) return 'multisend'
+  return kind
+}
+
+/** The engine's answer to a second decision on an order already decided. */
+export function alreadyDecided(text: string): boolean {
+  return /no longer awaiting approval/i.test(text)
 }
 
 /** The chat message a rejection leaves for the agent, so it can re-plan. */
@@ -330,7 +463,10 @@ export function validateSend(form: SendForm): { ok: boolean; error?: SendError; 
   }
   if (form.amount.trim() && !(AMOUNT_RE.test(form.amount.trim()) && Number(form.amount) > 0))
     return { ok: false, error: 'amount' }
-  if (form.usd.trim() && !(Number(form.usd) > 0)) return { ok: false, error: 'amount' }
+  // The same strict decimal as the amount: "1e4" and "0x10" are numbers to
+  // Number(), and ten thousand dollars is not what someone who typed them meant.
+  if (form.usd.trim() && !(AMOUNT_RE.test(form.usd.trim()) && Number(form.usd.trim()) > 0))
+    return { ok: false, error: 'amount' }
   return { ok: true }
 }
 
@@ -710,7 +846,7 @@ function walletsFromLine(part: string, wallets: readonly Wallet[]): string[] {
   return out
 }
 
-function stopFromLine(line: string | undefined): StopRule {
+export function stopFromLine(line: string | undefined): StopRule {
   if (!line) return { kind: 'none' }
   const runs = /^Stop: after (\d+) runs\./.exec(line)
   if (runs) return { kind: 'runs', runs: Number(runs[1]) }
@@ -718,6 +854,48 @@ function stopFromLine(line: string | undefined): StopRule {
   if (until?.[1]) return { kind: 'until', until: until[1] }
   if (line.startsWith('Stop: when the goal is reached')) return { kind: 'goal' }
   return { kind: 'none' }
+}
+
+/** The stop rule a job's prompt carries, as the contract wrote it. */
+export function missionStopRule(job: RawJob): StopRule {
+  return stopFromLine(
+    jobText(job)
+      .split('\n')
+      .find((l) => l.startsWith('Stop: ')),
+  )
+}
+
+/**
+ * When an "until" date lapses. The contract writes a bare day
+ * (`2026-09-30`), and "after 2026-09-30" includes that whole local day, so
+ * the moment is the start of the next one. Any other form is read as-is.
+ */
+export function untilEpoch(until: string): number | null {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(until.trim())
+  if (day) return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]) + 1).getTime()
+  const ts = Date.parse(until)
+  return Number.isFinite(ts) ? ts : null
+}
+
+/**
+ * Whether the scheduler should stop this mission now, by its own stop rule.
+ * The rule is prose to the agent — "count the previous runs", "when that
+ * moment has passed" — and the agent can miscount or forget the marker, so
+ * the desk enforces the two rules it can measure: `run_count` against
+ * "after N runs", the clock against "after <date>". A goal is the agent's
+ * to judge.
+ */
+export function missionStopDue(job: RawJob, now: number): boolean {
+  const stop = missionStopRule(job)
+  if (stop.kind === 'runs') {
+    const n = Number(job.run_count ?? Number.NaN)
+    return Number.isFinite(n) && n >= stop.runs
+  }
+  if (stop.kind === 'until') {
+    const ts = untilEpoch(stop.until)
+    return ts !== null && now > ts
+  }
+  return false
 }
 
 /**

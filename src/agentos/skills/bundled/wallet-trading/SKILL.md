@@ -89,7 +89,7 @@ stderr carries one object: `{"error": {"code": "…", "message": "…"}}`
 
 | Exit | Meaning | Typical codes |
 |---|---|---|
-| 1 | the gateway or the swap provider refused or is unreachable | `GATEWAY_UNAVAILABLE`, `trading.*` (`trading.insufficient_balance`, `trading.slippage_too_high`, `trading.operator_required`, `trading.provider_blocked`, `trading.tx_pending`) |
+| 1 | the gateway or the swap provider refused or is unreachable | `GATEWAY_UNAVAILABLE`, `trading.*` (`trading.insufficient_balance`, `trading.slippage_too_high`, `trading.operator_required`, `trading.provider` — the aggregator is unreachable, rate-limited or errored upstream; `trading.uniswap` is the same for Uniswap — `trading.no_route`, `trading.tx_pending`) |
 | 2 | bad input | `INVALID_ARGUMENT` (e.g. both `--amount` and `--pct`, `--pct` outside `(0, 100]`), `TOKEN_NOT_FOUND`, `TOKEN_UNVERIFIED`, `TOKEN_AMBIGUOUS`, `CONFIRMATION_REQUIRED` |
 | 3 | conflict (state changed underneath, CLI/gateway version skew) | `CONFLICT`, `VERSION_SKEW` |
 
@@ -110,8 +110,12 @@ The same binding makes some commands **fail for you** with
 the app or from their own terminal:
 
 - `agentos trade approve` / `agentos trade reject`
+- `agentos trade hide` / `agentos trade unhide`
 - `agentos wallet setup|unlock|lock|create|import|export|rename|remove|primary`
-- `agentos config set trading.*` (cap, threshold, provider key, slippage…)
+
+`agentos config set trading.*` (cap, threshold, provider key, slippage…) is
+refused too — the gateway rejects the write as an invalid request rather
+than with a `trading.*` code — and only the operator can change those keys.
 
 Do not run them; when one is needed, tell the user what to do and stop.
 Never ask for the vault password, a private key or a keystore.
@@ -208,9 +212,10 @@ several, or `--all-wallets` for every wallet. A batch returns one order per
 wallet; a wallet that fails (no gas, cap hit) does not stop the others —
 report each wallet's outcome.
 
-Sizing: exactly one of `--amount` or `--pct` (fractions such as `12.5` are
-fine, `0 < pct ≤ 100`). `--pct 100` on ETH keeps about 0.001 ETH back for
-gas. A **quote does not check balance or gas**; the swap does, and fails with
+Sizing: exactly one of `--amount`, `--pct` or `--usd` (`--pct` takes
+fractions such as `12.5`, `0 < pct ≤ 100`; `--usd` is dollars of `--in`,
+sized by the engine at the current price; `quote` takes `--amount` or
+`--usd` only). `--pct 100` on ETH keeps about 0.001 ETH back for gas. A **quote does not check balance or gas**; the swap does, and fails with
 `trading.insufficient_balance`. `--slippage` is a percentage; leave it unset
 for the provider's auto slippage, and never above `agentMaxSlippagePct`.
 
@@ -233,7 +238,7 @@ the user may differ from the fill.
 | `approved` | The user said yes; executing | Wait; it becomes `submitted`. |
 | `rejected` | `reason` starts with `daily cap` (cap hit, or cap is 0 = agent swaps off) or is `user` / `user: <text>` | Explain the reason; adapt the mission (smaller size tomorrow, ask the user) — never retry a cap or user rejection on your own. |
 | `expired` | Nobody answered within the approval TTL (`reason: expired`) | Say so; re-submit only if the user still wants it. |
-| `failed` | Reverted or could not broadcast; `reason` is `<code>: <message>` | Report `reason`; re-quote only if the code is transient (`trading.tx_pending` — an approval tx was not mined in time, retry once it lands; a revert). `trading.insufficient_balance` and `trading.provider_blocked` are not transient. |
+| `failed` | Reverted or could not broadcast; `reason` is `<code>: <message>` | Report `reason`; re-quote only if the code is transient (`trading.tx_pending` — an approval tx was not mined in time, retry once it lands; a revert). `trading.insufficient_balance`, `trading.no_route` and `trading.token_not_tradeable` are not transient; `trading.provider` (the aggregator unreachable or erroring upstream) may be, so try once more after a pause and then stop. |
 
 Always report: order id, wallet, tokens and amounts, USD value, tx hash with
 explorer link, and whether anything is still waiting for approval.

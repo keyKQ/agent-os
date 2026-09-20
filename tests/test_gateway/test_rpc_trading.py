@@ -405,6 +405,7 @@ class TestAgentSurfaceRpc:
             ("wallet.setup", {"password": PASSWORD}),
             ("trading.lot.setCost", {"entryId": 1, "costUsdPerToken": 1}),
             ("trading.tokens.hide", {"chainId": 8453, "address": USDC, "hidden": True}),
+            ("trading.unwrap", {"chainId": 8453}),
         ]:
             res = await call(method, params, agent)
             assert res.ok is False, method

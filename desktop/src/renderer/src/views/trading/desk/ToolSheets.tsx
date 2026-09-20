@@ -4,7 +4,7 @@ import { t } from '~/i18n'
 import { useNetwork } from '~/stores/trading'
 import { Allowances } from '../Allowances'
 import { pipState, pipTitle } from '../NetworkPips'
-import { Sheet, Spinner } from '../parts'
+import { ErrorState, Sheet, Spinner } from '../parts'
 
 /** Allowances, as a sheet reached from the tools catalogue (the BOOK's Tools tab has it in place). */
 export function AllowancesSheet({
@@ -63,7 +63,9 @@ export function NetworkSheet({ onBack, onClose }: { onBack: () => void; onClose:
         </>
       }
     >
-      {network.chains.length === 0 ? (
+      {network.isError && network.chains.length === 0 ? (
+        <ErrorState error={network.error} onRetry={() => void network.refetch()} />
+      ) : network.chains.length === 0 ? (
         <p className="trd-decode__empty">{t('trading.network.unknown')}</p>
       ) : (
         <ul className="trd-netlist" data-testid="network-sheet">

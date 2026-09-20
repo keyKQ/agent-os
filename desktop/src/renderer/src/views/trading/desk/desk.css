@@ -269,60 +269,9 @@
   flex: 1 1 auto;
   flex-direction: column;
 }
-.trd-chat__head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 2px 10px 0 20px;
-}
-.trd-chat__title {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-.trd-chat__run {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 4px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--primary);
-}
-.trd-chat__run::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  background: currentColor;
-}
-.trd-chat__run[data-status='approval_pending'],
-.trd-chat__run[data-status='interrupted'] {
-  color: var(--warn);
-}
-.trd-chat__run[data-status='failed'],
-.trd-chat__run[data-status='timeout'],
-.trd-chat__run[data-status='cancelled'] {
-  color: var(--danger);
-}
-.trd-chat__spacer,
 .trd-seats__spacer,
 .trd-card__spacer {
   flex: 1;
-}
-.trd-chat__stage {
-  position: relative;
-  display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-}
-.trd-chat .trd-chat__thread {
-  --chat-col: min(56rem, calc(100% - 3rem));
-  padding-top: 8px;
 }
 .trd-chat__empty {
   position: absolute;
@@ -342,23 +291,6 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--muted-foreground);
-}
-.trd-chat__dock {
-  display: flex;
-  flex-shrink: 0;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  max-width: min(56rem, calc(100% - 3rem));
-  margin: 0 auto;
-  padding: 4px 0 0;
-}
-.trd-chat__dock .composer-shell {
-  max-width: none;
-  padding-top: 0;
-}
-.trd-chat__dock .stg-notice {
-  font-size: 12px;
 }
 
 /* ── Seats ────────────────────────────────────────────────────────────────── */
@@ -1388,36 +1320,6 @@ body[data-dragging] .trd-book__handle {
   border-style: dashed;
 }
 
-/* ── Tool output modal (chat-thread "view full") ─────────────────────────── */
-
-.trd-toolmodal {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  background: color-mix(in srgb, var(--background) 55%, transparent);
-}
-.trd-toolmodal__panel {
-  display: flex;
-  max-width: 800px;
-  max-height: 80vh;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border-radius: var(--radius-dialog);
-  background: var(--popover);
-  box-shadow: 0 0 0 0.5px var(--border);
-}
-.trd-toolmodal__panel pre {
-  min-height: 0;
-  overflow: auto;
-  font-size: 11.5px;
-  user-select: text;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .trd-card,
   .trd-book,
@@ -2132,6 +2034,71 @@ body[data-dragging] .trd-book__handle {
 .trd-send__field > small {
   color: var(--dim);
 }
+.trd-send__field > small[data-tone='danger'] {
+  color: var(--danger);
+}
+/* Armed: what the second click sends, written out — every address in full. */
+.trd-send__review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-compact);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 40%, transparent);
+}
+.trd-send__review h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.trd-send__review dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+.trd-send__review dl div {
+  display: flex;
+  gap: 6px;
+}
+.trd-send__review dt {
+  color: var(--muted-foreground);
+}
+.trd-send__review dd {
+  margin: 0;
+}
+.trd-send__review ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  list-style: none;
+}
+.trd-send__review li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.trd-send__review li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.trd-send__review li b {
+  flex-shrink: 0;
+  font-weight: 500;
+}
+.trd-send__review p {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  font-weight: 600;
+}
 .trd-send__field[data-error] .mac-input {
   box-shadow: 0 0 0 1px var(--danger);
 }
@@ -2357,6 +2324,9 @@ body[data-dragging] .trd-book__handle {
   border-radius: 50%;
   background: var(--dim);
 }
+.trd-pip__label {
+  white-space: nowrap;
+}
 .trd-pip[data-state='ok'] .trd-pip__dot {
   background: var(--ok, #34c759);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok, #34c759) 25%, transparent);
@@ -2368,27 +2338,6 @@ body[data-dragging] .trd-book__handle {
   background: var(--danger);
 }
 
-/* A row of small tools above a BOOK tab's list. */
-.trd-book__tools {
-  display: flex;
-  justify-content: flex-end;
-  padding: 6px 10px 0;
-}
-.trd-book__tool {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  color: var(--muted-foreground);
-  box-shadow: inset 0 0 0 0.5px var(--border);
-}
-.trd-book__tool:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 7%, transparent);
-}
 .trd-allow__scanning {
   display: inline-flex;
   align-items: center;
@@ -2510,8 +2459,20 @@ button.trd-tool:focus-visible {
   cursor: default;
 }
 .trd-tool__refresh {
-  width: 14px;
-  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  color: var(--dim);
+}
+.trd-tool__refresh:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.trd-tool__refresh:disabled {
+  cursor: default;
 }
 .trd-tool__chains {
   display: flex;
@@ -2543,11 +2504,20 @@ button.trd-tool:focus-visible {
 .trd-tool__chains li[data-state='down'] .trd-pip__dot {
   background: var(--danger);
 }
+/* The figures wrap to a second line rather than clip: the latency at the
+   end is the one that says whether the RPC is slow. */
+.trd-tool__chains li {
+  flex-wrap: wrap;
+}
 .trd-tool__chains li span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+/* In a narrow BOOK the head block goes first; it is the figure nobody reads. */
+@container book (max-width: 339px) {
+  .trd-tool__head {
+    display: none;
+  }
 }
 
 /* ── Tools catalogue (same cut as the mission catalogue) ─────────────────── */
@@ -2642,4 +2612,24 @@ button.trd-tool:focus-visible {
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--dim);
+}
+
+/* ── Approval card: an address fact on its own line, never truncated ───── */
+.trd-card__fact--wide {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.trd-card__fact--wide dd {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* The multisend list prints every recipient whole as well. */
+.trd-card__legs-list .trd-card__addr {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }

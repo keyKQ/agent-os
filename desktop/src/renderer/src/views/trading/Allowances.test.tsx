@@ -99,6 +99,34 @@ describe('Allowances', () => {
     )
   })
 
+  it('says the read failed, with a retry, rather than "nothing approved"', async () => {
+    let fail = true
+    rpcCall.mockImplementation(async () => {
+      if (fail) throw new Error('socket closed')
+      return { wallet: WALLET.address, chainId: null, count: 0, unlimitedCount: 0, allowances: [] }
+    })
+    renderDesk(<Allowances wallet={WALLET.address} />)
+    await waitFor(() => expect(screen.getByText('socket closed')).toBeInTheDocument())
+    expect(screen.queryByText('No live allowances')).toBeNull()
+    fail = false
+    fireEvent.click(screen.getByTestId('trading-error-retry'))
+    await waitFor(() => expect(screen.getByText('No live allowances')).toBeInTheDocument())
+  })
+
+  it('leaves an unknown spender as plain text rather than a dead link', async () => {
+    rpcCall.mockResolvedValue({
+      wallet: WALLET.address,
+      chainId: null,
+      count: 1,
+      unlimitedCount: 0,
+      allowances: [allowance({ spenderLabel: null, spenderUrl: null, unlimited: false })],
+    })
+    renderDesk(<Allowances wallet={WALLET.address} />)
+    await waitFor(() => expect(screen.getByTestId('allowance-row')).toBeInTheDocument())
+    const addr = screen.getByTestId('allowance-row').querySelector('.trd-allow__addr')
+    expect(addr?.tagName).toBe('SPAN')
+  })
+
   it('says so when nothing is approved', async () => {
     rpcCall.mockResolvedValue({
       wallet: WALLET.address,

@@ -178,17 +178,34 @@ def is_native(address: str | None) -> bool:
 
 
 def normalize_address(address: str) -> str:
-    """Lower-case a 0x address after a strict shape check."""
+    """Lower-case a 0x address after a strict shape check.
+
+    Mixed case is an EIP-55 claim and is verified: a recipient or spender
+    pasted with one wrong letter would otherwise pass as a different, valid
+    address and the tokens would be gone. All-lowercase and all-uppercase
+    make no claim and are accepted as they are.
+    """
     text = (address or "").strip()
     if is_native(text):
         return NATIVE_ADDRESS
     if not text.startswith("0x") or len(text) != 42:
         raise ValueError(f"Not an EVM address: {address!r}")
+    body = text[2:]
     try:
-        int(text[2:], 16)
+        int(body, 16)
     except ValueError as exc:
         raise ValueError(f"Not an EVM address: {address!r}") from exc
+    if body != body.lower() and body != body.upper() and not _is_checksummed(text):
+        raise ValueError(f"address checksum does not match; re-copy it: {address!r}")
     return text.lower()
+
+
+def _is_checksummed(address: str) -> bool:
+    try:
+        from eth_utils import is_checksum_address
+    except ImportError:  # pragma: no cover - eth_utils ships with eth-account
+        return True
+    return bool(is_checksum_address(address))
 
 
 def checksum_address(address: str) -> str:

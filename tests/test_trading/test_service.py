@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from agentos.trading import service as service_module
 from agentos.trading.chains import BASE, NATIVE_ADDRESS, ROBINHOOD
 from agentos.trading.service import TradingError, TradingService
 from tests.test_trading.conftest import PASSWORD
@@ -1326,3 +1327,336 @@ class TestSafetyRails:
         assert service.get_order(orders[0]["orderId"])["status"] == "failed"
         assert service.get_order(orders[0]["orderId"])["reason"].startswith("transaction never")
         assert wallet
+
+
+class TestSettlementSurvivesTheNode:
+    """Once a swap is mined, nothing the RPC does afterwards may un-mine it."""
+
+    async def test_an_error_after_the_receipt_leaves_the_order_submitted(
+        self, funded_service: TradingService, base_chain: FakeChain, monkeypatch
+    ) -> None:
+        """A transient error while settling must not flip a mined swap to failed.
+
+        Measured live: a dRPC hiccup right after the receipt marked a
+        successful swap ``failed``; ``recover_submitted`` never looks at
+        failed rows, so the legs were never booked and the agent's daily
+        spend never counted. The row stays ``submitted`` and the next pass
+        finishes the job.
+        """
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        real_settle = service._settle
+        blown = 0
+
+        async def settle_once_broken(*args, **kwargs):
+            nonlocal blown
+            if blown == 0:
+                blown += 1
+                raise service_module.EvmTransportError("node hiccup after the receipt")
+            return await real_settle(*args, **kwargs)
+
+        monkeypatch.setattr(service, "_settle", settle_once_broken)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="agent",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        order = orders[0]
+        assert order["status"] == "submitted", order
+        assert order["txHash"] and (order["reason"] or "").startswith("settling:")
+        assert not [
+            e
+            for e in _events(service, "trading.order.finished")
+            if e["order"]["status"] == "failed"
+        ]
+        assert service.limits(wallet)["spentTodayUsd"] == pytest.approx(10.0)  # still in flight
+        # A later housekeeping pass owns the stray and books it once.
+        await service.recover_submitted()
+        recovered = service.get_order(order["orderId"])
+        assert recovered["status"] == "confirmed" and recovered["receivedOut"] == "0.0005"
+        assert recovered["reason"] is None
+        swaps = [e for e in service.ledger.list_entries(wallet=wallet) if e["kind"] == "swap"]
+        assert len(swaps) == 1
+        assert service.limits(wallet)["spentTodayUsd"] == pytest.approx(10.0)  # counted once
+
+    async def test_post_receipt_reads_that_fail_are_worked_around(
+        self, funded_service: TradingService, base_chain: FakeChain, monkeypatch
+    ) -> None:
+        """The block timestamp and the balance cache reads are conveniences.
+
+        A node that refuses them after the receipt costs a stale cache row
+        (the next sync fixes it) and a booking stamped "now" — never a
+        failed order.
+        """
+        monkeypatch.setattr(service_module, "CHAIN_CATCHUP_POLL_S", 0.0)
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        _wire_swap_effects(base_chain, wallet)
+        inner = base_chain.on_send
+
+        def send_then_outage(raw: str) -> str:
+            tx_hash = inner(raw)
+            base_chain.fail_methods.update({"eth_getBlockByNumber", "eth_call"})
+            return tx_hash
+
+        base_chain.on_send = send_then_outage
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="WETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        assert orders[0]["status"] == "confirmed", orders[0]
+        assert orders[0]["receivedOut"] == "0.0005"  # from the receipt's Transfer log
+
+    async def test_native_out_swap_is_recovered_after_a_restart(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        """A swap into ETH settled by a recovery pass has no pre-send snapshot.
+
+        With nothing to diff against, the old code booked ``received = 0``.
+        There is no Transfer log for the gas coin, so the balance is read
+        pinned to the receipt's block and the block before it instead.
+        """
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        received = 20_000_000_000_000  # 0.00002 ETH
+        fake_aggregator.amount_out = received
+        _wire_swap_effects(base_chain, wallet, out_token=NATIVE_ADDRESS, out_amount=received)
+        before_swap = base_chain.native.get(wallet.lower(), 0)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="ETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        order_id = orders[0]["orderId"]
+        assert orders[0]["status"] == "confirmed" and orders[0]["receivedOut"] == "0.00002"
+        # The process died before confirming: forget the settlement.
+        service.ledger.update_order(
+            order_id, status="submitted", received_out_raw=None, spent_in_raw=None
+        )
+        mined_block = base_chain.block
+        asked: list[str] = []
+
+        def balance_at(address: str, block: str) -> int:
+            asked.append(block)
+            if address == wallet.lower() and block == hex(mined_block - 1):
+                return before_swap
+            return base_chain.native.get(address, 0)
+
+        base_chain.balance_at = balance_at
+        await service.recover_submitted()
+        recovered = service.get_order(order_id)
+        assert recovered["status"] == "confirmed", recovered
+        assert recovered["receivedOut"] == "0.00002"
+        assert hex(mined_block - 1) in asked and hex(mined_block) in asked
+
+    async def test_native_out_recovery_on_a_lagging_node_books_the_expected_amount(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_aggregator: FakeAggregator,
+    ) -> None:
+        """Pinned reads that still show nothing arrived are not believed either.
+
+        A swap that mined without reverting delivered at least ``minOut``;
+        below that the read is stale, and the order's expected amount is
+        booked (with a warning) rather than a zero.
+        """
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        received = 20_000_000_000_000
+        fake_aggregator.amount_out = received
+        _wire_swap_effects(base_chain, wallet, out_token=NATIVE_ADDRESS, out_amount=received)
+        orders = await service.swap(
+            chain=BASE,
+            wallets=None,
+            token_in="USDC",
+            token_out="ETH",
+            amount_in="10",
+            amount_pct=None,
+            slippage_pct=None,
+            initiator="manual",
+            session_key=None,
+            note=None,
+            wait=True,
+        )
+        order_id = orders[0]["orderId"]
+        service.ledger.update_order(
+            order_id, status="submitted", received_out_raw=None, spent_in_raw=None
+        )
+        # Every read, pinned or not, answers from before the swap's block.
+        frozen = base_chain.native.get(wallet.lower(), 0) - received
+        base_chain.balance_at = lambda address, block: frozen
+        await service.recover_submitted()
+        recovered = service.get_order(order_id)
+        assert recovered["status"] == "confirmed"
+        assert recovered["receivedOut"] == recovered["expectedOut"] == "0.00002"
+
+    async def test_wait_order_does_not_return_a_quoted_row(
+        self, funded_service: TradingService
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        now = service._now()
+        service.ledger.insert_order(
+            {
+                "order_id": "ord_waiting",
+                "created_at": now,
+                "updated_at": now,
+                "chain_id": 8453,
+                "wallet": wallet.lower(),
+                "token_in": USDC,
+                "token_out": WETH,
+                "amount_raw": "1",
+                "amount_human": "0.000001",
+                "status": "quoted",
+                "initiator": "manual",
+            }
+        )
+
+        async def finish_later() -> None:
+            await asyncio.sleep(0.05)
+            service.ledger.update_order("ord_waiting", status="failed", reason="x")
+            service._wake("ord_waiting")
+
+        task = asyncio.get_running_loop().create_task(finish_later())
+        order = await service.wait_order("ord_waiting", timeout_s=5)
+        await task
+        assert order["status"] == "failed"
+
+    async def test_full_allowance_rescan_stops_the_running_pass_first(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        record = service.vault.resolve(wallet)
+        key = (BASE.chain_id, record.key)
+        service.ledger.set_allowance_scan(BASE.chain_id, record.key, last_block=50)
+
+        async def never_done() -> None:
+            await asyncio.sleep(3600)
+
+        stale = asyncio.get_running_loop().create_task(never_done())
+        service._allowance_scans[key] = stale
+        result = await service.allowances(BASE, wallet, full=True, wait=True)
+        assert stale.cancelled()
+        assert service._allowance_scans[key] is not stale
+        assert result["scannedTo"] == base_chain.block
+
+
+class TestUnsellableHoldings:
+    async def test_an_unverified_token_in_a_dry_pool_is_not_valued(
+        self,
+        funded_service: TradingService,
+        base_chain: FakeChain,
+        fake_prices: FakePrices,
+        monkeypatch,
+    ) -> None:
+        """Live case: an airdropped SEED lookalike priced at $0.678 by a pool
+        holding five cents made a fifty-cent wallet show +$12 unrealised.
+        Below the spam liquidity floor an unlisted token is shown unpriced."""
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        lookalike = "0x350cc56c00000000000000000000000000000001"
+        base_chain.tokens[lookalike] = ("SEED", "Seed", 18)
+        base_chain.set_erc20(lookalike, wallet, 18 * 10**18)
+        base_chain.add_transfer(token=lookalike, sender=OTHER, recipient=wallet, amount=18 * 10**18)
+        fake_prices.spot[("base", lookalike)] = 0.678
+        liquidity = {"usd": 0.05}
+        real_pair = fake_prices._pair
+
+        def thin_pair(slug: str, token: str, price: float) -> dict:
+            pair = real_pair(slug, token, price)
+            if token == lookalike:
+                pair["liquidity"] = dict(liquidity)
+            return pair
+
+        monkeypatch.setattr(fake_prices, "_pair", thin_pair)
+        await service.sync_all()
+        # The user deliberately shows it: still not worth $12.
+        await service.set_token_hidden(BASE, lookalike, False)
+        portfolio = await service.portfolio(wallet)
+        row = next(h for h in portfolio["holdings"] if h["token"]["address"] == lookalike)
+        assert row["amount"] == "18" and row["token"]["verified"] is False
+        assert row["priceUsd"] is None and row["valueUsd"] is None
+        assert row["unrealizedUsd"] is None and row["unrealizedPct"] is None
+        assert portfolio["totals"]["valueUsd"] == pytest.approx(3000.0)
+        # Its opening lot was booked at the same fictional price: neither a
+        # +$12 gain nor a -$12 loss reaches the hero totals.
+        assert portfolio["totals"]["costUsd"] == pytest.approx(3000.0)
+        assert portfolio["totals"]["unrealizedUsd"] == pytest.approx(0.0)
+        balance = next(
+            b for b in await service.balances(wallet) if b["token"]["address"] == lookalike
+        )
+        assert balance["priceUsd"] is None and balance["valueUsd"] is None
+        # A real pool behind the price makes it a value again.
+        liquidity["usd"] = 250_000.0
+        portfolio = await service.portfolio(wallet)
+        row = next(h for h in portfolio["holdings"] if h["token"]["address"] == lookalike)
+        assert row["priceUsd"] == pytest.approx(0.678)
+        assert row["valueUsd"] == pytest.approx(18 * 0.678)
+        # Listed tokens keep their price whatever pool the source answers with.
+        liquidity["usd"] = 0.05
+        by_token = {b["token"]["address"]: b for b in await service.balances(wallet)}
+        assert by_token[USDC]["valueUsd"] == pytest.approx(1000.0)
+
+
+class TestUnwrapGuards:
+    async def test_unwrap_respects_the_enabled_switch_and_the_wallet_lock(
+        self, funded_service: TradingService, base_chain: FakeChain
+    ) -> None:
+        service = funded_service
+        wallet = service.test_wallet  # type: ignore[attr-defined]
+        base_chain.set_erc20(WETH, wallet, 5 * 10**14)
+        service.config.enabled = False
+        with pytest.raises(TradingError, match="disabled"):
+            await service.unwrap(BASE, None)
+        service.config.enabled = True
+        record = service.vault.resolve(wallet)
+        lock = service._wallet_lock(record.key)
+        held_during_send: list[bool] = []
+
+        def unwrap_send(raw: str) -> str:
+            held_during_send.append(lock.locked())
+            tx = decode_fake_raw(raw)
+            amount = int(tx["data"][10:], 16)
+            base_chain.set_erc20(WETH, wallet, base_chain.get_erc20(WETH, wallet) - amount)
+            base_chain.native[wallet.lower()] += amount - 100_000 * 10**8
+            tx_hash = "0x" + "78" * 32
+            base_chain.receipt(tx_hash, status=1)
+            return tx_hash
+
+        base_chain.on_send = unwrap_send
+        result = await service.unwrap(BASE, None)
+        assert result["amount"] == "0.0005" and held_during_send == [True]
+        assert not lock.locked()
+        cached = service.ledger.get_balance(BASE.chain_id, record.key, NATIVE_ADDRESS)
+        assert cached == base_chain.native[wallet.lower()]

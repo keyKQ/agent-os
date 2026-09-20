@@ -81,6 +81,44 @@ describe('SwapPanel', () => {
     expect(screen.getByTestId('swap-review')).toHaveTextContent('Review swap')
   })
 
+  it('keeps a gas reserve back from Max and 100% when paying in ETH', async () => {
+    mount()
+    await screen.findByText(/Balance/)
+    const note = screen.getByTestId('gas-reserve')
+    expect(note).toHaveTextContent('Max keeps ~0.0003 ETH for gas')
+    fireEvent.click(screen.getByRole('button', { name: 'Max' }))
+    expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('0.9997')
+    fireEvent.click(screen.getByRole('button', { name: '100%' }))
+    expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('0.9997')
+    fireEvent.click(screen.getByRole('button', { name: '50%' }))
+    expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('0.49985')
+  })
+
+  it('keeps nothing back when the pay token is not the gas coin', async () => {
+    rpcCall.mockImplementation(async (method: string) =>
+      method === 'wallet.balances'
+        ? {
+            balances: [
+              {
+                chainId: 8453,
+                token: USDC,
+                raw: '12500000',
+                amount: '12.5',
+                priceUsd: 1,
+                valueUsd: 12.5,
+                change24hPct: 0,
+              },
+            ],
+          }
+        : {},
+    )
+    mount({ prefill: { chainId: 8453, tokenIn: USDC, tokenOut: ETH, seq: 2 } })
+    await screen.findByText(/Balance/)
+    expect(screen.queryByTestId('gas-reserve')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Max' }))
+    expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('12.5')
+  })
+
   it('refuses more than the wallet holds', async () => {
     mount()
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '5' } })

@@ -7,7 +7,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useMemo, useState, type CSSProperties } from 'react'
-import { t } from '~/i18n'
+import { t, type MessageKey } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useBalances, useQuote, type QuoteParams } from '~/stores/trading'
 import { ConfirmSwap } from './ConfirmSwap'
@@ -17,8 +17,10 @@ import {
   formatAmount,
   formatPct,
   formatUsd,
+  gasReserveEth,
   impactTone,
   isPositiveAmount,
+  maxSpendable,
   parseAmount,
   quoteCountdown,
   sameAddress,
@@ -192,7 +194,18 @@ export function SwapPanel({
       : String(quote.error)
     : null
 
-  const ctaKey: string | null = !unlocked
+  // Paying in the gas coin: Max and 100% keep enough back for the swap's own
+  // fee. The latest quote's fee (in ETH, via its price) sets the floor when
+  // it is higher than the chain's default.
+  const quoteGasEth =
+    quote.data?.gasUsd != null && available?.priceUsd
+      ? String(quote.data.gasUsd / available.priceUsd)
+      : null
+  const reserve = tokenIn?.native ? gasReserveEth(chainId, quoteGasEth) : null
+  const spendable =
+    available && tokenIn ? maxSpendable(available.amount, tokenIn.decimals, reserve) : null
+
+  const ctaKey: MessageKey | null = !unlocked
     ? 'trading.swap.cta.locked'
     : !providerReady
       ? provider === 'uniswap'
@@ -264,12 +277,13 @@ export function SwapPanel({
           token={tokenIn}
           onPick={() => setPicker('in')}
           balance={available?.amount ?? null}
-          onMax={available ? () => setAmount(available.amount) : undefined}
+          onMax={spendable !== null ? () => setAmount(spendable) : undefined}
           onPct={
-            available && tokenIn
-              ? (pct) => setAmount(amountFromPct(available.amount, tokenIn.decimals, pct))
+            spendable !== null && tokenIn
+              ? (pct) => setAmount(amountFromPct(spendable, tokenIn.decimals, pct))
               : undefined
           }
+          reserve={reserve}
           usd={
             fresh?.valueUsd ??
             (available?.priceUsd !== null && available?.priceUsd !== undefined && parsed
@@ -350,8 +364,7 @@ export function SwapPanel({
               <span>{t('trading.swap.slippage')}</span>
               <span className="trd-fact__slip">
                 <select
-                  className="mac-select"
-                  style={{ width: 84, height: 20, fontSize: 11 }}
+                  className="mac-select trd-fact__select"
                   aria-label={t('trading.swap.slippage')}
                   value={slippage === 'auto' ? 'auto' : 'custom'}
                   onChange={(e) =>
@@ -418,7 +431,7 @@ export function SwapPanel({
           }
           onClick={gateAction ?? (() => setConfirm(true))}
         >
-          {ctaKey ? t(ctaKey as 'trading.swap.pick') : t('trading.swap.cta')}
+          {ctaKey ? t(ctaKey) : t('trading.swap.cta')}
         </button>
         {ready ? (
           <div className="trd-ticket__fresh" aria-live="polite">
@@ -503,6 +516,7 @@ function Leg({
   onMax,
   onPct,
   usd,
+  reserve,
   children,
 }: {
   label: string
@@ -512,6 +526,8 @@ function Leg({
   onMax?: () => void
   onPct?: (pct: number) => void
   usd: number | null
+  /** What Max holds back for gas, when the leg pays in the gas coin. */
+  reserve?: string | null
   children: React.ReactNode
 }) {
   return (
@@ -566,8 +582,12 @@ function Leg({
         )}
         <span className="trd-leg__usd">{usd !== null ? `≈ ${formatUsd(usd)}` : ''}</span>
       </div>
+      {reserve && onMax ? (
+        <span className="trd-leg__reserve" data-testid="gas-reserve">
+          {t('trading.swap.gasReserve')} ~{formatAmount(reserve)} {token?.symbol ?? 'ETH'}{' '}
+          {t('trading.swap.gasReserve.for')}
+        </span>
+      ) : null}
     </div>
   )
 }
-
-/** The countdown ring on the primary button: full when the price is fresh. */

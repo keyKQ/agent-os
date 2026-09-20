@@ -69,6 +69,10 @@ describe('ToolsPanel', () => {
     const network = screen.getByTestId('tool-network')
     expect(network).toHaveTextContent('Robinhood Chain · Behind')
     expect(network).toHaveTextContent('#123 · 2s · 0.0100 gwei · 80 ms')
+    // Idle, the refresh button still has its arrow: never an empty box.
+    await waitFor(() =>
+      expect(screen.getByTestId('tool-network-refresh').querySelector('svg')).not.toBeNull(),
+    )
     fireEvent.click(screen.getByTestId('tool-send'))
     expect(onSend).toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('tool-inspect'))
@@ -78,5 +82,25 @@ describe('ToolsPanel', () => {
     expect(screen.getByText('No live allowances')).toBeInTheDocument()
     fireEvent.click(screen.getByTestId('tools-back'))
     expect(screen.getByTestId('tool-send')).toBeInTheDocument()
+  })
+
+  it('carries the same cards as the picker, Multisend included', async () => {
+    const onSend = vi.fn()
+    const onMultisend = vi.fn()
+    renderDesk(
+      <ToolsPanel
+        wallet={WALLET.address}
+        onSend={onSend}
+        onMultisend={onMultisend}
+        onInspect={vi.fn()}
+      />,
+    )
+    for (const id of ['send', 'multisend', 'allowances', 'inspect', 'network']) {
+      expect(screen.getByTestId(`tool-${id}`)).toBeInTheDocument()
+    }
+    fireEvent.click(screen.getByTestId('tool-multisend'))
+    expect(onMultisend).toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByTestId('tool-network')).toHaveTextContent('Base'))
   })
 })

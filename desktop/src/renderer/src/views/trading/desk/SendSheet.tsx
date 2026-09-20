@@ -3,14 +3,28 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
-import { useSend, type SendRecipient } from '~/stores/trading'
-import { errorText, sameAddress, walletLabel } from '../logic'
+import { useBalances, useSend, type SendRecipient } from '~/stores/trading'
+import {
+  checksumMismatch,
+  chainName,
+  compareAmounts,
+  errorText,
+  formatAmount,
+  formatUsd,
+  fromRaw,
+  parseAmount,
+  sameAddress,
+  shortAddress,
+  toRaw,
+  walletLabel,
+} from '../logic'
 import { Sheet } from '../parts'
-import { CHAINS, type Wallet } from '../types'
+import { CHAINS, type Balance, type Wallet } from '../types'
 import {
   composeSendPrompt,
   parseRecipientLines,
   validateSend,
+  type SendError,
   type SendForm,
   type SendRecipientForm,
 } from './desk-logic'
@@ -19,6 +33,33 @@ const ARM_RESET_MS = 4000
 
 function linesOf(rows: readonly SendRecipientForm[]): string {
   return rows.map((r) => (r.amount ? `${r.address}=${r.amount}` : r.address)).join('\n')
+}
+
+/** The typed token against what the wallet holds on this chain: symbol or address. */
+function heldToken(balances: readonly Balance[], chainId: number, token: string): Balance | null {
+  const q = token.trim().toLowerCase()
+  if (!q) return null
+  return (
+    balances.find(
+      (b) =>
+        b.chainId === chainId &&
+        (b.token.symbol.toLowerCase() === q || b.token.address.toLowerCase() === q),
+    ) ?? null
+  )
+}
+
+/** Every leg's amount in the token, summed; null while a leg is priced in USD. */
+function totalAmount(form: SendForm, decimals: number): string | null {
+  let sum = 0n
+  for (const r of form.recipients) {
+    if (!r.address.trim()) continue
+    const own = parseAmount(r.amount)
+    const shared = parseAmount(form.amount)
+    const leg = own ?? shared
+    if (leg === null) return null
+    sum += toRaw(leg, decimals)
+  }
+  return fromRaw(sum, decimals)
 }
 
 /**
@@ -73,14 +114,34 @@ export function SendSheet({
     setText(value)
     patch({ recipients: parseRecipientLines(value) })
   }
-  const check = validateSend(form)
+  const baseCheck = validateSend(form)
+  // A mixed-case address whose casing is wrong is a mangled paste, not a
+  // typo the engine can catch: it is refused here, before either button.
+  const badChecksum = form.recipients.some((r) => checksumMismatch(r.address))
+  const check: { ok: boolean; error?: SendError | 'checksum' } =
+    baseCheck.ok && badChecksum ? { ok: false, error: 'checksum' } : baseCheck
   const prompt = useMemo(() => composeSendPrompt(form, { wallets }), [form, wallets])
-  const count = form.recipients.filter((r) => r.address.trim()).length
+  const legs = form.recipients.filter((r) => r.address.trim())
+  const count = legs.length
   const walletRow =
     wallets.find((w) => sameAddress(w.address, form.wallet)) ??
     wallets.find((w) => w.primary) ??
     wallets[0] ??
     null
+
+  // What the paying wallet holds of the typed token, for a balance line and
+  // an "insufficient" hint before the engine has to say so.
+  const { balances } = useBalances(walletRow?.address, Boolean(walletRow))
+  const held = heldToken(balances, form.chainId, form.token)
+  const total = held ? totalAmount(form, held.token.decimals) : null
+  const insufficient =
+    held !== null && total !== null && compareAmounts(total, held.amount, held.token.decimals) > 0
+  const totalUsd =
+    form.usd.trim() && Number.isFinite(Number(form.usd))
+      ? Number(form.usd) * count
+      : total !== null && held?.priceUsd != null
+        ? Number(total) * held.priceUsd
+        : null
 
   function ask() {
     setTouched(true)
@@ -96,14 +157,12 @@ export function SendSheet({
       return
     }
     setArmed(false)
-    const recipients: SendRecipient[] = form.recipients
-      .filter((r) => r.address.trim())
-      .map((r) => {
-        const own = r.amount.trim()
-        if (own) return { to: r.address.trim(), amount: own }
-        if (form.amount.trim()) return { to: r.address.trim(), amount: form.amount.trim() }
-        return { to: r.address.trim(), amountUsd: Number(form.usd) }
-      })
+    const recipients: SendRecipient[] = legs.map((r) => {
+      const own = r.amount.trim()
+      if (own) return { to: r.address.trim(), amount: own }
+      if (form.amount.trim()) return { to: r.address.trim(), amount: form.amount.trim() }
+      return { to: r.address.trim(), amountUsd: Number(form.usd) }
+    })
     send.mutate(
       {
         chainId: form.chainId,
@@ -121,6 +180,15 @@ export function SendSheet({
             })
             return
           }
+          if (failed.length > 0) {
+            // Some legs went, some did not: the sheet stays so the list can
+            // be corrected, and the toast says how many to look for in Orders.
+            toast.warning(
+              `${failed.length} ${t('trading.send.partial')} ${res.orders.length} ${t('trading.send.partial.failed')}`,
+              { id: 'trd-send', description: failed[0]?.reason ?? undefined },
+            )
+            return
+          }
           toast.success(t('trading.send.sent'), {
             id: 'trd-send',
             description: t('trading.send.sent.body'),
@@ -134,11 +202,14 @@ export function SendSheet({
   }
 
   const error = touched && !check.ok ? check.error : undefined
+  const pending = send.isPending
 
   return (
     <Sheet
       title={multi ? t('trading.tool.multisend.name') : t('trading.send.title')}
-      onClose={onClose}
+      // A send in flight cannot be abandoned: Escape, the backdrop and the X
+      // all wait for the answer.
+      onClose={pending ? () => {} : onClose}
       wide
       note={
         <span className="trd-send__warn">
@@ -148,7 +219,7 @@ export function SendSheet({
       }
       foot={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={onClose} disabled={pending}>
             {t('trading.sheet.cancel')}
           </Button>
           <Button
@@ -211,7 +282,10 @@ export function SendSheet({
               ))}
             </select>
           </label>
-          <label className="trd-send__field" data-error={error === 'token' || undefined}>
+          <label
+            className="trd-send__field"
+            data-error={error === 'token' || insufficient || undefined}
+          >
             <span>{t('trading.send.token')}</span>
             <input
               className="mac-input"
@@ -220,13 +294,23 @@ export function SendSheet({
               onChange={(e) => patch({ token: e.target.value })}
               data-testid="send-token"
             />
+            {held ? (
+              <small data-testid="send-balance" data-tone={insufficient ? 'danger' : undefined}>
+                {t('trading.send.balance')}: {formatAmount(held.amount)} {held.token.symbol}
+                {insufficient ? ` · ${t('trading.send.insufficient')}` : ''}
+              </small>
+            ) : null}
           </label>
         </div>
 
         <label
           className="trd-send__field"
           data-error={
-            error === 'recipients' || error === 'address' || error === 'duplicate' || undefined
+            error === 'recipients' ||
+            error === 'address' ||
+            error === 'duplicate' ||
+            error === 'checksum' ||
+            undefined
           }
         >
           <span>
@@ -293,6 +377,59 @@ export function SendSheet({
           <p className="trd-send__error" role="alert" data-testid="send-error">
             {t(`trading.send.error.${error}`)}
           </p>
+        ) : null}
+
+        {/* Armed: the second click is a confirmation, so what it confirms is
+            written out in full — every address, every amount, the total. */}
+        {armed && check.ok ? (
+          <section className="trd-send__review" data-testid="send-review" aria-live="polite">
+            <h4>{t('trading.send.review.title')}</h4>
+            <dl>
+              <div>
+                <dt>{t('trading.send.chain')}</dt>
+                <dd>{chainName(form.chainId)}</dd>
+              </div>
+              <div>
+                <dt>{t('trading.send.wallet')}</dt>
+                <dd>
+                  {walletRow ? walletLabel(walletRow) : '—'}
+                  {walletRow ? (
+                    <span className="trd-mono"> · {shortAddress(walletRow.address)}</span>
+                  ) : null}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('trading.send.token')}</dt>
+                <dd>{held ? held.token.symbol : form.token.trim()}</dd>
+              </div>
+            </dl>
+            <ul className="trd-mono">
+              {legs.map((r) => {
+                const amount = r.amount.trim() || form.amount.trim()
+                return (
+                  <li key={r.address}>
+                    <span>{r.address.trim()}</span>
+                    <b>
+                      {amount
+                        ? `${formatAmount(amount)} ${held ? held.token.symbol : ''}`
+                        : `${formatUsd(Number(form.usd))} ${t('trading.send.review.each')}`}
+                    </b>
+                  </li>
+                )
+              })}
+            </ul>
+            <p>
+              <span>{t('trading.send.review.total')}</span>
+              <b className="trd-num">
+                {total !== null ? `${formatAmount(total)} ${held ? held.token.symbol : ''}` : ''}
+                {totalUsd !== null
+                  ? `${total !== null ? ' · ' : ''}${formatUsd(totalUsd)}`
+                  : total === null
+                    ? '—'
+                    : ''}
+              </b>
+            </p>
+          </section>
         ) : null}
 
         <button

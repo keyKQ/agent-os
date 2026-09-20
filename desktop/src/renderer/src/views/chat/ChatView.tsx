@@ -213,7 +213,7 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
   const onFocusApproval = useCallback((id: string | null) => {
     if (id) setFocusOrderId(id)
   }, [])
-  const ledger = useTradeLedger(onFocusApproval)
+  const ledger = useTradeLedger(onFocusApproval, sessionKey)
 
   const {
     containerRef,
@@ -497,9 +497,31 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
     [send, desk],
   )
   const deskSubmitText = useCallback((text: string) => void onComposerSend(text), [onComposerSend])
+  // While a turn streams a direct send is dropped, so a message the agent
+  // must read (a rejection reason) is queued for the next turn instead. The
+  // queue clears the composer on enqueue; the user's draft is put back.
+  const deskQueueText = useCallback(
+    (text: string) => {
+      const draft = composerHandleRef.current?.getValue() ?? ''
+      const atts = attachments.attachments
+      const intent = pendingIntentRef.current
+      const queued = pending.enqueue(
+        { text, attachments: [], intent: null },
+        { toastMessage: t('trading.chat.queuedForAgent') },
+      )
+      if (queued) {
+        composerHandleRef.current?.setValue(draft)
+        setComposerValue(draft)
+        attachments.setAll(atts)
+        pendingIntentRef.current = intent
+      }
+    },
+    [attachments, pending],
+  )
   const instruments = useDeskInstruments(desk, {
     sessionKey,
     sendText: deskSendText,
+    queueText: deskQueueText,
     submitText: deskSubmitText,
     busy,
     composerValue,

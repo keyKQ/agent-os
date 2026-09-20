@@ -1,4 +1,4 @@
-import { ArrowDown, TriangleAlert } from 'lucide-react'
+import { ArrowDown, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
@@ -20,14 +20,25 @@ import { Sheet } from './parts'
 import { QuoteWarnings } from './SwapPanel'
 import { providerLabel, type Order, type Quote, type Token, type Wallet } from './types'
 
+const timeFmt = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
 /**
  * The only door a swap leaves through. Restates both legs, the wallet, the
  * facts; above 1,000 USD it asks for the amount to be typed again; a price
  * older than its window must be refreshed before Swap now enables.
+ *
+ * The quote is frozen when the sheet opens: the panel behind keeps
+ * re-quoting every 15 s, and the numbers a person reads must be the ones
+ * they retype against. "Refresh quote" (and the stale-price refresh) adopt
+ * the next answer; nothing else changes them.
  */
 export function ConfirmSwap({
-  quote,
-  fetchedAt,
+  quote: liveQuote,
+  fetchedAt: liveFetchedAt,
   wallet,
   tokenIn,
   tokenOut,
@@ -54,6 +65,24 @@ export function ConfirmSwap({
   onSent: (orders: Order[]) => void
 }) {
   const now = useNow(1000)
+  const [frozen, setFrozen] = useState({ quote: liveQuote, fetchedAt: liveFetchedAt })
+  // A refresh was asked for: the next live quote that lands is adopted
+  // (state adjusted during render, as React prescribes for derived state).
+  const [adopting, setAdopting] = useState(false)
+  if (
+    adopting &&
+    !refreshing &&
+    (liveQuote !== frozen.quote || liveFetchedAt !== frozen.fetchedAt)
+  ) {
+    setFrozen({ quote: liveQuote, fetchedAt: liveFetchedAt })
+    setAdopting(false)
+  }
+  function refresh() {
+    setAdopting(true)
+    onRefresh()
+  }
+  const quote = frozen.quote
+  const fetchedAt = frozen.fetchedAt
   const stale = quoteCountdown(fetchedAt, now).expired
   const retype = needsRetype(quote.valueUsd)
   const [typed, setTyped] = useState('')
@@ -112,7 +141,7 @@ export function ConfirmSwap({
             <Button
               variant="primary"
               disabled={refreshing}
-              onClick={onRefresh}
+              onClick={refresh}
               data-testid="confirm-refresh"
             >
               {t('trading.swap.requote')}
@@ -174,6 +203,28 @@ export function ConfirmSwap({
         <div className="trd-fact">
           <span>{t('trading.swap.slippage')}</span>
           <b>{formatPct(quote.slippagePct)}</b>
+        </div>
+        <div className="trd-fact">
+          <span>{t('trading.confirm.quoteAsOf')}</span>
+          <b>
+            {fetchedAt ? timeFmt.format(fetchedAt) : '–'}
+            <Button
+              variant="ghost"
+              className="ml-2"
+              disabled={refreshing || swap.isPending}
+              onClick={refresh}
+              aria-label={t('trading.confirm.refreshQuote')}
+              title={t('trading.confirm.refreshQuote')}
+              data-testid="confirm-refresh-quote"
+            >
+              <RefreshCw
+                className={refreshing ? 'size-3 animate-spin' : 'size-3'}
+                strokeWidth={1.75}
+                aria-hidden
+              />
+              {t('trading.confirm.refreshQuote')}
+            </Button>
+          </b>
         </div>
       </div>
 

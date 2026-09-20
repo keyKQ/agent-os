@@ -16,7 +16,7 @@ import {
 } from '~/stores/trading'
 import { useUi } from '~/stores/ui'
 import { sameAddress } from '../logic'
-import { DEFAULT_PROVIDER, type ProviderId } from '../types'
+import { DEFAULT_PROVIDER, type Order, type ProviderId } from '../types'
 import { WalletSheet, type WalletSheetMode } from '../WalletSheet'
 import { Book } from './Book'
 import { bookConcession } from './desk-logic'
@@ -151,6 +151,35 @@ export function useDeskFrame(input: {
     [setBookTab, setBookOpen],
   )
 
+  // The chat's reject path, lent to the BOOK: a rejection from the Orders
+  // tab then tells the agent why, the same as one from the card.
+  const rejectRef = useRef<((order: Order, reason: string) => void) | null>(null)
+  const bindReject = useCallback((fn: ((order: Order, reason: string) => void) | null) => {
+    rejectRef.current = fn
+  }, [])
+  const rejectFromBook = useCallback(
+    (order: Order): boolean => {
+      const fn = rejectRef.current
+      // Only this desk's own orders get the message; another session's agent
+      // would never read it here.
+      if (!fn || order.sessionKey !== sessionKey) return false
+      fn(order, '')
+      return true
+    },
+    [sessionKey],
+  )
+
+  // "Start fresh" mints a new session key, and missions are filed by key: a
+  // mission left enabled on the old key would keep trading, unseen. Every
+  // active mission is paused first; if one refuses, the desk stays here.
+  const { startFresh: mintFresh } = session
+  const { pauseAll } = missions
+  const startFresh = useCallback(() => {
+    void pauseAll().then((ok) => {
+      if (ok) mintFresh()
+    })
+  }, [pauseAll, mintFresh])
+
   if (!active) {
     return {
       strip: <StatusStrip mode={mode} onSwitchMode={onSwitchMode} />,
@@ -249,10 +278,11 @@ export function useDeskFrame(input: {
     gate: { needsKey, provider },
     missions,
     onFirstSend: session.ensureFiled,
-    onStartFresh: session.startFresh,
+    onStartFresh: startFresh,
     onOpenBookTab: openBookTab,
     onStreaming: setStreaming,
     onSessionPending: reportPending,
+    onBindReject: bindReject,
   }
 
   return {
@@ -289,6 +319,7 @@ export function useDeskFrame(input: {
         onOpenSettings={() => openSettings('trading')}
         highlightOrder={null}
         entering={entering}
+        onReject={rejectFromBook}
       />
     ) : null,
     fullDesk,

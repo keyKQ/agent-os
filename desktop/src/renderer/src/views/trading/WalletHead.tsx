@@ -82,9 +82,8 @@ export function WalletHead({
           aria-expanded={switcher}
           aria-label={t('trading.head.switch')}
           data-testid="wallet-switcher"
-          // With one wallet there is nothing to switch to: the mark and the
-          // address stay, the affordance to open a one-row menu does not.
-          disabled={!many}
+          // Even with one wallet the menu is where Create, Import and Manage
+          // live, so it always opens; only the "all" row needs a second wallet.
           onClick={() => setSwitcher((v) => !v)}
         >
           {wallet ? (
@@ -109,7 +108,7 @@ export function WalletHead({
                   aria-label={t('trading.rail.primary')}
                 />
               ) : null}
-              {many ? <ChevronDown className="size-3.5" strokeWidth={2} aria-hidden /> : null}
+              <ChevronDown className="size-3.5" strokeWidth={2} aria-hidden />
             </span>
             <span className="trd-head__sub">
               {wallet ? walletLabel(wallet) : `${wallets.length} ${t('trading.head.wallets')}`}
@@ -119,14 +118,18 @@ export function WalletHead({
 
         {switcher ? (
           <Menu onClose={() => setSwitcher(false)} align="start" label={t('trading.head.switch')}>
-            <MenuItem
-              role="menuitemradio"
-              checked={selected === 'all'}
-              label={t('trading.rail.all')}
-              aside={<span className="trd-mono">{formatUsd(allUsd, { compact: true })}</span>}
-              onSelect={() => onSelect('all')}
-            />
-            <MenuSep />
+            {many ? (
+              <>
+                <MenuItem
+                  role="menuitemradio"
+                  checked={selected === 'all'}
+                  label={t('trading.rail.all')}
+                  aside={<span className="trd-mono">{formatUsd(allUsd, { compact: true })}</span>}
+                  onSelect={() => onSelect('all')}
+                />
+                <MenuSep />
+              </>
+            ) : null}
             {wallets.map((w) => {
               const tt = totals.get(w.address.toLowerCase())
               return (

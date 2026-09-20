@@ -10,10 +10,13 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+import { useCallback, useState } from 'react'
+import { useRpc } from '@/app/providers'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import {
+  errorText,
   formatAmount,
   formatAmountCompact,
   formatUsd,
@@ -22,7 +25,7 @@ import {
   shortAddress,
   formatUsdCell,
 } from './logic'
-import { Empty, Skeleton } from './parts'
+import { Empty, ErrorState, Skeleton } from './parts'
 import type { Entry, EntryKind } from './types'
 
 const GLYPH: Record<EntryKind, LucideIcon> = {
@@ -63,12 +66,29 @@ export function History({
   loading,
   now,
   showWallet,
+  error,
+  onRetry,
+  nextBefore = null,
+  wallet,
+  chainId,
 }: {
   entries: Entry[]
   loading: boolean
   now: number
   showWallet: boolean
+  /** The first page failed: shown instead of "no activity". */
+  error?: unknown
+  onRetry?: () => void
+  /** The engine's cursor for the page after `entries`; null when there is none. */
+  nextBefore?: number | null
+  /** The same filter the first page was read with, so the next pages match. */
+  wallet?: string
+  chainId?: number
 }) {
+  const more = useMoreHistory(wallet, chainId)
+  if (error && entries.length === 0) {
+    return <ErrorState error={error} onRetry={onRetry ?? (() => {})} />
+  }
   if (loading && entries.length === 0) {
     return (
       <div>
@@ -102,9 +122,14 @@ export function History({
       />
     )
   }
+  // The first page refetches on its own clock; the pages after it are pinned
+  // until the filter changes. An entry that moved between pages shows once.
+  const seen = new Set(entries.map((e) => e.id))
+  const all = [...entries, ...more.entries.filter((e) => !seen.has(e.id))]
+  const cursor = more.nextBefore === undefined ? nextBefore : more.nextBefore
   return (
     <div aria-label={t('trading.tab.history')}>
-      {groupEntriesByDay(entries).map((group) => (
+      {groupEntriesByDay(all).map((group) => (
         <div key={group.day}>
           <div className="trd-day">{dayLabel(group.day, now)}</div>
           {group.entries.map((e) => (
@@ -112,31 +137,127 @@ export function History({
           ))}
         </div>
       ))}
+      {cursor !== null ? (
+        <div className="trd-history__more">
+          {more.error ? <span className="trd-send__error">{errorText(more.error)}</span> : null}
+          <Button
+            variant="secondary"
+            disabled={more.loading}
+            onClick={() => void more.load(cursor)}
+            data-testid="history-more"
+          >
+            {more.loading ? t('trading.history.loading') : t('trading.history.more')}
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
+}
+
+/**
+ * The pages after the first. `useHistory` reads one page with no cursor, so
+ * the rest are read here with `before`, and dropped when the filter moves.
+ */
+interface MorePages {
+  key: string
+  entries: Entry[]
+  /** undefined = not paged yet: the first page's own cursor still applies. */
+  nextBefore: number | null | undefined
+  loading: boolean
+  error: unknown
+}
+
+const NO_PAGES: MorePages = {
+  key: '',
+  entries: [],
+  nextBefore: undefined,
+  loading: false,
+  error: null,
+}
+
+function useMoreHistory(wallet: string | undefined, chainId: number | undefined) {
+  const rpc = useRpc()
+  const [state, setState] = useState<MorePages>(NO_PAGES)
+  const key = `${wallet ?? 'all'}:${chainId ?? 'all'}`
+  const live = state.key === key ? state : NO_PAGES
+  const load = useCallback(
+    async (before: number) => {
+      setState({ ...live, key, loading: true, error: null })
+      try {
+        await rpc.waitForConnection()
+        const page = await rpc.call<{ entries?: Entry[]; nextBefore?: number | null }>(
+          'trading.history',
+          {
+            ...(wallet ? { wallet } : {}),
+            ...(chainId ? { chainId } : {}),
+            before,
+            limit: 100,
+          },
+        )
+        setState({
+          key,
+          entries: [...live.entries, ...(page.entries ?? [])],
+          nextBefore: page.nextBefore ?? null,
+          loading: false,
+          error: null,
+        })
+      } catch (err) {
+        setState({ ...live, key, loading: false, error: err })
+      }
+    },
+    [rpc, wallet, chainId, key, live],
+  )
+  return { ...live, load }
+}
+
+/**
+ * An approval entry whose amount is zero set an allowance to nothing: a
+ * revoke. The ledger keeps the kind; the row says what it was.
+ */
+export function isRevokeEntry(entry: Pick<Entry, 'kind' | 'amountIn'>): boolean {
+  return entry.kind === 'approval' && entry.amountIn !== null && Number(entry.amountIn) === 0
+}
+
+/** The spender a revoke entry's engine note names ("revoked Permit2"), if any. */
+export function revokedSpender(note: string | null): string | null {
+  const m = /^revoked (.+)$/.exec((note ?? '').trim())
+  return m?.[1] ?? null
 }
 
 function EntryRow({ entry, showWallet }: { entry: Entry; showWallet: boolean }) {
   const Glyph = GLYPH[entry.kind]
   const by = initiatorKey(entry.initiator)
-  // The chain leads the sub-line as a mark, so the rest stays plain text.
-  const sub = [showWallet ? shortAddress(entry.wallet) : null, entry.note]
+  const revoke = isRevokeEntry(entry)
+  const spender = revoke ? revokedSpender(entry.note) : null
+  // The chain leads the sub-line as a mark, so the rest stays plain text. A
+  // revoke names its spender there in place of the engine's note.
+  const sub = [showWallet ? shortAddress(entry.wallet) : null, spender ?? entry.note]
     .filter(Boolean)
     .join(' · ')
   return (
-    <div className="trd-entry" data-testid="history-entry" data-kind={entry.kind}>
+    <div
+      className="trd-entry"
+      data-testid="history-entry"
+      data-kind={entry.kind}
+      data-revoke={revoke || undefined}
+    >
       <span className="trd-entry__glyph" data-kind={entry.kind} aria-hidden>
         <Glyph className="size-3.5" strokeWidth={1.75} />
       </span>
       <span className="trd-entry__what">
-        <span className="trd-entry__kind">{t(`trading.history.kind.${entry.kind}`)}</span>
+        <span className="trd-entry__kind">
+          {revoke ? t('trading.history.kind.revoke') : t(`trading.history.kind.${entry.kind}`)}
+        </span>
         <span className="trd-entry__sub">
           <ChainBadge chainId={entry.chainId} />
           {sub ? ` · ${sub}` : ''}
         </span>
       </span>
       <span className="trd-entry__legs">
-        {entry.tokenIn && entry.amountIn ? (
+        {revoke && entry.tokenIn ? (
+          // Nothing left the wallet: the token alone, no "−0".
+          <span className="trd-entry__out">{entry.tokenIn.symbol}</span>
+        ) : entry.tokenIn && entry.amountIn ? (
           <span className="trd-entry__out" title={formatAmount(entry.amountIn, 18)}>
             −{formatAmountCompact(entry.amountIn)} {entry.tokenIn.symbol}
           </span>

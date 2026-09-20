@@ -1,10 +1,16 @@
-"""``agentos trade`` — quotes, swaps, orders, history and PnL from the terminal.
+"""``agentos trade`` — quotes, swaps, sends, allowances, orders, history and PnL.
 
-A thin client over the gateway's ``trading.*`` RPCs. Every swap goes through
-the engine's guardrails: a swap initiated *as the agent* (``--as-agent``, or
-``AGENTOS_SESSION_KEY``/``AGENTOS_AGENT`` set in the environment, which is how
-the ``wallet-trading`` skill runs) is subject to the per-order approval
-threshold and the per-wallet daily cap; a swap typed by a person is not.
+A thin client over the gateway's ``trading.*`` RPCs. Every order goes through
+the engine's guardrails, and the *gateway* decides who is asking: a shell
+spawned by an agent turn carries ``AGENTOS_AGENT_TOKEN`` (minted by the shell
+tool, presented at the handshake by ``gateway_rpc``), and any connection opened
+while an agent shell is running counts as the agent's (see
+``agentos.gateway.agent_surface``). An agent-bound connection is the agent
+whatever it declares: its swaps obey the per-order approval threshold and the
+per-wallet daily cap, and its sends and revokes always park for the user's
+approval. ``--as-agent`` (or ``AGENTOS_SESSION_KEY``/``AGENTOS_AGENT`` in the
+environment) only lets a person opt *into* the agent rules; it cannot opt an
+agent out of them.
 """
 
 from __future__ import annotations
@@ -32,7 +38,12 @@ from agentos.cli.wallet_cmd import (
     token_symbol,
 )
 
-app = typer.Typer(help="Swap tokens, track orders, history and PnL.")
+app = typer.Typer(
+    help=(
+        "Swap and send tokens, review and revoke allowances, decode transactions, "
+        "check the network, and track orders, history and PnL."
+    )
+)
 
 AGENT_ENV_MARKERS = ("AGENTOS_SESSION_KEY", "AGENTOS_AGENT")
 PROVIDERS: dict[str, str] = {"aggregator": "AgentOS Aggregator", "uniswap": "Uniswap"}
@@ -886,7 +897,9 @@ def trade_revoke(
     wallet: str | None = typer.Option(None, "--wallet", help="Wallet address (default primary)"),
     note: str | None = typer.Option(None, "--note", help="Why (kept in history)"),
     wait: bool = typer.Option(False, "--wait", help="Block until the revoke settles"),
-    wait_seconds: int = typer.Option(300, "--wait-seconds", min=1, max=900),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Set an ERC-20 allowance to zero. From an agent turn this queues for the user's approval."""
@@ -1119,7 +1132,9 @@ def trade_orders(
 def trade_order(
     order_id: str = typer.Argument(..., help="Order id"),
     wait: bool = typer.Option(False, "--wait", help="Block until the order settles"),
-    wait_seconds: int = typer.Option(300, "--wait-seconds", min=1, max=900),
+    wait_seconds: int = typer.Option(
+        300, "--wait-seconds", help="How long --wait blocks", min=1, max=900
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
     """Show one order, optionally waiting for it to settle."""
@@ -1144,7 +1159,11 @@ def trade_approve(
     order_id: str = typer.Argument(..., help="Order id awaiting approval"),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
 ) -> None:
-    """Approve an order the agent queued above the threshold."""
+    """Approve a parked agent order.
+
+    Agent swaps park above the approval threshold or the price-impact ceiling,
+    or when the engine cannot price them; agent sends and revokes always park.
+    """
 
     async def _run(client):
         return await client.call("trading.orders.approve", {"orderId": order_id})
@@ -1369,6 +1388,6 @@ def trade_limits(
     table.add_column("Value", justify="right")
     table.add_row("daily cap", money(result.get("dailyCapUsd")))
     table.add_row("spent today", money(result.get("spentTodayUsd")))
-    table.add_row("approval threshold", money(result.get("thresholdUsd")))
+    table.add_row("approval threshold", money(result.get("approvalThresholdUsd")))
     table.add_row("approval TTL", f"{result.get('approvalTtlSeconds', '—')} s")
     console.print(table)

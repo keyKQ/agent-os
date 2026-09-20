@@ -9,7 +9,7 @@ Selling consumes lots oldest-first and realises proceeds minus cost.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 
 @dataclass
@@ -51,7 +51,19 @@ def to_human(amount_raw: int, decimals: int) -> Decimal:
 
 
 def to_raw(amount: str | Decimal | float | int, decimals: int) -> int:
-    value = Decimal(str(amount))
+    """Human amount to base units, rounding down.
+
+    Anything that is not a finite, non-negative number is a ``ValueError`` —
+    the one error the callers turn into "invalid input". ``Decimal`` would
+    otherwise accept ``"NaN"`` and ``"Infinity"`` and blow up later, in the
+    comparison or the ``int()``, with errors nobody maps.
+    """
+    try:
+        value = Decimal(str(amount))
+    except InvalidOperation as exc:
+        raise ValueError(f"amount is not a number: {amount!r}") from exc
+    if not value.is_finite():
+        raise ValueError(f"amount is not a finite number: {amount!r}")
     if value < 0:
         raise ValueError("amount must be positive")
     scaled = value * (Decimal(10) ** decimals)

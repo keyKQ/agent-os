@@ -250,6 +250,53 @@ export function useOrders(
   return { ...query, orders, pendingApprovals: query.data?.pendingApprovals ?? 0 }
 }
 
+interface BatchResult {
+  orders?: Order[]
+  batchId?: string
+}
+
+const NO_BATCHES: ReadonlyMap<string, Order[]> = new Map()
+
+/**
+ * Every leg of each multisend named, keyed by batch id. The orders page is a
+ * window over the newest orders, and a batch's legs can fall on both sides of
+ * its edge — while the engine decides every awaiting leg as one. A card must
+ * therefore be built from the batch, not from the page. Keys start with
+ * `trading`, so the event listener refreshes these with everything else.
+ */
+export function useBatchLegs(
+  batchIds: readonly string[],
+  enabled = true,
+): ReadonlyMap<string, Order[]> {
+  const rpc = useRpc()
+  const connected = useConnected()
+  const results = useQueries({
+    queries: batchIds.map((batchId) => ({
+      queryKey: ['trading', 'batch', batchId] as const,
+      enabled: connected && enabled,
+      queryFn: async () => {
+        await rpc.waitForConnection()
+        return rpc.call<BatchResult>('trading.orders.batch', { batchId })
+      },
+      refetchInterval: 15_000,
+      placeholderData: (prev: BatchResult | undefined) => prev,
+    })),
+  })
+  // `results` is a new array every render; the stamps are what changes.
+  const stamps = results.map((r) => r.dataUpdatedAt).join(',')
+  const ids = batchIds.join(',')
+  return useMemo(() => {
+    if (batchIds.length === 0) return NO_BATCHES
+    const map = new Map<string, Order[]>()
+    results.forEach((r, i) => {
+      const id = batchIds[i]
+      if (id && r.data?.orders) map.set(id, r.data.orders)
+    })
+    return map
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stamps, ids])
+}
+
 /** The number on the sidebar badge. Cheap: one small query, event-driven. */
 export function usePendingApprovals(enabled = true): number {
   const { pendingApprovals, orders } = useOrders('awaiting_approval', enabled, 20)

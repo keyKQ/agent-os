@@ -104,6 +104,27 @@ class TestTokenCurator:
         state["now"] += 24 * 3600
         assert await curator.review(BASE, JUNK) is False
 
+    async def test_daily_recheck_hides_a_shown_token_whose_pool_drained(
+        self, ledger: Ledger, stack
+    ) -> None:
+        """Seen live on Base: a SEED lookalike airdrop kept a pool for its first
+        look, then drained it to $0.05 — and stayed on the screen at a made-up
+        price, because only hidden tokens were ever looked at again."""
+        curator, state = stack
+        _add(ledger, JUNK)
+        state["prices"].spot[("base", JUNK)] = 0.678  # a real pool, for now
+        assert await curator.review(BASE, JUNK) is False
+        # The pool is pulled an hour later: not due yet, still shown.
+        del state["prices"].spot[("base", JUNK)]
+        state["now"] += 3600
+        assert await curator.review(BASE, JUNK) is False
+        # A day after the first verdict it is looked at again, and hidden.
+        state["now"] += 24 * 3600
+        assert await curator.review(BASE, JUNK) is True
+        row = ledger.get_token(8453, JUNK)
+        assert row and row["hidden"] == 1 and row["hidden_by"] == "auto"
+        assert row["classified_at"] == state["now"]
+
     async def test_user_choice_is_final(self, ledger: Ledger, stack) -> None:
         curator, state = stack
         _add(ledger, USDC)

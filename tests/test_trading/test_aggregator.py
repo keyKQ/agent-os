@@ -16,8 +16,10 @@ import pytest
 
 import agentos.trading.service as service_module
 from agentos.trading.aggregator import (
+    ALLOWANCE_HOLDER,
     MAX_SLIPPAGE_BPS,
     NATIVE_SENTINEL,
+    TRUSTED_SPENDERS,
     AggregatorClient,
     AggregatorProvider,
     slippage_to_bps,
@@ -33,9 +35,11 @@ from agentos.trading.service import TradingService
 from tests.test_trading.fakes import (
     ROUTER,
     USDC,
+    WALLET,
     WETH,
     FakeAggregator,
     FakeChain,
+    approve_calldata,
     decode_fake_raw,
 )
 from tests.test_trading.test_service import _wire_swap_effects
@@ -43,6 +47,31 @@ from tests.test_trading.test_service import _wire_swap_effects
 
 def _provider(http) -> AggregatorProvider:
     return AggregatorProvider(AggregatorClient(http=http))
+
+
+def _quote_body(*, spender: str, target: str, approve_amount: int, amount_needed: int) -> dict:
+    """A minimal ``/v1/quote`` body with an approval, for the parser alone."""
+    return {
+        "chainId": 8453,
+        "sellToken": {"address": USDC, "symbol": "USDC", "decimals": 6},
+        "buyToken": {"address": WETH, "symbol": "WETH", "decimals": 18},
+        "sellAmount": {"raw": "1000000"},
+        "buyAmount": {"raw": "5000000000000000"},
+        "minBuyAmount": {"raw": "4975000000000000"},
+        "liquidityAvailable": True,
+        "approval": {
+            "required": True,
+            "token": USDC,
+            "spender": spender,
+            "amountNeeded": str(amount_needed),
+            "transaction": {
+                "to": USDC,
+                "data": approve_calldata(spender, approve_amount),
+                "value": "0",
+            },
+        },
+        "transaction": {"to": target, "data": "0x2213bc0b" + "22" * 32, "value": "0"},
+    }
 
 
 class TestRegistry:
@@ -215,6 +244,7 @@ class TestApprovalIntegrity:
         contract is rejected while parsing — before any of it can be signed.
         """
         fake_aggregator.approval_needed = True
+        fake_aggregator.tx_to = ALLOWANCE_HOLDER
         fake_aggregator.approval_spender = "0x000000000000000000000000000000000000dEaD"
         with pytest.raises(ProviderError) as info:
             await _provider(http).quote(
@@ -229,10 +259,77 @@ class TestApprovalIntegrity:
         assert info.value.code == "trading.tx_failed"
         assert "refusing to sign" in str(info.value)
 
+    async def test_a_response_that_agrees_with_itself_is_not_thereby_trusted(
+        self, http, fake_aggregator: FakeAggregator
+    ) -> None:
+        """Spender == target is necessary, not sufficient.
+
+        The trusted set used to be read off the response, so a response
+        approving any contract and sending the swap to that same contract
+        passed every check. The set is pinned now: a consistent response
+        naming a contract this desk does not know is refused all the same.
+        """
+        foreign = "0x000000000000000000000000000000000000dEaD"
+        fake_aggregator.approval_needed = True
+        fake_aggregator.tx_to = foreign
+        fake_aggregator.approval_spender = foreign
+        provider = _provider(http)
+        with pytest.raises(ProviderError) as info:
+            await provider.quote(
+                chain=BASE,
+                swapper="0x1111111111111111111111111111111111111111",
+                token_in=USDC,
+                token_out=WETH,
+                amount_raw=10**6,
+                slippage_pct=None,
+                decision_origin="human_mediated",
+            )
+        assert info.value.code == "trading.tx_failed"
+        assert "not a contract this desk trusts" in str(info.value)
+        assert TRUSTED_SPENDERS == frozenset({ALLOWANCE_HOLDER})
+        assert foreign.lower() not in TRUSTED_SPENDERS
+
+    def test_a_trusted_spender_that_is_not_the_swap_target_is_refused(self, http) -> None:
+        client = AggregatorClient(http=http)
+        body = _quote_body(
+            spender=ALLOWANCE_HOLDER, target=ROUTER, approve_amount=10**6, amount_needed=10**6
+        )
+        with pytest.raises(ProviderError) as info:
+            client._parse_quote(body, chain=BASE, taker=WALLET, amount_raw=10**6)
+        assert "but the swap is sent to" in str(info.value)
+
+    @pytest.mark.parametrize("unlimited", [2**256 - 1, 2**255, 2**96 - 1])
+    def test_an_unlimited_approval_is_refused(self, http, unlimited: int) -> None:
+        """The API approves what the order needs; anything unlimited is not it."""
+        client = AggregatorClient(http=http)
+        # Either field may carry the bad number: the calldata is what gets signed,
+        # amountNeeded is what the API claims.
+        for amount_needed, approve_amount in ((unlimited, 10**6), (10**6, unlimited)):
+            body = _quote_body(
+                spender=ALLOWANCE_HOLDER,
+                target=ALLOWANCE_HOLDER,
+                approve_amount=approve_amount,
+                amount_needed=amount_needed,
+            )
+            with pytest.raises(ProviderError) as info:
+                client._parse_quote(body, chain=BASE, taker=WALLET, amount_raw=10**6)
+            assert info.value.code == "trading.tx_failed"
+            assert "unlimited" in str(info.value)
+        # And exactly the order's amount passes.
+        body = _quote_body(
+            spender=ALLOWANCE_HOLDER,
+            target=ALLOWANCE_HOLDER,
+            approve_amount=10**6,
+            amount_needed=10**6,
+        )
+        parsed = client._parse_quote(body, chain=BASE, taker=WALLET, amount_raw=10**6)
+        assert parsed.approval is not None and parsed.spender == ALLOWANCE_HOLDER
+
     async def test_the_approval_comes_from_the_quote_not_a_second_call(
         self, http, fake_aggregator: FakeAggregator
     ) -> None:
         fake_aggregator.approval_needed = True
+        fake_aggregator.tx_to = ALLOWANCE_HOLDER
         provider = _provider(http)
         quote = await provider.quote(
             chain=BASE,
@@ -248,8 +345,10 @@ class TestApprovalIntegrity:
         assert len(fake_aggregator.requests) == before  # no round trip
         assert approval is not None
         assert approval["to"] == USDC and approval["value"] == "0"
-        assert provider.trusted_spenders(BASE, quote) == frozenset({ROUTER.lower()})
-        # And the spender it approves is the one the service will allow.
+        # The set the service checks against is the module's constant, not
+        # whatever the response named.
+        assert provider.trusted_spenders(BASE, quote) == TRUSTED_SPENDERS
+        assert provider.trusted_spenders(BASE, quote) == frozenset({ALLOWANCE_HOLDER})
         spender = "0x" + approval["data"][10 + 24 : 10 + 64]
         assert spender.lower() in provider.trusted_spenders(BASE, quote)
 
@@ -337,6 +436,7 @@ class TestThroughTheService:
         assert service.provider_id() == "aggregator"
         wallet = service.test_wallet  # type: ignore[attr-defined]
         fake_aggregator.approval_needed = True
+        fake_aggregator.tx_to = ALLOWANCE_HOLDER  # what the live API sends the swap to
         _wire_swap_effects(base_chain, wallet, out_token=WETH, out_amount=5 * 10**15)
         orders = await service.swap(
             chain=BASE,
@@ -361,7 +461,7 @@ class TestThroughTheService:
         approval_tx = decode_fake_raw(base_chain.sent[0])
         swap_tx = decode_fake_raw(base_chain.sent[1])
         assert approval_tx["to"].lower() == USDC
-        assert swap_tx["to"].lower() == ROUTER and swap_tx["value"] == 0
+        assert swap_tx["to"].lower() == ALLOWANCE_HOLDER and swap_tx["value"] == 0
         # Uniswap was never consulted.
         assert fake_uniswap.requests == []
         # And the calldata went out byte for byte as the aggregator sent it.
@@ -555,6 +655,7 @@ class TestSigning:
         service = funded_service
         wallet = service.test_wallet  # type: ignore[attr-defined]
         fake_aggregator.approval_needed = True
+        fake_aggregator.tx_to = ALLOWANCE_HOLDER
         _wire_swap_effects(base_chain, wallet, out_token=WETH, out_amount=5 * 10**15)
 
         lagging = {"reads": 0}

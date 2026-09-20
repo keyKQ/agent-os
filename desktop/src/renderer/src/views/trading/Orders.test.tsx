@@ -50,10 +50,64 @@ describe('Orders · approvals', () => {
     expect(rows[0]).toHaveTextContent('Agent')
     expect(rows[0]).toHaveTextContent('Note: DCA')
 
-    fireEvent.click(screen.getByTestId('order-approve'))
+    // $500 sits on the chat card's high-risk line: Approve arms first here too.
+    const approve = screen.getByTestId('order-approve')
+    fireEvent.click(approve)
+    expect(approve).toHaveTextContent('Click again to approve')
+    expect(onDecide).not.toHaveBeenCalled()
+    fireEvent.click(approve)
     expect(onDecide).toHaveBeenCalledWith(waiting, true)
     fireEvent.click(screen.getByTestId('order-reject'))
     expect(onDecide).toHaveBeenCalledWith(waiting, false)
+  })
+
+  it('approves a small order in one click, and lets an armed one relax', () => {
+    vi.useFakeTimers()
+    const onDecide = vi.fn()
+    const small = order({ orderId: 's1', valueUsd: 40 })
+    const big = order({ orderId: 'b1', valueUsd: 5000 })
+    renderDesk(
+      <Orders
+        orders={[small, big]}
+        approvalsOnly
+        deciding={null}
+        onDecide={onDecide}
+        showWallet={false}
+        highlight={null}
+      />,
+    )
+    const [approveSmall, approveBig] = screen.getAllByTestId('order-approve')
+    fireEvent.click(approveSmall!)
+    expect(onDecide).toHaveBeenCalledWith(small, true)
+    fireEvent.click(approveBig!)
+    expect(approveBig).toHaveAttribute('data-armed', 'true')
+    act(() => {
+      vi.advanceTimersByTime(4100)
+    })
+    expect(approveBig).not.toHaveAttribute('data-armed')
+    expect(approveBig).toHaveTextContent('Approve')
+    expect(onDecide).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('says the list could not be read, with a retry, instead of "no orders"', () => {
+    const onRetry = vi.fn()
+    renderDesk(
+      <Orders
+        orders={[]}
+        approvalsOnly={false}
+        deciding={null}
+        onDecide={vi.fn()}
+        showWallet={false}
+        highlight={null}
+        error={new Error('socket closed')}
+        onRetry={onRetry}
+      />,
+    )
+    expect(screen.queryByText('No orders yet')).toBeNull()
+    expect(screen.getByText('socket closed')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('trading-error-retry'))
+    expect(onRetry).toHaveBeenCalled()
   })
 
   it('carries the trade, its value and the quiet facts on one row', () => {

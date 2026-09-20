@@ -190,7 +190,9 @@ class _FakeClient:
             "trading.limits": {
                 "dailyCapUsd": 1000,
                 "spentTodayUsd": 25,
-                "thresholdUsd": 100,
+                # The engine's key (service._limits_dict); a fixture faking a
+                # different name once hid a CLI that printed "—" for it.
+                "approvalThresholdUsd": 100,
                 "approvalTtlSeconds": 900,
             },
         }
@@ -688,6 +690,8 @@ def test_sync_and_limits(client: _FakeClient) -> None:
     ]
     assert "Full rebuild" in sync.output
     assert "$25.00" in limits.output
+    # The threshold must be printed, not a "—" from reading the wrong key.
+    assert "$100.00" in limits.output
 
 
 def test_every_command_supports_json(client: _FakeClient) -> None:

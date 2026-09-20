@@ -15,10 +15,13 @@ A token is hidden automatically when all three hold:
 3. The wallet never acted on it: never sold, sent, swapped or quoted it
    (``touched`` / spent). Junk only ever arrives.
 
-A hidden token is re-checked daily, so a real launch that gained a pool
-resurfaces on its own. A user's hide/show is final: the classifier never
-overrides ``hidden_by = 'user'``, and any deliberate act on a token (a
-quote, a swap) shows it again.
+Every unlisted, untouched token is re-checked daily, whichever way the last
+verdict went: a hidden one resurfaces when a real launch gains a pool, and a
+shown one is hidden once its pool drains — an airdrop that kept a shallow
+pool for a day and then pulled it would otherwise stay visible forever, at
+whatever price the empty pool still quotes. A user's hide/show is final: the
+classifier never overrides ``hidden_by = 'user'``, and any deliberate act on
+a token (a quote, a swap) shows it again.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ log = structlog.get_logger(__name__)
 
 # A pool shallower than this cannot be sold into; for trading it is no pool.
 MIN_LIQUIDITY_USD = 1_000.0
-# How often a hidden token is looked at again.
+# How often an unlisted, untouched token is looked at again (hidden or shown).
 RECLASSIFY_S = 24 * 3600.0
 
 
@@ -60,7 +63,10 @@ class TokenCurator:
         """Classify the token if it is due, and say whether it is hidden now.
 
         Cheap when nothing is due: two ledger reads. The price lookup runs
-        once when a token is first met and then daily while it stays hidden.
+        once when a token is first met and then daily for as long as the
+        token is neither listed nor touched — shown tokens included, so a
+        pool that drained after the first look does not keep the token (and
+        its fictional price) on the screen.
         """
         if is_native(address):
             return False
@@ -81,7 +87,7 @@ class TokenCurator:
         due = (
             force
             or classified_at is None
-            or (hidden and self._now() - float(classified_at) >= self.reclassify_s)
+            or self._now() - float(classified_at) >= self.reclassify_s
         )
         if not due:
             return hidden

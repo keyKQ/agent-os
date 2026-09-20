@@ -17,7 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
@@ -25,6 +25,7 @@ import { desktopApi } from '~/lib/desktop-api'
 import { shortAge } from '~/lib/relative-time'
 import { useNow } from '~/lib/use-now'
 import { useUnwrap } from '~/stores/trading'
+import { HIGH_RISK_USD } from './desk/desk-logic'
 import {
   approvalSecondsLeft,
   errorText,
@@ -39,8 +40,11 @@ import {
   orderTone,
   shortAddress,
 } from './logic'
-import { Empty } from './parts'
+import { Empty, ErrorState } from './parts'
 import { isWrappedEth, providerLabel, type Order, type OrderStatus } from './types'
+
+/** How long an armed Approve waits for its second click before it relaxes. */
+const ARM_RESET_MS = 4000
 
 /** One mark per state, so a column of rows is scannable before it is read. */
 const GLYPH: Record<OrderStatus, LucideIcon> = {
@@ -115,6 +119,8 @@ export function Orders({
   highlight,
   onHighlighted,
   onInspect,
+  error,
+  onRetry,
 }: {
   orders: Order[]
   approvalsOnly: boolean
@@ -127,10 +133,16 @@ export function Orders({
   onHighlighted?: () => void
   /** Open the decoder on this order's transaction. */
   onInspect?: (order: Order) => void
+  /** The list read failed: shown instead of "no orders". */
+  error?: unknown
+  onRetry?: () => void
 }) {
   // Approval timers count down by the second; nothing else on the page does.
   const now = useNow(1000)
   const rows = approvalsOnly ? orders.filter(isAwaitingApproval) : orders
+  if (error && orders.length === 0) {
+    return <ErrorState error={error} onRetry={onRetry ?? (() => {})} />
+  }
   if (rows.length === 0) {
     return approvalsOnly ? (
       <Empty
@@ -257,6 +269,23 @@ function OrderRow({
   }, [highlighted])
   const waiting = isAwaitingApproval(order)
   const left = waiting ? approvalSecondsLeft(order, now) : null
+  // Above the chat card's high-risk line, Approve here arms first too: the
+  // same order must not be one click in one place and two in another.
+  const highRisk = order.valueUsd !== null && order.valueUsd >= HIGH_RISK_USD
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const id = window.setTimeout(() => setArmed(false), ARM_RESET_MS)
+    return () => window.clearTimeout(id)
+  }, [armed])
+  function approve() {
+    if (highRisk && !armed) {
+      setArmed(true)
+      return
+    }
+    setArmed(false)
+    onDecide(order, true)
+  }
   const by = initiatorKey(order.initiator)
   const tone = orderTone(order.status)
   const Glyph = GLYPH[order.status]
@@ -381,10 +410,11 @@ function OrderRow({
             <Button
               variant="primary"
               disabled={deciding}
-              onClick={() => onDecide(order, true)}
+              onClick={approve}
+              data-armed={armed || undefined}
               data-testid="order-approve"
             >
-              {t('trading.approvals.approve')}
+              {armed ? t('trading.card.approveAgain') : t('trading.approvals.approve')}
             </Button>
           </div>
         </div>

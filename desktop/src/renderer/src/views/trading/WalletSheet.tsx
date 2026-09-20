@@ -12,7 +12,7 @@ import {
   TriangleAlert,
   Wallet as WalletIcon,
 } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { qrDataUrl } from '@/lib/qr'
 import { Button } from '~/components/ui/button'
@@ -225,6 +225,7 @@ function ManageSheet({
               wallet={w}
               totals={totalsByWallet.get(w.address.toLowerCase())}
               chains={chains}
+              locked={locked}
               onOpen={onOpen}
             />
           ))}
@@ -238,11 +239,14 @@ function ManageRow({
   wallet,
   totals,
   chains,
+  locked,
   onOpen,
 }: {
   wallet: Wallet
   totals: Totals | undefined
   chains: ChainStatus[]
+  /** Export and Remove need the vault open; the buttons say so rather than fail. */
+  locked: boolean
   onOpen: (m: WalletSheetMode) => void
 }) {
   const [copied, setCopied] = useState(false)
@@ -374,6 +378,8 @@ function ManageRow({
         <button
           type="button"
           className="trd-wman__act"
+          disabled={locked}
+          title={locked ? t('trading.sheet.manage.lockedAction') : undefined}
           onClick={() => onOpen({ kind: 'export', wallet })}
           data-testid="manage-export"
         >
@@ -383,6 +389,8 @@ function ManageRow({
         <button
           type="button"
           className="trd-wman__act trd-wman__act--danger"
+          disabled={locked}
+          title={locked ? t('trading.sheet.manage.lockedAction') : undefined}
           onClick={() => onOpen({ kind: 'remove', wallet })}
           data-testid="manage-remove"
         >
@@ -656,9 +664,12 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
                   method: 'wallet.import',
                   params:
                     kind === 'key'
-                      ? { label: label.trim() || 'Imported', privateKey: key.trim() }
+                      ? {
+                          label: label.trim() || t('trading.sheet.import.label.default'),
+                          privateKey: key.trim(),
+                        }
                       : {
-                          label: label.trim() || 'Imported',
+                          label: label.trim() || t('trading.sheet.import.label.default'),
                           keystoreJson: keystore.trim(),
                           keystorePassword: ksPassword,
                         },
@@ -729,7 +740,7 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
             type="password"
             autoComplete="off"
             spellCheck={false}
-            placeholder="0x…"
+            placeholder={t('trading.sheet.import.key.placeholder')}
             value={key}
             onChange={(e) => setKey(e.target.value)}
           />
@@ -743,7 +754,7 @@ function ImportSheet({ onClose }: { onClose: () => void }) {
               data-mono="true"
               rows={5}
               spellCheck={false}
-              placeholder='{"version":3,…}'
+              placeholder={t('trading.sheet.import.keystore.placeholder')}
               value={keystore}
               onChange={(e) => setKeystore(e.target.value)}
             />
@@ -832,25 +843,46 @@ function ExportSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
       },
     )
   }
+  // A copied key must not sit in the clipboard indefinitely. Best effort: a
+  // minute later, if the clipboard still holds exactly this secret, it is
+  // blanked; anything else pasted over it in the meantime is left alone.
+  const clearTimer = useRef<number | null>(null)
+  useEffect(
+    () => () => {
+      if (clearTimer.current !== null) window.clearTimeout(clearTimer.current)
+    },
+    [],
+  )
   async function copy() {
     if (!secret) return
     try {
       await navigator.clipboard.writeText(secret)
       setCopied(true)
-      toast.success(t('trading.sheet.export.copied'), { id: 'trd-export' })
+      toast.success(t('trading.sheet.export.clipboard'), { id: 'trd-export' })
+      if (clearTimer.current !== null) window.clearTimeout(clearTimer.current)
+      clearTimer.current = window.setTimeout(() => {
+        void clearClipboardIf(secret)
+      }, CLIPBOARD_CLEAR_MS)
     } catch {
       /* clipboard unavailable */
     }
   }
+  function close() {
+    setSecret(null)
+    onClose()
+  }
   return (
     <Sheet
       title={`${t('trading.sheet.export.title')} · ${walletLabel(wallet)}`}
-      onClose={onClose}
+      onClose={secret ? close : onClose}
       role="alertdialog"
       wide
       foot={
         secret ? (
           <>
+            <Button onClick={close} data-testid="export-close">
+              {t('trading.sheet.export.close')}
+            </Button>
             <Button onClick={() => setSecret(null)}>{t('trading.sheet.export.hide')}</Button>
             <Button variant="primary" onClick={() => void copy()} data-testid="export-copy">
               {copied ? (
@@ -935,10 +967,27 @@ function ExportSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
   )
 }
 
+/** How long a copied secret may sit in the clipboard before it is blanked. */
+export const CLIPBOARD_CLEAR_MS = 60_000
+
+/** Blank the clipboard only if it still holds `secret`; swallow every failure. */
+export async function clearClipboardIf(secret: string): Promise<void> {
+  try {
+    const current = await navigator.clipboard.readText()
+    if (current === secret) await navigator.clipboard.writeText('')
+  } catch {
+    /* clipboard unreadable: nothing to do */
+  }
+}
+
 function RemoveSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void }) {
   const id = useId()
   const [pw, setPw] = useState('')
   const m = useWalletMutation()
+  // What the key still controls: the one fact that should give pause.
+  const portfolio = usePortfolio(wallet.address, true)
+  const worth = portfolio.data?.totals?.valueUsd ?? null
+  const funded = worth !== null && worth >= 0.01
   return (
     <Sheet
       title={`${t('trading.sheet.remove.title')} · ${walletLabel(wallet)}`}
@@ -971,11 +1020,20 @@ function RemoveSheet({ wallet, onClose }: { wallet: Wallet; onClose: () => void 
         </>
       }
     >
-      <div className="trd-warn" role="alert">
+      <div className="trd-warn" role="alert" data-tone={funded ? 'danger' : undefined}>
         <TriangleAlert className="size-3.5" strokeWidth={2} aria-hidden />
-        <span>{t('trading.sheet.remove.body')}</span>
+        <span>
+          {t('trading.sheet.remove.body')}
+          {funded ? ` ${t('trading.sheet.remove.funded')}` : ''}
+        </span>
       </div>
       <p className="trd-mono text-[11.5px] text-muted-foreground">{wallet.address}</p>
+      <p className="trd-remove__worth" data-testid="remove-worth" data-funded={funded || undefined}>
+        <span>{t('trading.sheet.remove.worth')}</span>
+        <b>
+          <Money value={worth} />
+        </b>
+      </p>
       <Field id={id} label={t('trading.sheet.remove.password')}>
         <input
           id={id}

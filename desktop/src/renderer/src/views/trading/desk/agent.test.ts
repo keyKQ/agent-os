@@ -87,6 +87,28 @@ describe('tradingAgentFiles · reading an order', () => {
     expect(files['TOOLS.md']).toMatch(/Do not open it or run `--help`/)
     expect(files['SOUL.md']).toMatch(/Never ask the user to\s+confirm what they just said/)
   })
+  it('carries every trade command the agent may need, with real error codes', () => {
+    // AGENTS.md tells the agent not to open the skill, so TOOLS.md must
+    // list send, revoke, allowances, decode and network itself; and the
+    // engine never raised `trading.provider_blocked`.
+    const tools = files['TOOLS.md']
+    for (const cmd of [
+      'agentos trade send --chain base --token USDC --to 0xADDR --amount 25',
+      'agentos trade allowances',
+      'agentos trade revoke --chain base --token 0xTOKEN --spender 0xSPENDER',
+      'agentos trade decode --chain base 0xTXHASH',
+      'agentos trade network --json',
+      '--kind swap|send|revoke',
+    ]) {
+      expect(tools).toContain(cmd)
+    }
+    expect(tools).toMatch(/--to 0xADDR=10/)
+    expect(tools).toMatch(/a send \*\*always\*\* parks as `awaiting_approval`/)
+    expect(tools).toContain('`trading.provider`')
+    for (const name of Object.keys(files)) {
+      expect(files[name]).not.toContain('provider_blocked')
+    }
+  })
 })
 
 describe('syncTradingAgent', () => {

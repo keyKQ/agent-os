@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderDesk, WALLET } from './test-utils'
-import { WalletSheet } from './WalletSheet'
+import { CLIPBOARD_CLEAR_MS, clearClipboardIf, WalletSheet } from './WalletSheet'
 
 const rpcCall = vi.fn()
 vi.mock('@/app/providers', () => ({
@@ -115,6 +115,37 @@ describe('WalletSheet', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('0xdeadbeef'))
   })
 
+  it('blanks the clipboard a minute after the copy if the key is still there, and closes clean', async () => {
+    rpcCall.mockResolvedValue({ privateKey: '0xdeadbeef' })
+    const writeText = vi.fn(async () => {})
+    const readText = vi.fn(async () => '0xdeadbeef')
+    Object.assign(navigator, { clipboard: { writeText, readText } })
+    const onClose = vi.fn()
+    renderDesk(<WalletSheet mode={{ kind: 'export', wallet: WALLET }} onClose={onClose} />)
+    fireEvent.change(screen.getByLabelText('Vault password'), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByTestId('export-reveal'))
+    await screen.findByTestId('export-secret')
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByTestId('export-copy'))
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('0xdeadbeef'))
+    writeText.mockClear()
+    await vi.advanceTimersByTimeAsync(CLIPBOARD_CLEAR_MS + 10)
+    expect(readText).toHaveBeenCalled()
+    expect(writeText).toHaveBeenCalledWith('')
+    vi.useRealTimers()
+    // A Close beside Copy, which forgets the secret on the way out.
+    fireEvent.click(screen.getByTestId('export-close'))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('leaves the clipboard alone when something else was copied over the key', async () => {
+    const writeText = vi.fn(async () => {})
+    const readText = vi.fn(async () => 'a grocery list')
+    Object.assign(navigator, { clipboard: { writeText, readText } })
+    await clearClipboardIf('0xdeadbeef')
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
   it('marks a wrong unlock password without closing', async () => {
     rpcCall.mockRejectedValue(new Error('wallet.bad_password'))
     const onClose = vi.fn()
@@ -125,10 +156,18 @@ describe('WalletSheet', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
-  it('removes a wallet only with the vault password', async () => {
+  it('removes a wallet only with the vault password, and says what it still holds', async () => {
+    rpcCall.mockImplementation(async (method: string) =>
+      method === 'trading.portfolio'
+        ? { totals: { valueUsd: 1240.5 }, holdings: [], wallets: [], updatedAt: 0, syncing: false }
+        : {},
+    )
     const onClose = vi.fn()
     renderDesk(<WalletSheet mode={{ kind: 'remove', wallet: WALLET }} onClose={onClose} />)
     expect(screen.getByTestId('remove-submit')).toBeDisabled()
+    await waitFor(() => expect(screen.getByTestId('remove-worth')).toHaveTextContent('$1,240.50'))
+    expect(screen.getByTestId('remove-worth')).toHaveAttribute('data-funded', 'true')
+    expect(screen.getByRole('alert')).toHaveTextContent('It still holds funds')
     fireEvent.change(screen.getByLabelText('Vault password'), { target: { value: 'pw' } })
     fireEvent.click(screen.getByTestId('remove-submit'))
     await waitFor(() =>
@@ -153,13 +192,13 @@ describe('WalletSheet · manage', () => {
     primary: false,
   }
 
-  function mockVault() {
+  function mockVault(unlocked = true) {
     rpcCall.mockImplementation(async (method: string) => {
       if (method === 'wallet.list') return { wallets: [WALLET, SECOND], primary: WALLET.address }
       if (method === 'wallet.status')
         return {
           initialized: true,
-          unlocked: true,
+          unlocked,
           unlockMode: 'session',
           walletCount: 2,
           primary: WALLET.address,
@@ -206,6 +245,20 @@ describe('WalletSheet · manage', () => {
     // Two wallets, one of them primary: exactly one offer to change that.
     expect(screen.getAllByTestId('manage-primary')).toHaveLength(1)
     expect(screen.getAllByTestId('manage-remove')).toHaveLength(2)
+  })
+
+  it('greys out Export and Remove while the vault is locked, and says why', async () => {
+    mockVault(false)
+    renderDesk(<WalletSheet mode={{ kind: 'manage' }} onClose={vi.fn()} />)
+    await screen.findAllByTestId('manage-address')
+    await waitFor(() => expect(screen.getAllByTestId('manage-export')[0]).toBeDisabled())
+    expect(screen.getAllByTestId('manage-remove')[0]).toBeDisabled()
+    expect(screen.getAllByTestId('manage-export')[0]).toHaveAttribute(
+      'title',
+      'Unlock the vault first',
+    )
+    // Rename needs no key: still live.
+    expect(screen.getAllByTestId('manage-rename')[0]).not.toBeDisabled()
   })
 
   it('opens a QR of the address, drawn here rather than fetched', async () => {

@@ -29,6 +29,7 @@ import { EMPTY_TOTALS, errorText, filterHoldings, isAwaitingApproval, sameAddres
 import { Orders } from './Orders'
 import { Overview } from './Overview'
 import { ChainMark } from './ChainMark'
+import { Spinner } from './parts'
 import { PriceChart } from './PriceChart'
 import { SwapPanel, type SwapPrefill } from './SwapPanel'
 import {
@@ -102,7 +103,16 @@ function Gate({ entering }: { entering: boolean }) {
       />
     )
   }
-  if (status.isPending || vault.isPending) return null
+  // The first answer takes a moment after the gateway comes up: an empty
+  // frame here reads as the desk being broken, so it says it is loading.
+  if (status.isPending || vault.isPending) {
+    return (
+      <div className="trd-state" data-testid="trading-loading" aria-busy="true">
+        <Spinner className="trd-state__mark size-6" />
+        <p>{t('trading.loading')}</p>
+      </div>
+    )
+  }
   if (status.data && !status.data.enabled) {
     return (
       <State
@@ -295,10 +305,19 @@ function Desk({
 
   function onWalletAction(action: WalletAction) {
     if (action.kind === 'lock') {
-      walletWrite.mutate({ method: 'wallet.lock', params: {} })
+      walletWrite.mutate(
+        { method: 'wallet.lock', params: {} },
+        { onError: (err) => toast.error(`${t('trading.error.lock')}: ${errorText(err)}`) },
+      )
       return
     }
     setSheet(action)
+  }
+
+  function onSync() {
+    sync.mutate(walletAddress ? { wallet: walletAddress } : {}, {
+      onError: (err) => toast.error(`${t('trading.error.sync')}: ${errorText(err)}`),
+    })
   }
 
   function onSetPrimary(wallet: Wallet) {
@@ -388,7 +407,7 @@ function Desk({
             lastSyncAt={status.data?.lastSyncAt ?? null}
             now={now}
             loading={portfolio.isPending}
-            onSync={() => sync.mutate(walletAddress ? { wallet: walletAddress } : {})}
+            onSync={onSync}
             provider={provider}
             entering={entering}
             head={
@@ -470,6 +489,9 @@ function Desk({
                   <Holdings
                     holdings={holdings}
                     loading={portfolio.isPending}
+                    error={portfolio.isError ? portfolio.error : undefined}
+                    onRetry={() => void portfolio.refetch()}
+                    wallets={wallets}
                     selected={picked}
                     onSelect={setPicked}
                     showChain={chain === null}
@@ -478,11 +500,17 @@ function Desk({
                     hiddenLoading={showHidden && portfolio.isPlaceholderData}
                     onToggleHidden={() => setShowHidden((v) => !v)}
                     onSetHidden={(h, hidden) =>
-                      tokenVisibility.mutate({
-                        chainId: h.chainId,
-                        address: h.token.address,
-                        hidden,
-                      })
+                      tokenVisibility.mutate(
+                        {
+                          chainId: h.chainId,
+                          address: h.token.address,
+                          hidden,
+                        },
+                        {
+                          onError: (err) =>
+                            toast.error(`${t('trading.error.tokenVisibility')}: ${errorText(err)}`),
+                        },
+                      )
                     }
                     onSwap={(h) =>
                       setPrefill({
@@ -498,6 +526,11 @@ function Desk({
                 <History
                   entries={history.entries}
                   loading={history.isPending}
+                  error={history.isError ? history.error : undefined}
+                  onRetry={() => void history.refetch()}
+                  nextBefore={history.nextBefore}
+                  wallet={walletAddress}
+                  chainId={chain ?? undefined}
                   now={now}
                   showWallet={showWallet}
                 />
@@ -510,6 +543,8 @@ function Desk({
                   showWallet={showWallet}
                   highlight={highlight}
                   onHighlighted={() => setHighlight(null)}
+                  error={orders.isError ? orders.error : undefined}
+                  onRetry={() => void orders.refetch()}
                 />
               )}
             </div>

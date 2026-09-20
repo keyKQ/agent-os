@@ -86,7 +86,7 @@ from agentos.trading.providers import (
     UniswapProvider,
     provider_label,
 )
-from agentos.trading.spam import TokenCurator
+from agentos.trading.spam import MIN_LIQUIDITY_USD, TokenCurator
 from agentos.trading.sync import WalletSyncer
 from agentos.trading.uniswap import (
     DecisionOrigin,
@@ -865,7 +865,13 @@ class TradingService:
     async def unwrap(
         self, chain: ChainSpec, wallet: str | None, amount: str | None = None
     ) -> dict[str, Any]:
-        """Send ``WETH.withdraw(amount)`` from ``wallet``; whole balance when omitted."""
+        """Send ``WETH.withdraw(amount)`` from ``wallet``; whole balance when omitted.
+
+        An operator's action (the RPC gates it); it signs under the wallet's
+        lock like every other send, so it never races an order for the nonce.
+        """
+        if not getattr(self.config, "enabled", True):
+            raise TradingError("trading.disabled", "Trading is disabled in config")
         if not self.ensure_unlocked():
             raise TradingError("wallet.locked", "Wallet vault is locked")
         record = self.vault.resolve(wallet)
@@ -874,28 +880,36 @@ class TradingService:
             raise TradingError("trading.invalid", f"WETH is not known on {chain.name}")
         meta = await self.token_meta(chain, weth)
         evm = self.evm(chain)
-        balance = await evm.erc20_balance_of(weth, record.address)
-        raw = to_raw(amount, meta.decimals) if amount else balance
-        if raw <= 0:
-            raise TradingError("trading.invalid", "nothing to unwrap")
-        if raw > balance:
-            raise TradingError(
-                "trading.insufficient_balance",
-                f"{record.label} holds {format_amount(balance, meta.decimals)} WETH",
-            )
-        key = self.vault.private_key(record.address)
-        tx = {
-            "to": checksum_address(weth),
-            "from": record.address,
-            "data": SEL_WETH_WITHDRAW + pad_uint(raw),
-            "value": "0",
-            "chainId": chain.chain_id,
-        }
-        tx_hash = await self._send(chain, record, key, tx)
+        async with self._wallet_lock(record.key):
+            balance = await evm.erc20_balance_of(weth, record.address)
+            raw = to_raw(amount, meta.decimals) if amount else balance
+            if raw <= 0:
+                raise TradingError("trading.invalid", "nothing to unwrap")
+            if raw > balance:
+                raise TradingError(
+                    "trading.insufficient_balance",
+                    f"{record.label} holds {format_amount(balance, meta.decimals)} WETH",
+                )
+            key = self.vault.private_key(record.address)
+            tx = {
+                "to": checksum_address(weth),
+                "from": record.address,
+                "data": SEL_WETH_WITHDRAW + pad_uint(raw),
+                "value": "0",
+                "chainId": chain.chain_id,
+            }
+            pre_native = await evm.get_balance(record.address)
+            tx_hash = await self._send(chain, record, key, tx)
         receipt = await evm.wait_for_receipt(tx_hash, timeout_s=RECEIPT_TIMEOUT_S)
+        if receipt is None:
+            raise TradingError(
+                "trading.tx_pending",
+                f"unwrap {tx_hash} was not mined within the wait window; "
+                "the balance will reconcile on the next sync",
+            )
         if not receipt_succeeded(receipt):
             raise TradingError("trading.tx_failed", f"unwrap transaction failed ({tx_hash})")
-        gas_wei = receipt_gas_wei(receipt or {})
+        gas_wei = receipt_gas_wei(receipt)
         eth_price = await self.prices.price(chain, NATIVE_ADDRESS)
         gas_usd = float(to_human(gas_wei, 18)) * eth_price if eth_price is not None else None
         entry_id = self.ledger.insert_entry(
@@ -932,8 +946,14 @@ class TradingService:
             moved += take
         self.ledger.save_lots(lots)
         self.ledger.set_balance(chain.chain_id, record.key, weth, balance - raw)
+        # Pinned to the receipt's block and checked against the pre-send
+        # snapshot: an unpinned "latest" read behind a load balancer can
+        # still be the balance from before the unwrap.
         self.ledger.set_balance(
-            chain.chain_id, record.key, NATIVE_ADDRESS, await evm.get_balance(record.address)
+            chain.chain_id,
+            record.key,
+            NATIVE_ADDRESS,
+            await self._native_after(evm, record.address, receipt, pre=pre_native or None),
         )
         await self._emit("trading.changed", {"reason": "sync", "wallet": record.address})
         return {
@@ -1095,7 +1115,7 @@ class TradingService:
             for item in wanted.values():
                 token_info = self._token_dict(chain.chain_id, item["token"]) or {}
                 decimals = int(token_info.get("decimals", 18))
-                price_info = prices.get(item["token"])
+                price_info = self._sellable_price(token_info, prices.get(item["token"]))
                 amount = float(to_human(item["raw"], decimals))
                 price = price_info.price_usd if price_info else None
                 rows.append(
@@ -1222,7 +1242,13 @@ class TradingService:
             cost = position.cost_usd if position else 0.0
             if position and position.amount_raw > 0 and amount_raw < position.amount_raw:
                 cost = cost * (amount_raw / position.amount_raw)
-            price_info = price_map.get((chain_id, token))
+            token_info = self._token_dict(chain_id, token) or {}
+            quoted = price_map.get((chain_id, token))
+            price_info = self._sellable_price(token_info, quoted)
+            # Priced by the source but not sellable: its cost basis is a
+            # fiction too (the opening lot was booked at that same price),
+            # so the totals count neither — not a value, not a loss.
+            unsellable = quoted is not None and price_info is None
             price = price_info.price_usd if price_info else None
             pnl = holding_from_lots(
                 [],
@@ -1243,7 +1269,7 @@ class TradingService:
                 {
                     "chainId": chain_id,
                     "wallet": checksum_address(wallet_key),
-                    "token": self._token_dict(chain_id, token),
+                    "token": token_info or None,
                     "amount": format_amount(amount_raw, decimals),
                     "raw": str(amount_raw),
                     "priceUsd": price,
@@ -1266,7 +1292,8 @@ class TradingService:
                 wallet_key, {"value": 0.0, "cost": 0.0, "realized": 0.0, "change": 0.0}
             )
             bucket["value"] += value or 0.0
-            bucket["cost"] += cost
+            if not unsellable:
+                bucket["cost"] += cost
             bucket["realized"] += pnl.realized_usd
             bucket["change"] += change_usd or 0.0
         total_value = sum(h["valueUsd"] or 0.0 for h in holdings if not h["hidden"])
@@ -1313,6 +1340,28 @@ class TradingService:
             "syncing": self.syncing,
             "rebuild": self.syncer.rebuild_progress,
         }
+
+    @staticmethod
+    def _sellable_price(token_info: dict[str, Any], price: PriceInfo | None) -> PriceInfo | None:
+        """The price a holding may be valued at — or ``None`` when it could not be sold.
+
+        A price source reports whatever a pool last traded at, even a pool
+        with five cents in it. For a token nobody lists (``verified`` is
+        false) that number is not a value: an airdropped lookalike with
+        ``liquidityUsd`` of 0.05 was making a fifty-cent wallet show +$12 of
+        unrealised gain. Below :data:`MIN_LIQUIDITY_USD` the holding is shown
+        unpriced, which is what it is worth. The gas coin and every listed
+        token keep their price whatever the pool says — a listed token's
+        best pool is rarely the one DexScreener happens to answer with.
+        """
+        if price is None:
+            return None
+        if token_info.get("native") or token_info.get("verified"):
+            return price
+        liquidity = price.liquidity_usd
+        if liquidity is not None and liquidity < MIN_LIQUIDITY_USD:
+            return None
+        return price
 
     @staticmethod
     def _totals(
@@ -1964,11 +2013,38 @@ class TradingService:
             try:
                 await self._execute(order_id, None, wait=wait)
             except Exception as exc:
-                error = _err(exc)
-                self.ledger.update_order(order_id, status="failed", reason=f"{error.code}: {error}")
-                log.warning("trading.order_failed", order=order_id, error=str(error))
-                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+                await self._fail_order(order_id, _err(exc))
             self._wake(order_id)
+
+    async def _fail_order(self, order_id: str, error: TradingError) -> None:
+        """Record an exception from an order's pipeline without lying about the chain.
+
+        Before the transaction is broadcast the order is simply ``failed``.
+        Once it carries a ``tx_hash`` the exception says nothing about the
+        swap itself — a transient RPC error while *settling* a mined
+        transaction is the common case — so the status is left where it is
+        (``submitted``) and ``recover_submitted`` books it on a later pass.
+        A status the settlement already made final is never touched.
+        """
+        row = self.ledger.get_order(order_id)
+        if row is None:
+            return
+        status = str(row["status"])
+        if status in ORDER_FINAL_STATUSES:
+            return
+        if row.get("tx_hash") or status == "submitted":
+            self.ledger.update_order(
+                order_id,
+                expect_status=status,
+                reason=f"settling: {error.code}: {error}",
+            )
+            log.warning("trading.settle_deferred", order=order_id, error=str(error))
+            return
+        self.ledger.update_order(
+            order_id, expect_status=status, status="failed", reason=f"{error.code}: {error}"
+        )
+        log.warning("trading.order_failed", order=order_id, error=str(error))
+        await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
 
     async def revoke(
         self,
@@ -2064,6 +2140,13 @@ class TradingService:
         latest = await evm.block_number()
         key = (chain.chain_id, record.key)
         if full:
+            # A pass still running would write its next window's cursor over
+            # the cleared one and the rescan would silently resume mid-way.
+            running = self._allowance_scans.get(key)
+            if running is not None and not running.done():
+                running.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await running
             self.ledger.clear_allowance_scan(chain.chain_id, record.key)
         scan = self.ledger.allowance_scan(chain.chain_id, record.key)
         if scan is None:
@@ -2484,12 +2567,10 @@ class TradingService:
                             "slippage_pct": slippage,
                         }
                     )
+                    log.warning("trading.order_failed", order=order_id, error=str(error))
+                    await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
                 else:
-                    self.ledger.update_order(
-                        order_id, status="failed", reason=f"{error.code}: {error}"
-                    )
-                log.warning("trading.order_failed", order=order_id, error=str(error))
-                await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
+                    await self._fail_order(order_id, error)
             results.append(self.get_order(order_id))
             await self._emit("trading.changed", {"reason": "order", "orderId": order_id})
         return results
@@ -3323,6 +3404,74 @@ class TradingService:
             log.debug("trading.balance_lagging", address=address, block=block)
         return latest
 
+    async def _balance_after(
+        self, chain: ChainSpec, record: WalletRecord, meta: TokenMeta, *, fallback: int
+    ) -> int:
+        """A post-receipt balance read that retries and then settles for ``fallback``.
+
+        Used only once the transaction is mined: the receipt's logs override
+        an ERC-20 leg anyway, so a node that keeps refusing costs accuracy
+        of the balance cache, not the booking — and the next sync fixes it.
+        """
+        for attempt in range(CHAIN_CATCHUP_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(CHAIN_CATCHUP_POLL_S)
+            try:
+                return await self._balance_raw(chain, record, meta)
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.debug("trading.balance_read_failed", token=meta.address, error=str(exc))
+        log.warning("trading.balance_read_gave_up", token=meta.address, wallet=record.address)
+        return fallback
+
+    async def _native_received(
+        self,
+        evm: EvmClient,
+        order_id: str,
+        row: dict[str, Any],
+        record: WalletRecord,
+        receipt: dict[str, Any],
+        *,
+        gas_wei: int,
+        received: int,
+        post_native: int,
+        pre_known: bool,
+    ) -> tuple[int, int]:
+        """How much of the gas coin a mined swap delivered, when the diff is not believable.
+
+        The balance diff is trusted when the pre-send snapshot exists and the
+        diff clears the order's ``min_out_raw`` — a swap that mined without
+        reverting delivered at least that. Otherwise (a recovery after a
+        restart has no snapshot; a lagging node makes the diff come out as
+        the gas alone) the balance is read pinned to the receipt's block and
+        the one before it, which no ``latest`` lag can distort. If even that
+        is unavailable or still short, the order's own expected amount is
+        booked with a warning rather than a zero that would look like theft.
+        """
+        min_out = int(row.get("min_out_raw") or 0)
+        if pre_known and received > 0 and received >= min_out:
+            return received, post_native
+        block_number = int(str(receipt.get("blockNumber") or "0x0"), 16)
+        if block_number > 0:
+            try:
+                before = await evm.get_balance(record.address, hex(block_number - 1))
+                after = await evm.get_balance(record.address, hex(block_number))
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.warning("trading.pinned_balance_failed", order=order_id, error=str(exc))
+            else:
+                pinned = (after - before) + gas_wei
+                if pinned > 0 and pinned >= min_out:
+                    return pinned, after
+        fallback = int(row.get("expected_out_raw") or row.get("min_out_raw") or 0)
+        if fallback <= 0:
+            return max(received, 0), post_native
+        log.warning(
+            "trading.native_received_assumed",
+            order=order_id,
+            diff=received,
+            booked=fallback,
+        )
+        return fallback, post_native
+
     async def _settle(
         self,
         order_id: str,
@@ -3360,8 +3509,12 @@ class TradingService:
             )
             await self._emit("trading.order.finished", {"order": self.get_order(order_id)})
             return
-        post_in = await self._balance_raw(chain, record, meta_in)
-        post_out = await self._balance_raw(chain, record, meta_out)
+        # Every read from here on is *after* the receipt: the swap is on
+        # chain whatever the node says next, so a read that fails is retried
+        # and then replaced by the best fallback, never allowed to raise —
+        # raising here would strand a mined swap (see ``_fail_order``).
+        post_in = await self._balance_after(chain, record, meta_in, fallback=pre["in"])
+        post_out = await self._balance_after(chain, record, meta_out, fallback=pre["out"])
         post_native = await self._native_after(
             evm, record.address, receipt, pre=pre["native"] or None
         )
@@ -3393,7 +3546,11 @@ class TradingService:
         if meta_out.native:
             received = (post_native - pre["native"]) + gas_wei if pre["native"] else 0
             # On an L2 the router may hand back WETH instead of unwrapping.
-            weth = await self.weth_for(chain)
+            weth = None
+            try:
+                weth = await self.weth_for(chain)
+            except (EvmRpcError, EvmTransportError, httpx.HTTPError) as exc:
+                log.warning("trading.weth_lookup_failed", order=order_id, error=str(exc))
             if weth and received <= 0:
                 arrived = sum(
                     t.amount for t in transfers if t.token == weth and t.recipient == record.key
@@ -3401,12 +3558,33 @@ class TradingService:
                 if arrived > 0:
                     delivered = weth
                     received = arrived
-                    meta_out = await self.token_meta(chain, weth)
+                    try:
+                        meta_out = await self.token_meta(chain, weth)
+                    except (EvmRpcError, EvmTransportError) as exc:
+                        log.warning("trading.weth_meta_failed", order=order_id, error=str(exc))
+                        meta_out = TokenMeta(chain.chain_id, weth, "WETH", "Wrapped Ether", 18)
+            if delivered == meta_out.address and meta_out.native:
+                received, post_native = await self._native_received(
+                    evm,
+                    order_id,
+                    row,
+                    record,
+                    receipt,
+                    gas_wei=gas_wei,
+                    received=received,
+                    post_native=post_native,
+                    pre_known=bool(pre["native"]),
+                )
         if spent <= 0:
             spent = int(row["amount_raw"])
         received = max(received, 0)
         block_number = int(str(receipt.get("blockNumber") or "0x0"), 16)
-        ts = await evm.block_timestamp(block_number) if block_number else None
+        ts = None
+        if block_number:
+            try:
+                ts = await evm.block_timestamp(block_number)
+            except (EvmRpcError, EvmTransportError) as exc:
+                log.warning("trading.block_timestamp_failed", order=order_id, error=str(exc))
         await self.syncer._book_swap(
             record,
             chain,
@@ -3533,7 +3711,9 @@ class TradingService:
         deadline = self._now() + max(0.0, min(float(timeout_s), 900.0))
         while True:
             order = self.get_order(order_id)
-            if order["status"] in ORDER_FINAL_STATUSES or order["status"] == "quoted":
+            # ``quoted`` is the row's first breath: the pipeline moves it on
+            # (or fails it) within the same call, so it is not an answer yet.
+            if order["status"] in ORDER_FINAL_STATUSES:
                 return order
             remaining = deadline - self._now()
             if remaining <= 0:

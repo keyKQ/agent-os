@@ -146,6 +146,41 @@ class TestEvmClient:
         # The first attempt at the full span is refused; the client halves until accepted.
         assert spans[0] == 1000 and spans[-1] <= 300 and all(s <= 300 for s in spans[2:])
 
+    async def test_transfer_logs_halve_on_a_gateway_http_500_too(self, chain: FakeChain) -> None:
+        """dRPC refuses an oversized range with HTTP 500, not a JSON-RPC error.
+
+        ``approval_logs`` already halved on that; ``transfer_logs`` raised it
+        as an outage. Both now halve down to the node's own span and only
+        raise below it.
+        """
+        chain.add_transfer(token=USDC, sender=OTHER, recipient=WALLET, amount=1, block=100)
+        chain.add_transfer(token=USDC, sender=WALLET, recipient=OTHER, amount=2, block=2_500)
+        gateway = {"max_span": 500}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            if payload.get("method") == "eth_getLogs":
+                flt = payload["params"][0]
+                span = int(flt["toBlock"], 16) - int(flt["fromBlock"], 16) + 1
+                if span > gateway["max_span"]:
+                    return httpx.Response(500, text="query exceeds max block range")
+            return chain.handle(request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = EvmClient("https://mainnet.base.org", http=http, max_log_span=250)
+            logs = await client.transfer_logs(WALLET, from_block=0, to_block=3_000, max_span=4_000)
+            assert [(t.block_number, t.amount) for t in logs] == [(100, 1), (2_500, 2)]
+            spans = [
+                int(c["params"][0]["toBlock"], 16) - int(c["params"][0]["fromBlock"], 16) + 1
+                for c in chain.calls
+                if c["method"] == "eth_getLogs"
+            ]
+            assert spans and all(s <= 500 for s in spans)  # only accepted chunks reach the node
+            # A 500 at or below the node's own span is a real outage and is raised.
+            gateway["max_span"] = 100
+            with pytest.raises(EvmTransportError):
+                await client.transfer_logs(WALLET, from_block=0, to_block=3_000, max_span=4_000)
+
     async def test_transfer_logs_dedupes_self_transfer(
         self, client: EvmClient, chain: FakeChain
     ) -> None:

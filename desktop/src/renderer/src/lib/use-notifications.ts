@@ -15,6 +15,8 @@ import { useSessionMarks } from '~/stores/session-marks'
 import { useSessions } from '~/stores/sessions'
 import { useSettings } from '~/stores/settings'
 import { useUi } from '~/stores/ui'
+import { orderKindWord, orderLine as deskOrderLine } from '~/views/trading/desk/desk-logic'
+import type { OrderKind, Token } from '~/views/trading/types'
 import { bindActivation, notify } from './notifications/dispatch'
 import {
   diffSessionRuns,
@@ -184,12 +186,16 @@ function useTradingSignals(): void {
   const connected = useConnection((s) => s.state === 'connected')
   useEffect(() => {
     if (!connected) return
+    // The title names the kind — a send is not a "Swap", and a rejected
+    // send read "Swap rejected · 0.00001 ETH → ETH" before.
     const offRequested = rpc.on('trading.approval.requested', (payload) => {
       const order = (payload as { order?: TradingOrderLike } | undefined)?.order
       const preview = useSettings.getState().settings.notifications.preview
       void notify({
         kind: 'approval',
-        title: t('notify.trade.approval.title'),
+        title: order
+          ? `${t(`trading.card.kind.${orderKindWord(order)}`)} ${t('trading.notify.needsApproval')}`
+          : t('notify.trade.approval.title'),
         subtitle: preview && order ? orderLine(order) : undefined,
         body: t('notify.trade.approval.body'),
         target: { type: 'trading', orderId: order?.orderId },
@@ -200,17 +206,17 @@ function useTradingSignals(): void {
       if (!order) return
       const preview = useSettings.getState().settings.notifications.preview
       const ok = order.status === 'confirmed'
-      const title =
+      const outcome =
         order.status === 'confirmed'
-          ? t('notify.trade.confirmed.title')
+          ? t('trading.notify.confirmed')
           : order.status === 'expired'
-            ? t('notify.trade.expired.title')
+            ? t('trading.notify.expired')
             : order.status === 'rejected'
-              ? t('notify.trade.rejected.title')
-              : t('notify.trade.failed.title')
+              ? t('trading.notify.rejected')
+              : t('trading.notify.failed')
       void notify({
         kind: ok ? 'trade' : 'tradeFailed',
-        title,
+        title: `${t(`trading.card.kind.${orderKindWord(order)}`)} ${outcome}`,
         subtitle: preview ? orderLine(order) : undefined,
         body: !ok && preview && order.reason ? excerpt(order.reason) || undefined : undefined,
         target: { type: 'trading', orderId: order.orderId },
@@ -228,13 +234,28 @@ interface TradingOrderLike {
   status?: string
   reason?: string | null
   amountIn?: string
-  tokenIn?: { symbol?: string }
+  tokenIn?: { symbol?: string; address?: string }
   tokenOut?: { symbol?: string }
+  kind?: OrderKind
+  recipient?: string | null
+  recipientLabel?: string | null
+  batchId?: string | null
 }
 
+/** The desk's own one-liner, over the loose shape a broadcast carries. */
 function orderLine(order: TradingOrderLike): string {
-  const a = order.amountIn ? `${order.amountIn} ` : ''
-  return `${a}${order.tokenIn?.symbol ?? ''} → ${order.tokenOut?.symbol ?? ''}`.trim()
+  return deskOrderLine({
+    kind: order.kind,
+    amountIn: order.amountIn ?? '',
+    tokenIn: {
+      symbol: order.tokenIn?.symbol ?? '',
+      address: order.tokenIn?.address ?? '',
+    } as Token,
+    tokenOut: { symbol: order.tokenOut?.symbol ?? '' } as Token,
+    recipient: order.recipient ?? null,
+    recipientLabel: order.recipientLabel ?? null,
+    batchId: order.batchId ?? null,
+  })
 }
 
 /** The gateway went from running to error on its own (a crash, a port grab). */

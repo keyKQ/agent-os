@@ -40,7 +40,8 @@ from typing import Any
 
 import structlog
 
-from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec
+from agentos.trading.chains import NATIVE_ADDRESS, ChainSpec, checksum_address
+from agentos.trading.decode import spender_label
 from agentos.trading.evm import EvmClient, TransferLog
 from agentos.trading.ledger import OPENING_NOTE, Ledger
 from agentos.trading.pnl import per_raw, sell_fifo, to_human
@@ -68,6 +69,12 @@ DEFAULT_FULL_LOOKBACK = 2_000_000
 REBUILD_WINDOW_SPANS = 10
 # Ignore native dust drift below this (gas of a tx we did not see).
 NATIVE_DUST_WEI = 10**13
+# An incremental pass re-reads this many blocks below the last synced one.
+# ``latest`` comes from a load-balanced endpoint whose nodes disagree by a
+# block or two; a log served by a lagging node would otherwise be skipped
+# for good. Entries dedupe on (wallet, kind, tx_hash, log_index), so the
+# overlap costs a little bandwidth and never a double booking.
+SYNC_OVERLAP_BLOCKS = 10
 
 Priced = tuple[float | None, str]
 
@@ -159,8 +166,9 @@ class WalletSyncer:
                 start = max(0, latest - self.initial_lookback)
             oldest: int | None = start
         else:
-            start = int(state["last_block"]) + 1
             oldest = state.get("oldest_block")
+            floor = int(oldest) if oldest is not None else 0
+            start = max(floor, int(state["last_block"]) + 1 - SYNC_OVERLAP_BLOCKS)
         changed = False
         if start <= latest:
             logs = await evm.transfer_logs(address, from_block=start, to_block=latest)
@@ -286,15 +294,28 @@ class WalletSyncer:
             )
             for r in self.ledger.rebuild_logs(chain.chain_id, address)
         ]
+        # Our own confirmed orders, by what they did. Every kind keeps its
+        # transaction out of the chain-derived groups (the order row is the
+        # richer record: initiator, session, gas), but only a swap is booked
+        # as one. A send is a withdrawal; a revoke moved nothing but gas —
+        # its amount_raw is the allowance it cleared, often 2**256-1, and
+        # replayed as a swap it would sell every lot the wallet holds.
         orders = self.ledger.confirmed_orders(address, chain.chain_id)
         own_tx = {str(o["tx_hash"]).lower() for o in orders}
         foreign = [t for t in logs if t.tx_hash not in own_tx]
         groups = await self._group_transfers(chain, address, foreign)
+        swaps = [o for o in orders if _order_kind(o) == "swap"]
+        sends = [o for o in orders if _order_kind(o) == "send"]
+        revokes = [o for o in orders if _order_kind(o) == "revoke"]
 
-        # Every event in time order: scanned transactions and our own swaps.
+        # Every event in time order: scanned transactions and our own orders.
         events: list[tuple[float, int, str, Any]] = [(g.ts, g.block, "tx", g) for g in groups]
-        for o in orders:
+        for o in swaps:
             events.append((float(o["updated_at"]), 0, "order", o))
+        for o in sends:
+            events.append((float(o["updated_at"]), 0, "send", o))
+        for o in revokes:
+            events.append((float(o["updated_at"]), 0, "revoke", o))
         events.sort(key=lambda e: (e[0], e[1]))
 
         # What the chain holds now, and how much of it the events explain.
@@ -320,10 +341,13 @@ class WalletSyncer:
                 net[token] += amount
             for token, amount in g.outs.items():
                 net[token] -= amount
-        for o in orders:
+        for o in swaps:
             spent, received, token_in, token_out, _gas = _order_legs(o)
             net[token_in] -= spent
             net[token_out] += received
+        for o in sends:
+            token, amount, _recipient, _gas = _send_leg(o)
+            net[token] -= amount
         openings: dict[str, int] = {}
         for token, balance in {**erc20_now, NATIVE_ADDRESS: native_now}.items():
             unexplained = int(balance) - net.get(token, 0)
@@ -350,12 +374,29 @@ class WalletSyncer:
             if kind == "tx":
                 for token in [*payload.ins, *payload.outs]:
                     await prepare(token, payload.ts)
-            else:
+            elif kind == "order":
                 _spent, _received, token_in, token_out, _gas = _order_legs(payload)
                 await prepare(token_in, _ts)
                 await prepare(token_out, _ts)
                 await prepare(NATIVE_ADDRESS, _ts)
+            elif kind == "send":
+                token, _amount, _recipient, _gas = _send_leg(payload)
+                await prepare(token, _ts)
+                await prepare(NATIVE_ADDRESS, _ts)
+            else:
+                await prepare(NATIVE_ADDRESS, _ts)
 
+        def gas_usd_at(gas_wei: int, ts: float) -> float | None:
+            eth_price = priced[(NATIVE_ADDRESS, int(ts))][0]
+            if eth_price is None or not gas_wei:
+                return None
+            return float(to_human(gas_wei, 18)) * eth_price
+
+        # Everything the booking helpers await below is answered from
+        # ``metas``/``priced`` and never reaches the network, so no other
+        # coroutine runs while this transaction is open: the ledger's
+        # transaction depth is process-wide, and a write from elsewhere would
+        # otherwise join this group and be lost with it on failure.
         with self.ledger.transaction():
             self.ledger.delete_chain_history(address, chain.chain_id)
             for token, amount in openings.items():
@@ -374,14 +415,8 @@ class WalletSyncer:
             for ts, _block, kind, payload in events:
                 if kind == "tx":
                     await self._book_group(wallet, chain, payload, metas=metas, priced=priced)
-                else:
+                elif kind == "order":
                     spent, received, token_in, token_out, gas_wei = _order_legs(payload)
-                    eth_price = priced[(NATIVE_ADDRESS, int(ts))][0]
-                    gas_usd = (
-                        float(to_human(gas_wei, 18)) * eth_price
-                        if eth_price is not None and gas_wei
-                        else None
-                    )
                     await self._book_swap(
                         wallet,
                         chain,
@@ -393,12 +428,62 @@ class WalletSyncer:
                         tx_hash=str(payload["tx_hash"]),
                         log_index=0,
                         initiator=str(payload.get("initiator") or "agent"),
-                        gas_usd=gas_usd,
+                        gas_usd=gas_usd_at(gas_wei, ts),
                         order_id=str(payload["order_id"]),
                         session_key=payload.get("session_key"),
                         note=payload.get("note"),
                         metas=metas,
                         priced=priced,
+                    )
+                elif kind == "send":
+                    token, amount, recipient, gas_wei = _send_leg(payload)
+                    tx_hash = str(payload["tx_hash"]).lower()
+                    # The same log index the settlement used, so a send booked
+                    # live and one booked here are the same entry.
+                    log_index = next(
+                        (
+                            t.log_index
+                            for t in logs
+                            if t.tx_hash == tx_hash
+                            and t.token == token
+                            and t.sender == address
+                            and t.recipient == recipient
+                        ),
+                        0,
+                    )
+                    await self._book_withdraw(
+                        wallet,
+                        chain,
+                        token,
+                        amount,
+                        ts,
+                        tx_hash=tx_hash,
+                        log_index=log_index,
+                        note=payload.get("note") or f"sent to {checksum_address(recipient)}",
+                        meta=metas[token],
+                        priced=priced[(token, int(ts))],
+                        initiator=str(payload.get("initiator") or "agent"),
+                        order_id=str(payload["order_id"]),
+                        session_key=payload.get("session_key"),
+                        gas_usd=gas_usd_at(int(payload.get("gas_wei") or 0), ts),
+                    )
+                else:
+                    spender = str(payload.get("recipient") or "").lower()
+                    self.ledger.insert_entry(
+                        ts=ts,
+                        chain_id=chain.chain_id,
+                        wallet=address,
+                        kind="approval",
+                        tx_hash=str(payload["tx_hash"]),
+                        log_index=0,
+                        token_in=str(payload["token_in"]).lower(),
+                        amount_in_raw=0,
+                        gas_usd=gas_usd_at(int(payload.get("gas_wei") or 0), ts),
+                        initiator=str(payload.get("initiator") or "agent"),
+                        order_id=str(payload["order_id"]),
+                        session_key=payload.get("session_key"),
+                        note=payload.get("note")
+                        or f"revoked {spender_label(spender) or checksum_address(spender)}",
                     )
             for token, raw in erc20_now.items():
                 self.ledger.set_balance(chain.chain_id, address, token, raw)
@@ -962,8 +1047,21 @@ class WalletSyncer:
                 self.ledger.add_snapshot(chain.chain_id, token, ts, info.price_usd)
 
 
+def _order_kind(order: dict[str, Any]) -> str:
+    return str(order.get("kind") or "swap")
+
+
+def _send_leg(order: dict[str, Any]) -> tuple[str, int, str, int]:
+    """(token, amount_raw, recipient, gas_wei) of a confirmed send."""
+    token = str(order["token_in"]).lower()
+    amount = int(order.get("spent_in_raw") or order.get("amount_raw") or 0)
+    recipient = str(order.get("recipient") or "").lower()
+    gas_wei = int(order.get("gas_wei") or 0)
+    return token, amount, recipient, gas_wei
+
+
 def _order_legs(order: dict[str, Any]) -> tuple[int, int, str, str, int]:
-    """(spent_raw, received_raw, token_in, token_out, gas_wei) of a confirmed order."""
+    """(spent_raw, received_raw, token_in, token_out, gas_wei) of a confirmed *swap*."""
     spent = int(order.get("spent_in_raw") or order.get("amount_raw") or 0)
     received = int(order.get("received_out_raw") or order.get("expected_out_raw") or 0)
     token_in = str(order["token_in"]).lower()

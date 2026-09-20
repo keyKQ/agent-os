@@ -19,27 +19,35 @@ import {
 
 const ARM_RESET_MS = 4000
 
-const FACT_LABELS: Record<string, string> = {
-  wallet: 'Wallet',
-  chain: 'Chain',
-  pay: 'Pay',
-  receive: 'Receive (expected)',
-  minimum: 'Receive (minimum)',
-  rate: 'Rate',
-  value: 'Value',
-  impact: 'Price impact',
-  gas: 'Gas',
-  provider: 'Route via',
-  order: 'Order',
-  expires: 'Expires',
-  to: 'To',
-  send: 'Send',
-  token: 'Token',
-  spender: 'Spender',
-  allowance: 'Allowance',
-  recipients: 'Recipients',
-  total: 'Total',
-  batch: 'Batch',
+const FACT_KEYS = [
+  'wallet',
+  'chain',
+  'pay',
+  'receive',
+  'minimum',
+  'rate',
+  'value',
+  'impact',
+  'gas',
+  'provider',
+  'order',
+  'expires',
+  'to',
+  'send',
+  'token',
+  'spender',
+  'allowance',
+  'recipients',
+  'total',
+  'batch',
+  'unlimited',
+] as const
+
+/** The fact labels, from the catalogue (read inside the component, never at module scope). */
+function factLabels(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const key of FACT_KEYS) out[key] = t(`trading.card.fact.${key}`)
+  return out
 }
 
 function askOf(order: Order, legs: readonly Order[] | undefined): Ask {
@@ -98,9 +106,8 @@ export function ApprovalCard({
   const ask = askOf(order, legs)
   const risk = askRisk(ask)
   const kind = ask.kind
-  const facts = ask.batch
-    ? batchFacts(ask, wallets, FACT_LABELS)
-    : approvalFacts(order, wallets, FACT_LABELS)
+  const labels = factLabels()
+  const facts = ask.batch ? batchFacts(ask, wallets, labels) : approvalFacts(order, wallets, labels)
   const [armed, setArmed] = useState(false)
   const [rejecting, setRejecting] = useState(false)
   const [reason, setReason] = useState('')
@@ -205,7 +212,14 @@ export function ApprovalCard({
 
       <dl className="trd-card__facts">
         {facts.map((f: Fact) => (
-          <div key={f.key} className="trd-card__fact" data-tone={f.tone}>
+          <div
+            key={f.key}
+            // An address fact takes its own line, in full: a shortened
+            // recipient is exactly where a lookalike hides.
+            className={f.wide ? 'trd-card__fact trd-card__fact--wide' : 'trd-card__fact'}
+            data-tone={f.tone}
+            data-wide={f.wide || undefined}
+          >
             <dt>{f.label}</dt>
             <dd className="trd-mono">{f.value}</dd>
           </div>

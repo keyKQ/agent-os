@@ -13,7 +13,7 @@ import { Button } from '~/components/ui/button'
 import { t } from '~/i18n'
 import { useChart } from '~/stores/trading'
 import { formatPct, formatPrice, formatUsd } from './logic'
-import { Spinner } from './parts'
+import { ErrorState, Spinner } from './parts'
 import type { Chart, ChartRange, Holding } from './types'
 
 const RANGES: ChartRange[] = ['1h', '6h', '1d', '1w', 'all']
@@ -110,7 +110,9 @@ export function PriceChart({ holding, onClose }: { holding: Holding; onClose: ()
         </div>
       </div>
 
-      {query.isPending ? (
+      {query.isError ? (
+        <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+      ) : query.isPending ? (
         <div className="trd-chart__empty">
           <Spinner />
         </div>

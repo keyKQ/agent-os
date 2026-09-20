@@ -19,6 +19,12 @@ beforeEach(() => {
 })
 
 describe('TradingView · gate', () => {
+  it('says it is loading while the first status is still on its way', () => {
+    rpcCall.mockImplementation(() => new Promise(() => {}))
+    renderDesk(<TradingView />)
+    expect(screen.getByTestId('trading-loading')).toHaveTextContent('Loading the desk')
+  })
+
   it('reports a status error as the gateway not answering, with a retry', async () => {
     let fail = true
     rpcCall.mockImplementation(async (method: string) => {

@@ -5,8 +5,9 @@ import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { useDecode } from '~/stores/trading'
 import { ChainBadge } from './ChainMark'
-import { errorText, formatAmount, shortAddress } from './logic'
+import { errorText, formatAmount, fromRaw, shortAddress } from './logic'
 import { AssetCell, Sheet, Spinner } from './parts'
+import { nativeToken } from './TokenPicker'
 import { CHAINS, type Decoded } from './types'
 
 const HASH_RE = /^0x[0-9a-fA-F]{64}$/
@@ -105,7 +106,7 @@ export function DecodeSheet({
               <input
                 className="mac-input trd-mono"
                 value={to}
-                placeholder="0x…"
+                placeholder={t('trading.decode.hash.placeholder')}
                 onChange={(e) => setTo(e.target.value)}
                 spellCheck={false}
                 data-testid="decode-to"
@@ -157,12 +158,14 @@ function Result({ result }: { result: Decoded }) {
         {tx ? (
           <>
             <Fact label={t('trading.decode.status')}>
-              <span data-tone={tx.status === 'reverted' ? 'danger' : undefined}>{tx.status}</span>
+              <span data-tone={tx.status === 'reverted' ? 'danger' : undefined}>
+                {t(`trading.decode.status.${tx.status}`)}
+              </span>
             </Fact>
             {tx.from ? <Fact label={t('trading.decode.from')}>{shortAddress(tx.from)}</Fact> : null}
             {tx.valueWei !== '0' ? (
               <Fact label={t('trading.decode.value')}>
-                {formatAmount(weiToEth(tx.valueWei))} ETH
+                {formatAmount(fromRaw(tx.valueWei, 18))} {nativeToken(result.chainId).symbol}
               </Fact>
             ) : null}
             {tx.gasUsed !== null ? (
@@ -250,11 +253,4 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
       <dd className="trd-mono">{children}</dd>
     </div>
   )
-}
-
-function weiToEth(wei: string): string {
-  const s = wei.padStart(19, '0')
-  const whole = s.slice(0, -18)
-  const frac = s.slice(-18).replace(/0+$/, '')
-  return frac ? `${whole}.${frac}` : whole
 }

@@ -6,7 +6,7 @@ import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
 import { useAllowances, useRevoke } from '~/stores/trading'
 import { errorText, formatAmount, formatUsd, shortAddress } from './logic'
-import { AssetCell, Empty, Spinner } from './parts'
+import { AssetCell, Empty, ErrorState, Spinner } from './parts'
 import type { Allowance } from './types'
 
 const ARM_RESET_MS = 4000
@@ -93,7 +93,9 @@ export function Allowances({ wallet }: { wallet: string | undefined }) {
             : t('trading.allowances.warn.plural')}
         </p>
       ) : null}
-      {list.isPending && rows.length === 0 ? (
+      {list.isError && rows.length === 0 ? (
+        <ErrorState error={list.error} onRetry={() => void list.refetch()} />
+      ) : list.isPending && rows.length === 0 ? (
         <div className="trd-allow__loading">
           <Spinner className="size-4" />
         </div>
@@ -107,7 +109,13 @@ export function Allowances({ wallet }: { wallet: string | undefined }) {
         <ul className="trd-allow__list">
           {rows.map((a) => {
             const key = keyOf(a)
-            const busy = revoke.isPending && revoke.variables?.spender === a.spender
+            // The same spender can hold allowances on several tokens and
+            // chains; only the row being revoked is the busy one.
+            const v = revoke.variables
+            const busy =
+              revoke.isPending &&
+              v !== undefined &&
+              `${v.chainId}:${v.token}:${v.spender}`.toLowerCase() === key
             return (
               <li
                 key={key}
@@ -118,15 +126,21 @@ export function Allowances({ wallet }: { wallet: string | undefined }) {
                 <AssetCell token={a.token} showChain />
                 <div className="trd-allow__spender">
                   <b>{a.spenderLabel ?? t('trading.allowances.unknownSpender')}</b>
-                  <button
-                    type="button"
-                    className="trd-allow__addr trd-mono app-no-drag"
-                    title={a.spender}
-                    onClick={() => a.spenderUrl && void desktopApi().app.openExternal(a.spenderUrl)}
-                  >
-                    {shortAddress(a.spender)}
-                    <ExternalLink className="size-3" strokeWidth={1.75} aria-hidden />
-                  </button>
+                  {a.spenderUrl ? (
+                    <button
+                      type="button"
+                      className="trd-allow__addr trd-mono app-no-drag"
+                      title={a.spender}
+                      onClick={() => void desktopApi().app.openExternal(a.spenderUrl as string)}
+                    >
+                      {shortAddress(a.spender)}
+                      <ExternalLink className="size-3" strokeWidth={1.75} aria-hidden />
+                    </button>
+                  ) : (
+                    <span className="trd-allow__addr trd-mono" title={a.spender}>
+                      {shortAddress(a.spender)}
+                    </span>
+                  )}
                 </div>
                 <div className="trd-allow__amount trd-num">
                   <b data-tone={a.unlimited ? 'danger' : undefined}>

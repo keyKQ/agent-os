@@ -9,7 +9,13 @@ import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
 import { useNow } from '~/lib/use-now'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { invalidateTrading, useOrderDecision, useOrders, useTradingStatus } from '~/stores/trading'
+import {
+  invalidateTrading,
+  useBatchLegs,
+  useOrderDecision,
+  useOrders,
+  useTradingStatus,
+} from '~/stores/trading'
 import { useTradingUi, type BookTab } from '~/stores/trading-ui'
 import { useUi } from '~/stores/ui'
 import { Notice } from '~/views/settings/parts'
@@ -20,10 +26,15 @@ import type { Limits, Order, ProviderId, Wallet } from '../types'
 import { ApprovalsRegion } from './ApprovalsRegion'
 import { ComposerSeats } from './ComposerSeats'
 import {
+  alreadyDecided,
+  batchIdsOf,
   composerPlaceholder,
   missionStatus,
+  orderKindWord,
+  orderLine,
   ordersForSession,
   rejectionMessage,
+  withBatchLegs,
   type MissionForm,
   type MissionKind,
 } from './desk-logic'
@@ -67,6 +78,11 @@ export interface DeskProps {
   onOpenBookTab: (tab: BookTab) => void
   onStreaming: (busy: boolean) => void
   onSessionPending: (count: number) => void
+  /**
+   * The chat's reject path — the one that tells the agent why — offered to
+   * the frame so the BOOK's Orders tab rejects the same way. Null on unmount.
+   */
+  onBindReject: (reject: ((order: Order, reason: string) => void) | null) => void
 }
 
 export interface DeskInstruments {
@@ -95,8 +111,10 @@ export function useDeskInstruments(
   desk: DeskProps | null,
   ctx: {
     sessionKey: string
-    /** Send text straight into the session (no composer round-trip). */
+    /** Send text straight into the session (no composer round-trip). A no-op while a turn streams. */
     sendText: (text: string) => void
+    /** Queue text for the next turn, leaving the composer's draft alone. */
+    queueText: (text: string) => void
     /** Submit through the composer's rules (queues while a turn runs). */
     submitText: (text: string) => void
     busy: boolean
@@ -115,21 +133,56 @@ export function useDeskInstruments(
   const navigate = useNavigate()
   const location = useLocation()
   const openSettings = useUi((s) => s.openSettings)
-  const { sessionKey, sendText, submitText, busy, composerValue, idle, hasMessages, focusOrderId } =
-    ctx
+  const {
+    sessionKey,
+    sendText,
+    queueText,
+    submitText,
+    busy,
+    composerValue,
+    idle,
+    hasMessages,
+    focusOrderId,
+  } = ctx
   const { setFocusOrderId } = ctx
 
   useEffect(() => {
     if (desk) desk.onStreaming(busy)
   }, [busy, desk])
+  // The mutation callbacks below read the flag at completion time, not at
+  // the render that started them.
+  const busyRef = useRef(busy)
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+  // A message the agent must read: straight in when the session is idle,
+  // queued for the next turn while one streams (a direct send is dropped
+  // then — a rejection reason vanished that way).
+  const postToAgent = useCallback(
+    (text: string) => (busyRef.current ? queueText(text) : sendText(text)),
+    [queueText, sendText],
+  )
 
   // ── Approvals for this session ──────────────────────────────────────────
-  const orders = useOrders(undefined, enabled, 100)
-  const sessionOrders = useMemo(
-    () => ordersForSession(orders.orders, sessionKey),
-    [orders.orders, sessionKey],
+  // Asks come from the awaiting set itself, not from the newest-N page: a
+  // page can silently omit an older ask. Stamps (settled receipts) are read
+  // from the recent page, where the outcome lands.
+  const awaiting = useOrders('awaiting_approval', enabled, 100)
+  const recent = useOrders(undefined, enabled, 100)
+  const sessionAwaiting = useMemo(
+    () => ordersForSession(awaiting.orders, sessionKey).filter(isAwaitingApproval),
+    [awaiting.orders, sessionKey],
   )
-  const pendingOrders = useMemo(() => sessionOrders.filter(isAwaitingApproval), [sessionOrders])
+  const batchIds = useMemo(() => batchIdsOf(sessionAwaiting), [sessionAwaiting])
+  const batches = useBatchLegs(batchIds, enabled)
+  const pendingOrders = useMemo(
+    () => withBatchLegs(sessionAwaiting, batches),
+    [sessionAwaiting, batches],
+  )
+  const sessionOrders = useMemo(
+    () => ordersForSession(recent.orders, sessionKey),
+    [recent.orders, sessionKey],
+  )
   useEffect(() => {
     if (desk) desk.onSessionPending(pendingOrders.length)
   }, [pendingOrders.length, desk])
@@ -154,20 +207,57 @@ export function useDeskInstruments(
     [sessionOrders, now, mountedAt, dismissed],
   )
   const decide = useOrderDecision()
+  // The toast names what was decided — "Send rejected · 0.00001 ETH →
+  // 0x6c83…8312" — never "Swap" for a send. The legs of a batch are read
+  // from the region so a multisend is one line.
+  const pendingRef = useRef(pendingOrders)
+  useEffect(() => {
+    pendingRef.current = pendingOrders
+  }, [pendingOrders])
+  const legsOf = useCallback(
+    (order: Order): Order[] =>
+      order.batchId ? pendingRef.current.filter((o) => o.batchId === order.batchId) : [order],
+    [],
+  )
+  const decisionToast = useCallback(
+    (order: Order, decision: 'approved' | 'rejected') => {
+      const legs = legsOf(order)
+      const word = t(`trading.card.kind.${orderKindWord(order, legs.length)}`)
+      const line = orderLine(order, legs, t('trading.send.count'))
+      const verb =
+        decision === 'approved'
+          ? orderKindWord(order, legs.length) === 'swap'
+            ? t('trading.approvals.approved')
+            : t('trading.approvals.approved.plain')
+          : t('trading.approvals.rejected')
+      return `${word} ${verb} · ${line}`
+    },
+    [legsOf],
+  )
   const onApprove = useCallback(
     (order: Order) =>
       decide.mutate(
         { orderId: order.orderId, approve: true },
         {
           onSuccess: () =>
-            toast.success(t('trading.approvals.approved'), { id: `trd-order-${order.orderId}` }),
-          onError: (err) =>
-            toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
+            toast.success(decisionToast(order, 'approved'), { id: `trd-order-${order.orderId}` }),
+          onError: (err) => {
+            // A second decision on an order already decided (two clicks, a
+            // decision from the BOOK, the agent's own) is not a failure.
+            const text = errorText(err)
+            if (alreadyDecided(text)) {
+              toast.info(t('trading.approvals.alreadyDecided'), {
+                id: `trd-order-${order.orderId}`,
+              })
+              return
+            }
+            toast.error(`${t('trading.approvals.failed')}: ${text}`, {
               id: `trd-order-${order.orderId}`,
-            }),
+            })
+          },
         },
       ),
-    [decide],
+    [decide, decisionToast],
   )
   // A mutation, not a bare call: `isPending` locks the card, so a second
   // Enter on the reason cannot reject twice and post two chat messages. The
@@ -177,18 +267,21 @@ export function useDeskInstruments(
     mutationFn: ({ order, reason }: { order: Order; reason: string }) =>
       rpc.call('trading.orders.reject', { orderId: order.orderId, reason: reason || 'user' }),
     onSuccess: (_res, { order, reason }) => {
-      toast.success(t('trading.approvals.rejected'), { id: `trd-order-${order.orderId}` })
+      toast.success(decisionToast(order, 'rejected'), { id: `trd-order-${order.orderId}` })
       // The agent reads the reason where it asked. Rejecting one leg of a
       // multisend rejects the batch, and the message says so.
-      const legs = order.batchId
-        ? pendingOrders.filter((o) => o.batchId === order.batchId).length
-        : 1
-      sendText(rejectionMessage(order, reason, legs))
+      postToAgent(rejectionMessage(order, reason, legsOf(order).length))
     },
-    onError: (err, { order }) =>
-      toast.error(`${t('trading.approvals.failed')}: ${errorText(err)}`, {
+    onError: (err, { order }) => {
+      const text = errorText(err)
+      if (alreadyDecided(text)) {
+        toast.info(t('trading.approvals.alreadyDecided'), { id: `trd-order-${order.orderId}` })
+        return
+      }
+      toast.error(`${t('trading.approvals.failed')}: ${text}`, {
         id: `trd-order-${order.orderId}`,
-      }),
+      })
+    },
     onSettled: () => {
       rejectInFlight.current = false
       invalidateTrading(queryClient)
@@ -203,6 +296,14 @@ export function useDeskInstruments(
     },
     [rejectMutate],
   )
+  // The BOOK's Orders tab rejects through this same path, so its rejection
+  // also tells the agent why, instead of a bare status flip.
+  const bindReject = desk?.onBindReject
+  useEffect(() => {
+    if (!bindReject) return
+    bindReject(onReject)
+    return () => bindReject(null)
+  }, [bindReject, onReject])
   const deciding = decide.isPending
     ? (decide.variables?.orderId ?? null)
     : reject.isPending
@@ -215,11 +316,14 @@ export function useDeskInstruments(
     setSeenOrderParam(orderParam)
     setFocusOrderId(orderParam)
   }
+  // Decided only once the awaiting set has loaded: on the first render it is
+  // empty, and every deep link used to open the Orders tab instead of its card.
+  const awaitingLoaded = awaiting.isSuccess
   useEffect(() => {
-    if (!orderParam || !desk) return
+    if (!orderParam || !desk || !awaitingLoaded) return
     if (!pendingOrders.some((o) => o.orderId === orderParam)) desk.onOpenBookTab('orders')
     void navigate(sessionPath(sessionKey), { replace: true })
-  }, [orderParam, navigate, desk, pendingOrders, sessionKey])
+  }, [orderParam, navigate, desk, pendingOrders, sessionKey, awaitingLoaded])
 
   // ── Missions ────────────────────────────────────────────────────────────
   // Bound once by the frame and handed down: a second `useMissions` here
@@ -275,6 +379,10 @@ export function useDeskInstruments(
   const { missions } = desk
   const primaryWallet =
     desk.wallets.find((w) => sameAddress(w.address, desk.primary)) ?? desk.wallets[0] ?? null
+  // The chain the inspector opens on: the primary wallet's first, else the
+  // engine's first — not a hardcoded Base.
+  const inspectChain =
+    primaryWallet?.chains?.[0] ?? tradingStatus.data?.chains?.[0]?.chainId ?? 8453
   const placeholder = composerPlaceholder({
     missionWord: missionLine,
     busy,
@@ -368,7 +476,7 @@ export function useDeskInstruments(
         onClose={() => openSheet(null)}
       />
     ) : sheet === 'inspect' ? (
-      <DecodeSheet chainId={8453} onClose={() => openSheet(null)} />
+      <DecodeSheet chainId={inspectChain} onClose={() => openSheet(null)} />
     ) : sheet === 'network' ? (
       <NetworkSheet onBack={() => openSheet('pick')} onClose={() => openSheet(null)} />
     ) : sheet === 'send' || sheet === 'multisend' ? (

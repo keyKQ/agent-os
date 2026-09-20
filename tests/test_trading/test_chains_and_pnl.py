@@ -51,6 +51,26 @@ class TestChains:
         checksummed = chains.checksum_address("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913")
         assert checksummed == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
+    def test_mixed_case_addresses_must_pass_the_eip55_checksum(self) -> None:
+        """One wrong letter in a pasted recipient is a different, valid-looking address."""
+        good = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        assert chains.normalize_address(good) == good.lower()
+        # Same hex, a checksum that does not match: refused with a message a
+        # user can act on, as the same ValueError the callers already map.
+        bad = "0x833589fcd6edb6E08f4c7C32D4f71b54bdA02913"
+        with pytest.raises(ValueError, match="checksum does not match"):
+            chains.normalize_address(bad)
+        # Lower- and upper-case make no checksum claim and are accepted as before.
+        assert chains.normalize_address(good.lower()) == good.lower()
+        assert chains.normalize_address("0x" + good[2:].upper()) == good.lower()
+        # Well-known constants stay valid through the same path.
+        from agentos.trading.aggregator import ALLOWANCE_HOLDER, NATIVE_SENTINEL
+        from agentos.trading.providers import PERMIT2
+        from agentos.trading.uniswap import PROXY_SPENDER
+
+        for address in (NATIVE_SENTINEL, PERMIT2, PROXY_SPENDER, ALLOWANCE_HOLDER):
+            assert chains.normalize_address(address) == address.lower()
+
     def test_explorer_urls(self) -> None:
         assert chains.ROBINHOOD.tx_url("0xabc") == "https://robinhoodchain.blockscout.com/tx/0xabc"
         assert chains.BASE.token_url("0x1") == "https://basescan.org/token/0x1"
@@ -70,6 +90,12 @@ class TestAmounts:
     def test_negative_rejected(self) -> None:
         with pytest.raises(ValueError):
             to_raw("-1", 6)
+
+    @pytest.mark.parametrize("text", ["NaN", "nan", "Infinity", "-Infinity", "inf", "abc", ""])
+    def test_non_numbers_are_a_value_error(self, text: str) -> None:
+        """``Decimal`` accepts NaN and Infinity; the callers only map ValueError."""
+        with pytest.raises(ValueError):
+            to_raw(text, 6)
 
     def test_per_raw_per_token(self) -> None:
         assert per_raw(2000.0, 18) == pytest.approx(2e-15)

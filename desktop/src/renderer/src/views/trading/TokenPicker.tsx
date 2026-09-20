@@ -22,9 +22,43 @@ export function nativeToken(chainId: number): Token {
 }
 
 /**
+ * What an empty picker offers besides the gas coin: the chain's stable and
+ * its wrapped ether, so the receive side has somewhere sane to land before
+ * anyone types. Addresses are the engine's own (src/agentos/trading/chains.py);
+ * Robinhood Chain does not hard-code its USDC/WETH there, so it lists only ETH.
+ */
+export const POPULAR_TOKENS: Record<number, Token[]> = {
+  8453: [
+    {
+      chainId: 8453,
+      address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      symbol: 'USDC',
+      name: 'USD Coin',
+      decimals: 6,
+      logoUrl: null,
+      native: false,
+      verified: true,
+    },
+    {
+      chainId: 8453,
+      address: '0x4200000000000000000000000000000000000006',
+      symbol: 'WETH',
+      name: 'Wrapped Ether',
+      decimals: 18,
+      logoUrl: null,
+      native: false,
+      verified: true,
+    },
+  ],
+  4663: [],
+}
+
+/**
  * Choose a token for a leg of the ticket. What you hold on this chain comes
- * first, then the search: symbol, name, or a pasted address, which resolves
- * on chain even when nobody indexes it. Robinhood lookalikes are flagged.
+ * first — verified tokens ahead of unverified ones, by value within each —
+ * then, with nothing typed, the chain's popular tokens; then the search:
+ * symbol, name, or a pasted address, which resolves on chain even when
+ * nobody indexes it. Robinhood lookalikes are flagged.
  */
 export function TokenPicker({
   chainId,
@@ -58,6 +92,9 @@ export function TokenPicker({
     }
     if (!seen.has(NATIVE_ADDRESS)) rows.unshift({ token: native, amount: null, valueUsd: null })
     const q = query.trim().toLowerCase()
+    // An airdrop's made-up price must not float it above the real holdings:
+    // trust sorts before value.
+    const rank = (r: { token: Token }) => (r.token.native || r.token.verified ? 1 : 0)
     return rows
       .filter((r) => !sameToken(r.token, exclude))
       .filter(
@@ -67,8 +104,15 @@ export function TokenPicker({
           r.token.name.toLowerCase().includes(q) ||
           r.token.address.toLowerCase() === q,
       )
-      .sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1))
+      .sort((a, b) => rank(b) - rank(a) || (b.valueUsd ?? -1) - (a.valueUsd ?? -1))
   }, [balances, chainId, exclude, query])
+
+  const popular: Token[] = useMemo(() => {
+    if (query.trim()) return []
+    return (POPULAR_TOKENS[chainId] ?? []).filter(
+      (tk) => !sameToken(tk, exclude) && !held.some((h) => sameToken(h.token, tk)),
+    )
+  }, [chainId, exclude, held, query])
 
   const results: SearchToken[] = useMemo(() => {
     const out: SearchToken[] = []
@@ -80,6 +124,12 @@ export function TokenPicker({
     }
     return out
   }, [search.tokens, exclude, held])
+
+  // Trusted holdings lead, the chain's popular tokens follow, and the
+  // unverified airdrops sit last: a wallet full of junk must not bury USDC.
+  const trusted = (r: { token: Token }) => r.token.native || r.token.verified
+  const heldTrusted = held.filter(trusted)
+  const heldUnverified = held.filter((r) => !trusted(r))
 
   const searching = search.isFetching
   const nothing =
@@ -101,10 +151,10 @@ export function TokenPicker({
         {searching ? <Spinner /> : null}
       </label>
       <div className="trd-picker__list" role="listbox" aria-label={t('trading.picker.title')}>
-        {held.length > 0 ? (
+        {heldTrusted.length > 0 ? (
           <div className="trd-picker__group">{t('trading.picker.held')}</div>
         ) : null}
-        {held.map((r) => (
+        {heldTrusted.map((r) => (
           <button
             key={r.token.address}
             type="button"
@@ -112,6 +162,47 @@ export function TokenPicker({
             aria-selected={false}
             className="trd-pick app-no-drag"
             data-testid="token-pick"
+            onClick={() => onPick(r.token)}
+          >
+            <AssetCell token={r.token} />
+            <span className="trd-pick__right">
+              {r.amount !== null ? <span>{formatAmount(r.amount)}</span> : null}
+              {r.valueUsd !== null ? <small>{formatUsd(r.valueUsd)}</small> : null}
+            </span>
+          </button>
+        ))}
+        {popular.length > 0 ? (
+          <div className="trd-picker__group">{t('trading.picker.popular')}</div>
+        ) : null}
+        {popular.map((tk) => (
+          <button
+            key={tk.address}
+            type="button"
+            role="option"
+            aria-selected={false}
+            className="trd-pick app-no-drag"
+            data-testid="token-pick"
+            data-popular="true"
+            onClick={() => onPick(tk)}
+          >
+            <AssetCell token={tk} />
+            <span className="trd-pick__right">
+              <small>{t('trading.picker.verified')}</small>
+            </span>
+          </button>
+        ))}
+        {heldUnverified.length > 0 ? (
+          <div className="trd-picker__group">{t('trading.picker.heldUnverified')}</div>
+        ) : null}
+        {heldUnverified.map((r) => (
+          <button
+            key={r.token.address}
+            type="button"
+            role="option"
+            aria-selected={false}
+            className="trd-pick app-no-drag"
+            data-testid="token-pick"
+            data-unverified="true"
             onClick={() => onPick(r.token)}
           >
             <AssetCell token={r.token} />

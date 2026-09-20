@@ -1,6 +1,6 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { holding, renderDesk, USDC, WALLET } from '../test-utils'
+import { holding, order, renderDesk, USDC, WALLET } from '../test-utils'
 import type { Totals, Wallet } from '../types'
 import { Book } from './Book'
 
@@ -62,7 +62,7 @@ beforeEach(() => {
   })
 })
 
-function render() {
+function render(extra: Partial<React.ComponentProps<typeof Book>> = {}) {
   renderDesk(
     <Book
       wallets={[WALLET, SECOND]}
@@ -76,6 +76,7 @@ function render() {
       onToggle={vi.fn()}
       onOpenSettings={vi.fn()}
       highlightOrder={null}
+      {...extra}
     />,
   )
 }
@@ -109,5 +110,37 @@ describe('Book · the desk beside the chat', () => {
     render()
     await screen.findByTestId('wallet-switcher')
     expect(screen.queryByTestId('rail-toggle')).toBeNull()
+  })
+})
+
+describe('Book · rejecting from the Orders tab', () => {
+  it("hands the desk's own order to the chat's reject path instead of a bare status flip", async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'trading.orders.list')
+        return { orders: [order({ orderId: 'mine', sessionKey: 'desk' })], pendingApprovals: 1 }
+      if (method === 'trading.status') return { enabled: true, chains: [], providers: [] }
+      return {}
+    })
+    const onReject = vi.fn(() => true)
+    render({ onReject })
+    fireEvent.click(await screen.findByTestId('book-tab-orders'))
+    fireEvent.click(await screen.findByTestId('order-reject'))
+    expect(onReject).toHaveBeenCalledWith(expect.objectContaining({ orderId: 'mine' }))
+    expect(rpcCall.mock.calls.some(([m]) => m === 'trading.orders.reject')).toBe(false)
+  })
+
+  it('keeps the plain decision for an order the chat declines', async () => {
+    rpcCall.mockImplementation(async (method: string) => {
+      if (method === 'trading.orders.list')
+        return { orders: [order({ orderId: 'theirs', sessionKey: 'other' })], pendingApprovals: 1 }
+      if (method === 'trading.status') return { enabled: true, chains: [], providers: [] }
+      return {}
+    })
+    render({ onReject: () => false })
+    fireEvent.click(await screen.findByTestId('book-tab-orders'))
+    fireEvent.click(await screen.findByTestId('order-reject'))
+    await waitFor(() =>
+      expect(rpcCall.mock.calls.some(([m]) => m === 'trading.orders.reject')).toBe(true),
+    )
   })
 })

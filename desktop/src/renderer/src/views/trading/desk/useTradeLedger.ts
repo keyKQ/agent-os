@@ -321,7 +321,11 @@ function foldRuns(body: HTMLElement): void {
     refreshGroup(group)
 }
 
-export function useTradeLedger(onFocusApproval: (orderId: string | null) => void): {
+export function useTradeLedger(
+  onFocusApproval: (orderId: string | null) => void,
+  /** The open session: live calls belong to it, and are dropped when it changes. */
+  sessionKey?: string,
+): {
   seams: TranscriptEventSeams
   /** Attach to the element the transcript renders into (idempotent). */
   bind: (root: HTMLElement | null) => void
@@ -335,6 +339,11 @@ export function useTradeLedger(onFocusApproval: (orderId: string | null) => void
   useEffect(() => {
     focusRef.current = onFocusApproval
   }, [onFocusApproval])
+  // Tool ids are per session; another session's rows are rebuilt from its
+  // own blocks, and a map that only ever grew held every call ever seen.
+  useEffect(() => {
+    live.current.clear()
+  }, [sessionKey])
 
   const decorate = useRef((root: HTMLElement) => {
     const blocks = root.querySelectorAll<HTMLElement>('details[data-tool-name="exec_command"]')

@@ -512,12 +512,17 @@ class EvmClient:
 
         Chunked to the node's tolerance; a chunk the node refuses (too many
         results, range too large) is halved and retried down to a single
-        block before the error is surfaced.
+        block before the error is surfaced. A load-balanced gateway (dRPC)
+        refuses an oversized range with an HTTP 500, not a JSON-RPC error,
+        so a transport error halves the span too — down to
+        ``self.max_log_span``, which every node accepts; below that it is a
+        real outage and is raised (same rule as :meth:`approval_logs`).
         """
         if to_block < from_block:
             return []
         padded = "0x" + pad_address(wallet)
         span = max(1, int(max_span or self.max_log_span))
+        floor = max(1, min(span, self.max_log_span))
         seen: dict[tuple[str, int], TransferLog] = {}
         start = from_block
         while start <= to_block:
@@ -533,6 +538,11 @@ class EvmClient:
                 if span == 1:
                     raise
                 span = max(1, span // 2)
+                continue
+            except EvmTransportError:
+                if span <= floor:
+                    raise
+                span = max(floor, span // 2)
                 continue
             for log in [*incoming, *outgoing]:
                 parsed = parse_transfer_log(log)

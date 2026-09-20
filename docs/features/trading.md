@@ -191,11 +191,12 @@ its orders are filed under the session the binding names. These RPCs are
 **operator-only** and answer an agent with `trading.operator_required`:
 `wallet.setup`, `unlock`, `lock`, `setUnlockMode`, `changePassword`,
 `create`, `import`, `export`, `rename`, `remove`, `setPrimary`;
-`trading.orders.approve`, `trading.orders.reject`, `trading.lot.setCost`;
-and `config.set` / `config.patch` of any `trading.*` key. So
-`agentos trade approve`, `agentos wallet export` or
-`agentos config set trading.daily_cap_usd` simply fail inside an agent
-turn. This is not a full sandbox (a same-user process can still read
+`trading.orders.approve`, `trading.orders.reject`, `trading.tokens.hide`,
+`trading.unwrap`, `trading.lot.setCost`. `config.set` / `config.patch` of
+any `trading.*` key is refused from an agent as well (as an invalid request,
+not with a `trading.*` code). So `agentos trade approve`,
+`agentos wallet export` or `agentos config set trading.daily_cap_usd`
+simply fail inside an agent turn. This is not a full sandbox (a same-user process can still read
 files); it is the difference between a guardrail a prompt can talk its way
 around and one it cannot.
 
@@ -259,6 +260,22 @@ The bundled `wallet-trading` skill drives the `agentos wallet` and
 
 Amounts are always human units (`0.5`, `1000`), never wei. See
 [`../cli.md`](../cli.md) for the full command reference.
+
+## RPC surface
+
+Every client goes through the same gateway methods:
+
+| Method | What it does |
+| --- | --- |
+| `trading.status`, `trading.limits`, `trading.probe`, `trading.network` | readiness, the guardrails and today's spend, provider reachability, head block / gas / RPC latency per chain |
+| `trading.setProvider` | switch the swap provider (a wrapper over `config.set trading.provider`) |
+| `trading.tokens.search`, `trading.tokens.resolve`, `trading.tokens.hide` | search a chain's tokens; resolve one address to its metadata (symbol, decimals, verification, price); hide or show a token (operator-only) |
+| `trading.quote`, `trading.swap`, `trading.send`, `trading.unwrap` | price a swap; place one (per wallet, several, or all); send a token to one or many recipients as one batch; unwrap WETH delivered by a swap (operator-only) |
+| `trading.allowances.list`, `trading.allowances.revoke` | live ERC-20 allowances with exposure; `approve(spender, 0)` |
+| `trading.orders.list`, `trading.orders.get`, `trading.orders.wait`, `trading.orders.batch` | orders (filter by status, wallet, `kind`); one order; block until it settles; every leg of a multisend by `batchId` |
+| `trading.orders.approve`, `trading.orders.reject` | the user's decision on a parked order (operator-only) |
+| `trading.decode` | explain a transaction hash or raw calldata |
+| `trading.history`, `trading.portfolio`, `trading.chart`, `trading.sync`, `trading.lot.setCost` | the ledger; holdings with PnL; price history for a token (GeckoTerminal on Base, the engine's own snapshots on Robinhood Chain); re-read the chain; correct a lot's cost basis (operator-only) |
 
 ## Ledger and PnL
 

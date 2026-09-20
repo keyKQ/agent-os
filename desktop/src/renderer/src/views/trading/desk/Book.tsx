@@ -73,6 +73,7 @@ export function Book({
   onOpenSettings,
   highlightOrder,
   entering = false,
+  onReject,
 }: {
   wallets: Wallet[]
   primary: string | null
@@ -87,6 +88,11 @@ export function Book({
   highlightOrder: string | null
   /** The desk is powering on: the hero value counts up once. */
   entering?: boolean
+  /**
+   * The chat's reject path (it tells the agent why). Returns true when it
+   * took the order; false leaves the plain decision to the BOOK.
+   */
+  onReject?: (order: Order) => boolean
 }) {
   const tab = useTradingUi((s) => s.bookTab)
   const setTab = useTradingUi((s) => s.setBookTab)
@@ -164,6 +170,9 @@ export function Book({
   }, [])
 
   function onDecide(order: Order, approve: boolean) {
+    // A rejection of this desk's own order goes the chat's way, so the
+    // agent hears about it where it asked instead of finding a status flip.
+    if (!approve && onReject?.(order)) return
     decide.mutate(
       { orderId: order.orderId, approve },
       {
@@ -344,6 +353,9 @@ export function Book({
             <Holdings
               holdings={holdings}
               loading={portfolio.isPending}
+              error={portfolio.isError ? portfolio.error : undefined}
+              onRetry={() => void portfolio.refetch()}
+              wallets={wallets}
               selected={picked}
               onSelect={setPicked}
               showChain
@@ -393,6 +405,7 @@ export function Book({
           <ToolsPanel
             wallet={walletAddress ?? primary ?? undefined}
             onSend={() => openSheet('send')}
+            onMultisend={() => openSheet('multisend')}
             onInspect={() => openSheet('inspect')}
           />
         ) : (

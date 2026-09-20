@@ -1,3 +1,4 @@
+import { keccak_256 } from '@noble/hashes/sha3.js'
 import type { ChainId, Entry, Holding, Initiator, Order, OrderStatus, Token, Totals } from './types'
 import { CHAINS } from './types'
 
@@ -465,4 +466,70 @@ export function walletLabel(wallet: { label: string; address: string }): string 
 /** The error text an RPC failure carries, for a toast. */
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
+}
+
+// ── Addresses ───────────────────────────────────────────────────────────────
+
+const HEX_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
+
+/**
+ * EIP-55: the address with its letters cased by the keccak of its lowercase
+ * hex. Null when the input is not 20 bytes of hex at all.
+ */
+export function checksumAddress(address: string): string | null {
+  const trimmed = address.trim()
+  if (!HEX_ADDRESS_RE.test(trimmed)) return null
+  const lower = trimmed.slice(2).toLowerCase()
+  const hash = keccak_256(new TextEncoder().encode(lower))
+  let out = '0x'
+  for (let i = 0; i < lower.length; i++) {
+    const ch = lower[i] as string
+    // One hex digit of the hash per character: the high nibble for even
+    // positions, the low one for odd.
+    const nibble = i % 2 === 0 ? (hash[i >> 1] as number) >> 4 : (hash[i >> 1] as number) & 0x0f
+    out += /[a-f]/.test(ch) && nibble >= 8 ? ch.toUpperCase() : ch
+  }
+  return out
+}
+
+/**
+ * A mixed-case address whose casing is not its checksum: almost always a
+ * character mangled in copying, which a lowercase-only compare would let
+ * through. All-lower and all-upper carry no checksum and pass.
+ */
+export function checksumMismatch(address: string): boolean {
+  const trimmed = address.trim()
+  if (!HEX_ADDRESS_RE.test(trimmed)) return false
+  const body = trimmed.slice(2)
+  if (body === body.toLowerCase() || body === body.toUpperCase()) return false
+  return checksumAddress(trimmed) !== trimmed
+}
+
+// ── Gas reserve ─────────────────────────────────────────────────────────────
+
+/**
+ * What "Max" keeps back when the pay token is the chain's gas coin: a swap
+ * that spends every wei cannot pay for itself. A fixed floor per chain; a
+ * live quote's own fee estimate wins when it is larger.
+ */
+export const GAS_RESERVE_ETH: Record<number, string> = {
+  8453: '0.0003',
+  4663: '0.0003',
+}
+
+export function gasReserveEth(chainId: number, quoteGasEth?: string | null): string {
+  const floor = GAS_RESERVE_ETH[chainId] ?? '0.0003'
+  if (!quoteGasEth) return floor
+  const parsed = parseAmount(quoteGasEth)
+  if (parsed === null) return floor
+  // Twice the quoted fee: gas prices move between the quote and the send.
+  const doubled = fromRaw(toRaw(parsed, 18) * 2n, 18)
+  return compareAmounts(doubled, floor, 18) > 0 ? doubled : floor
+}
+
+/** The most of a native balance a swap may spend: the balance less the reserve, never below zero. */
+export function maxSpendable(balance: string, decimals: number, reserve: string | null): string {
+  if (reserve === null) return parseAmount(balance) ?? '0'
+  const raw = toRaw(balance, decimals) - toRaw(reserve, decimals)
+  return fromRaw(raw < 0n ? 0n : raw, decimals)
 }

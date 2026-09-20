@@ -79,8 +79,7 @@
 }
 /* …and every one of them heads with the same micro label. */
 .trd-rail__title,
-.trd-ticket__title,
-.trd-hero__label {
+.trd-ticket__title {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -1094,10 +1093,18 @@
 }
 .trd-asset__symbol {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   font-size: 12.5px;
   font-weight: 600;
+}
+/* A 20-character airdrop ticker must not push the chain chip off the cell. */
+.trd-asset__ticker {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trd-asset__name {
   overflow: hidden;
@@ -1105,6 +1112,18 @@
   color: var(--dim);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+/* Whose row, when the table mixes wallets: a small chip ahead of the name. */
+.trd-asset__wallet {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+  vertical-align: 1px;
 }
 /* Chain identity: the network's own mark, then its name. Inline SVG, so a
    badge costs no request and stays crisp at this size. */
@@ -1204,6 +1223,23 @@ tr:focus-within .trd-row__actions {
 .trd-empty svg {
   margin-bottom: 6px;
   color: var(--dim);
+}
+/* A read that failed: the mark warns, and the body is the RPC's own words. */
+.trd-empty[data-tone='error'] svg {
+  color: var(--warn);
+}
+.trd-empty[data-tone='error'] p {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+/* The page after the last one shown: one button, centred under the list. */
+.trd-history__more {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0 16px;
 }
 
 /* Skeletons: the shape of a row before its numbers arrive. */
@@ -1507,6 +1543,11 @@ tr:focus-within .trd-row__actions {
   line-height: 1.3;
 }
 .trd-order__leg {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--foreground);
 }
 /* The ticker rides quieter than the figure it belongs to. */
@@ -1759,6 +1800,13 @@ tr:focus-within .trd-row__actions {
   outline-offset: 1px;
   border-radius: 2px;
 }
+/* Under the pay leg when it pays in the gas coin: what Max holds back. */
+.trd-leg__reserve {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--dim);
+}
 .trd-leg__main {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1932,6 +1980,11 @@ tr:focus-within .trd-row__actions {
 }
 .trd-fact > b[data-tone='danger'] {
   color: var(--danger);
+}
+.trd-fact__select {
+  width: 84px;
+  height: 20px;
+  font-size: 11px;
 }
 .trd-fact__slip {
   display: inline-flex;
@@ -2463,6 +2516,32 @@ tr:focus-within .trd-row__actions {
   margin-top: 1px;
   color: var(--danger);
 }
+/* Removing a funded wallet: the box goes from caution to danger. */
+.trd-warn[data-tone='danger'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.trd-warn[data-tone='danger'] svg {
+  color: var(--danger);
+}
+.trd-remove__worth {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-compact);
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.trd-remove__worth b {
+  font-size: 13px;
+  color: var(--foreground);
+}
+.trd-remove__worth[data-funded] b {
+  color: var(--danger);
+}
 .trd-warn[data-tone='warn'] {
   background: color-mix(in srgb, var(--warn) 11%, transparent);
   box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--warn) 35%, transparent);
@@ -2640,6 +2719,15 @@ tr:focus-within .trd-row__actions {
 }
 .trd-spin {
   animation: trd-spin 0.9s linear infinite;
+}
+/* The hero's resync arrow turns while a sync runs (the button is disabled then). */
+button:disabled > .trd-hero__spin {
+  animation: trd-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  button:disabled > .trd-hero__spin {
+    animation: none;
+  }
 }
 
 /* ── Settings › Trading ────────────────────────────────────────────────────── */
@@ -2844,6 +2932,9 @@ tr:focus-within .trd-row__actions {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   color: var(--foreground);
+}
+.trd-chip__label {
+  white-space: nowrap;
 }
 .trd-chip:hover {
   color: var(--foreground);

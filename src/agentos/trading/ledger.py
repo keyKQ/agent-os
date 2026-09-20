@@ -463,6 +463,8 @@ class Ledger:
                 "daily_spend",
                 "rebuild_state",
                 "rebuild_logs",
+                "allowances",
+                "allowance_scan",
             ):
                 column = "address" if table == "wallets" else "wallet"
                 self._conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (key,))  # noqa: S608
@@ -766,7 +768,12 @@ class Ledger:
             self._commit()
 
     def confirmed_orders(self, wallet: str, chain_id: int) -> list[dict[str, Any]]:
-        """Our own settled swaps, oldest first: the part of history the chain cannot tell us."""
+        """Our own settled orders of every kind, oldest first.
+
+        The part of history the chain cannot tell us. Callers must look at
+        ``kind``: a send is a withdrawal and a revoke moves nothing but gas,
+        so neither may be replayed as a swap.
+        """
         with self._lock:
             return _rows(
                 self._conn.execute(

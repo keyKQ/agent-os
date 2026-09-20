@@ -683,7 +683,9 @@ async def _trading_network(params: dict | None, ctx: RpcContext) -> dict[str, An
 
 
 @_d.method("trading.unwrap")
+@_operator_only
 async def _trading_unwrap(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
+    """Unwrap WETH held by a wallet. It moves funds, so it is the user's action."""
     p = _params(params)
     chain = _chain(p)
     assert chain is not None

@@ -20,14 +20,17 @@ import {
   formatUsd,
   formatUsdCell,
   pnlTone,
+  sameAddress,
   sameToken,
+  shortAddress,
   sortHoldings,
   type HoldingSort,
   splitDust,
+  walletLabel,
 } from './logic'
 import { UnwrapNote } from './Orders'
-import { AssetCell, Empty, Skeleton, Tick } from './parts'
-import { isWrappedEth, type Holding } from './types'
+import { AssetCell, Empty, ErrorState, Skeleton, Tick } from './parts'
+import { isWrappedEth, type Holding, type Wallet } from './types'
 
 /**
  * The ledger's table. Dense mono figures, a hairline per row, the
@@ -46,9 +49,17 @@ export function Holdings({
   hiddenLoading = false,
   onToggleHidden,
   onSetHidden,
+  error,
+  onRetry,
+  wallets,
 }: {
   holdings: Holding[]
   loading: boolean
+  /** The portfolio read failed: shown instead of "nothing held". */
+  error?: unknown
+  onRetry?: () => void
+  /** Every wallet on the desk; with more than one, each row names its own. */
+  wallets?: readonly Wallet[]
   selected: Holding | null
   onSelect: (holding: Holding | null) => void
   onSwap: (holding: Holding) => void
@@ -115,6 +126,18 @@ export function Holdings({
         </div>
       </div>
     ) : null
+
+  if (error && holdings.length === 0) {
+    return <ErrorState error={error} onRetry={onRetry ?? (() => {})} />
+  }
+
+  // One wallet on screen, or every row from the same one: no label needed.
+  const manyWallets = new Set(holdings.map((h) => h.wallet?.toLowerCase() ?? '')).size > 1
+  const walletName = (address: string | null): string | undefined => {
+    if (!manyWallets || !address) return undefined
+    const w = wallets?.find((x) => sameAddress(x.address, address))
+    return w ? walletLabel(w) : shortAddress(address)
+  }
 
   if (!loading && holdings.length === 0) {
     return (
@@ -216,6 +239,7 @@ export function Holdings({
                         token={h.token}
                         showChain={showChain}
                         tag={h.hidden ? t('trading.holdings.hidden.junk') : undefined}
+                        wallet={walletName(h.wallet)}
                       />
                     </td>
                     <td className="trd-col--amount" title={formatAmount(h.amount, 18)}>

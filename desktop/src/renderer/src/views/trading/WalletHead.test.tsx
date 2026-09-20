@@ -82,10 +82,15 @@ describe('WalletHead · whose desk this is', () => {
     expect(onSelect).toHaveBeenCalledWith(SECOND.address)
   })
 
-  it('offers no switcher, and no list toggle, when there is only one wallet', () => {
-    render({ wallets: [WALLET] })
-    expect(screen.getByTestId('wallet-switcher')).toBeDisabled()
+  it('keeps the menu, without an "all" row, and drops the list toggle with one wallet', () => {
+    const { onAction } = render({ wallets: [WALLET] })
     expect(screen.queryByTestId('rail-toggle')).toBeNull()
+    // Create, Import and Manage live in this menu: one wallet is no reason to lose them.
+    fireEvent.click(screen.getByTestId('wallet-switcher'))
+    expect(screen.queryByText('All wallets')).toBeNull()
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Import/ }))
+    expect(onAction).toHaveBeenCalledWith({ kind: 'import' })
   })
 
   it('opens the QR sheet for the wallet on show, not for some other one', () => {

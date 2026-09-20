@@ -805,11 +805,11 @@ agentos trade swap  --chain robinhood --in USDC --out <addr> --pct 50 --wallet <
 agentos trade swap  --chain base --in USDC --out ETH --amount 20 --all-wallets --note "DCA" [--as-agent]
 agentos trade orders [--status awaiting_approval] [--wallet <addr>] [--kind swap|send|revoke] [--limit N]
 agentos trade order <id> [--wait] [--wait-seconds 1..900] / approve <id> / reject <id> [--reason <text>]
-agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--wait]
+agentos trade send --chain base --token USDC --to <addr> --amount 25 [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900] [--as-agent]
 agentos trade send --chain base --token ETH --to <a> --to <b> --usd 5        # multisend: one batch, $5 of ETH to each
 agentos trade send --chain base --token USDC --to <a>=10 --to <b>=20 --file recipients.txt   # ADDR=AMOUNT per --to; file lines 'ADDR' or 'ADDR,AMOUNT'
-agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full]   # live ERC-20 allowances, spender labels, exposure
-agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--wait]   # approve(spender, 0)
+agentos trade allowances [--chain base|robinhood] [--wallet <addr>] [--full] [--wait/--no-wait] [--wait-seconds 1..3600]   # live ERC-20 allowances, spender labels, exposure; --wait polls until the scan has caught up
+agentos trade revoke --chain base --token <addr> --spender <addr> [--wallet <addr>] [--note <text>] [--wait] [--wait-seconds 1..900]   # approve(spender, 0)
 agentos trade decode --chain base <txhash> / --data <0x…> [--to <addr>]   # what a transaction called and what moved
 agentos trade network [--fresh]             # head block, block age, gas, RPC latency and health per chain
 agentos trade history [--wallet <addr>] [--chain base|robinhood] [--kind swap|deposit|withdraw|gas|approval] [--limit N] [--hidden]
@@ -872,10 +872,11 @@ order that would push a wallet past `trading.daily_cap_usd` (default 1,000
 per calendar day, orders in flight included; 0 switches agent swaps off) is
 rejected; `--slippage` above `trading.agent_max_slippage_pct` (default 5) is
 refused with `trading.slippage_too_high`. `agentos trade approve` /
-`reject`, `hide` / `unhide`, every vault command except `status`, `list` and `balances`, and
-`config set` on any `trading.` key fail from an agent's connection with
-`trading.operator_required`: those are the user's actions, in the app or
-their own terminal. Swaps typed by a person are neither queued nor capped;
+`reject`, `hide` / `unhide` and every vault command except `status`, `list`
+and `balances` fail from an agent's connection with
+`trading.operator_required`; `config set` on any `trading.` key is refused
+from an agent too (the gateway rejects the write as an invalid request). Those
+are the user's actions, in the app or their own terminal. Swaps typed by a person are neither queued nor capped;
 if the price moves more than twice the slippage between quote and send they
 fail with `trading.price_moved` instead. `--wait` blocks until each order
 settles (`confirmed`, `failed`, `rejected`, `expired`); a `submitted` order

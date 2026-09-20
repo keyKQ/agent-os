@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   DUST_USD,
+  checksumAddress,
+  checksumMismatch,
+  gasReserveEth,
+  maxSpendable,
   splitDust,
   allocationSegments,
   amountFromPct,
@@ -400,5 +404,62 @@ describe('splitDust', () => {
     const { kept, dust } = splitDust([mk('ON', DUST_USD), mk('UNDER', DUST_USD * 0.99)])
     expect(kept.map((h) => h.token.symbol)).toEqual(['ON'])
     expect(dust.map((h) => h.token.symbol)).toEqual(['UNDER'])
+  })
+})
+
+describe('checksumAddress (EIP-55)', () => {
+  // The EIP's own test vectors.
+  const VECTORS = [
+    '0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed',
+    '0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359',
+    '0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB',
+    '0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb',
+  ]
+
+  it('reproduces the reference casing from any casing', () => {
+    for (const v of VECTORS) {
+      expect(checksumAddress(v.toLowerCase())).toBe(v)
+      expect(checksumAddress(v.toUpperCase().replace('0X', '0x'))).toBe(v)
+      expect(checksumAddress(v)).toBe(v)
+    }
+  })
+
+  it('refuses what is not an address', () => {
+    expect(checksumAddress('vitalik.eth')).toBeNull()
+    expect(checksumAddress('0x1234')).toBeNull()
+  })
+
+  it('flags a mixed-case address whose casing is wrong, and only that', () => {
+    const v = VECTORS[0]!
+    // One letter flipped: a mangled paste.
+    const bad =
+      v.slice(0, 5) +
+      (v[5] === v[5]!.toUpperCase() ? v[5]!.toLowerCase() : v[5]!.toUpperCase()) +
+      v.slice(6)
+    expect(checksumMismatch(bad)).toBe(true)
+    expect(checksumMismatch(v)).toBe(false)
+    // No checksum to check: all-lower and all-upper pass through.
+    expect(checksumMismatch(v.toLowerCase())).toBe(false)
+    expect(checksumMismatch('0x' + v.slice(2).toUpperCase())).toBe(false)
+    expect(checksumMismatch('not-an-address')).toBe(false)
+  })
+})
+
+describe('gas reserve for a native Max', () => {
+  it('keeps the chain floor when there is no quote, or the quote is cheaper', () => {
+    expect(gasReserveEth(8453, null)).toBe('0.0003')
+    expect(gasReserveEth(8453, '0.00001')).toBe('0.0003')
+    expect(gasReserveEth(4663, undefined)).toBe('0.0003')
+  })
+
+  it('doubles a dearer quoted fee instead', () => {
+    expect(gasReserveEth(8453, '0.0005')).toBe('0.001')
+  })
+
+  it('takes the reserve off the balance and never goes negative', () => {
+    expect(maxSpendable('1', 18, '0.0003')).toBe('0.9997')
+    expect(maxSpendable('0.0001', 18, '0.0003')).toBe('0')
+    // An ERC-20 leg pays gas in something else: nothing is kept back.
+    expect(maxSpendable('12.5', 6, null)).toBe('12.5')
   })
 })

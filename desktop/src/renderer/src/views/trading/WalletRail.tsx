@@ -67,6 +67,12 @@ export function WalletRail({
     }),
     { valueUsd: 0, change24hUsd: 0 as number | null },
   )
+  // The per-wallet rows show their day as a percentage; the "all" row must
+  // read in the same unit, so its dollar move is taken against yesterday's
+  // total rather than shown as a figure nothing beside it uses.
+  const allBase = all.valueUsd - (all.change24hUsd ?? 0)
+  const allPct =
+    allBase > 0 && all.change24hUsd !== null ? (all.change24hUsd / allBase) * 100 : null
 
   return (
     <aside className="trd-rail" aria-label={t('trading.rail.title')}>
@@ -99,8 +105,12 @@ export function WalletRail({
             <span className="trd-wallet__addr">{wallets.length}</span>
             <span className="trd-wallet__value">
               <Money value={all.valueUsd} compact />
-              <span className="trd-wallet__delta trd-num" data-tone={pnlTone(all.change24hUsd)}>
-                {formatUsd(all.change24hUsd, { signed: true, compact: true })}
+              <span
+                className="trd-wallet__delta trd-num"
+                data-tone={pnlTone(allPct)}
+                title={formatUsd(all.change24hUsd, { signed: true })}
+              >
+                {formatPct(allPct, { signed: true })}
               </span>
             </span>
           </button>

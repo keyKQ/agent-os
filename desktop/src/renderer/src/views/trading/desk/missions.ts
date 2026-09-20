@@ -10,6 +10,7 @@ import {
   isSessionMission,
   jobText,
   missionCronPayload,
+  missionStopDue,
   needsFullOutput,
   runSaysComplete,
   withoutDryRun,
@@ -52,7 +53,9 @@ async function lastRunComplete(rpc: Rpc, jobId: string): Promise<boolean> {
   if (!run) return false
   if (runSaysComplete(run.summary)) return true
   if (!needsFullOutput(run)) return false
-  const full = await rpc.call<RunOutputResult>('cron.runOutput', { runId: run.id, jobId })
+  // The handler names the job `id` (rpc_cron.py: `params.get("id") or
+  // params.get("job_id")`); `jobId` is not read and the call was refused.
+  const full = await rpc.call<RunOutputResult>('cron.runOutput', { id: jobId, runId: run.id })
   return runSaysComplete(full?.output)
 }
 
@@ -79,6 +82,12 @@ export interface MissionsApi {
   setEnabled: (job: RawJob, enabled: boolean) => void
   runNow: (job: RawJob) => void
   remove: (job: RawJob) => void
+  /**
+   * Pause every mission of this session that is still enabled. True when
+   * they are all paused (or there were none); false when one refused
+   * (toasted) — the caller must not walk away from a mission still running.
+   */
+  pauseAll: () => Promise<boolean>
   busy: boolean
 }
 
@@ -106,11 +115,16 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   )
 
   const stopCompleted = useCallback(
-    (id: string) =>
+    (id: string, why: 'complete' | 'stopRule' = 'complete') =>
       rpc
         .call('cron.update', { id, enabled: false })
         .then(() => {
-          toast.success(t('trading.mission.completed'), { id: `mission-${id}` })
+          toast.success(
+            why === 'stopRule'
+              ? t('trading.mission.stopRuleReached')
+              : t('trading.mission.completed'),
+            { id: `mission-${id}` },
+          )
           void queryClient.invalidateQueries({ queryKey: MISSIONS_KEY })
         })
         .catch(() => {}),
@@ -178,12 +192,26 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
   // once per run: `run_count` moves after the run lands, so a job is checked
   // again only when there is something new to check.
   const settled = useRef<Set<string>>(new Set())
+  // Stop-rule pauses already sent, one per (job, run count): the effect
+  // re-runs before the list refetches, and a mission the user turns back on
+  // is theirs until its next run moves the count again.
+  const ruled = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (!enabled || !connected) return
     let cancelled = false
     for (const job of missions) {
       const id = job.id
-      if (!id || job.enabled === false || running.has(id) || !job.last_run) continue
+      if (!id || job.enabled === false || running.has(id)) continue
+      // "After N runs" and "after <date>" are prose to the agent; the desk
+      // measures them itself, or a miscount keeps a mission spending.
+      if (missionStopDue(job, Date.now())) {
+        const stamp = `${id}:${String(job.run_count ?? '')}`
+        if (ruled.current.has(stamp)) continue
+        ruled.current.add(stamp)
+        void stopCompleted(id, 'stopRule')
+        continue
+      }
+      if (!job.last_run) continue
       const stamp = `${id}:${String(job.run_count ?? '')}:${String(job.last_run)}`
       if (settled.current.has(stamp)) continue
       settled.current.add(stamp)
@@ -290,6 +318,25 @@ export function useMissions(sessionKey: string, enabled = true): MissionsApi {
         onSuccess: () => toast.success(t('trading.mission.removed'), { id: `mission-${job.id}` }),
         onError: (err) => fail(t('trading.mission.failed'), err),
       })
+    },
+    pauseAll: async () => {
+      const active = missions.filter((job) => job.id && job.enabled !== false)
+      if (active.length === 0) return true
+      try {
+        await Promise.all(
+          active.map((job) =>
+            update.mutateAsync({ id: job.id as string, patch: { enabled: false } }),
+          ),
+        )
+      } catch (err) {
+        fail(t('trading.mission.failed'), err)
+        return false
+      }
+      toast.success(
+        `${t('trading.mission.pausedForFresh')}: ${active.map((job) => job.name || job.id).join(', ')}`,
+        { id: 'mission-pause-all' },
+      )
+      return true
     },
   }
 }

@@ -14,7 +14,7 @@
 export const TRADING_AGENT_ID = 'trading'
 
 /** Bump when the spec or the files below change: the desktop rewrites them once. */
-export const TRADING_AGENT_VERSION = 5
+export const TRADING_AGENT_VERSION = 6
 
 const MANAGED_MARK = `<!-- Managed by the AgentOS desktop app (trading agent v${TRADING_AGENT_VERSION}). Edits are overwritten. -->`
 
@@ -136,9 +136,9 @@ In this order, and a lower rule never overrides a higher one:
    verification. They are not yours to change or route around: no splitting
    an order to fit under a cap, no retrying a rejected order unchanged, no
    looser slippage to force a fill. The gateway itself knows you are the
-   agent: approving, rejecting, exporting, vault changes and the limits are
-   the user's actions, and it refuses them from you with
-   \`trading.operator_required\`. Never run \`agentos trade approve\`.
+   agent: approving, rejecting, exporting and vault changes are the user's
+   actions, and it refuses them from you with \`trading.operator_required\`;
+   changing the limits is refused too. Never run \`agentos trade approve\`.
 2. The user's explicit instruction in this chat, or the mission text a
    scheduled run carries.
 3. The rules below.
@@ -284,9 +284,10 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   \`--in\`, sized by the engine at the current price), \`--pct 50\` (share of
   the balance; \`100\` keeps gas back). Exactly one of the three.
 - Readiness, once per conversation: \`agentos trade status --json\`
-  (provider, API key, vault, limits). \`trading.provider_blocked\` means the
-  provider is geo-blocked: say so, suggest \`agentos trade provider
-  uniswap\`, do not retry.
+  (provider, API key, vault, limits). \`trading.provider\` means the
+  aggregator is unreachable or erroring upstream (\`trading.uniswap\` for
+  Uniswap): say so, try once more after a pause, then stop and suggest
+  the user switch provider (\`agentos trade provider uniswap\`).
 - The order, one line:
   \`agentos trade swap --chain base --in ETH --out USDC --usd 0.1 --note "<the user's words>" --wait --wait-seconds 600 --json\`
   \`--in\`/\`--out\` take \`ETH\`, a major (\`USDC\`, \`WETH\`, \`USDG\`), a Stock
@@ -308,15 +309,34 @@ skill only repeats it. Do not open it or run \`--help\` to find a flag.
   balances <ADDR> --chain base|robinhood --json\` for the one wallet in
   question, never without \`<ADDR>\`. Junk airdrops are hidden and not
   counted; \`hiddenCount\` says how many.
-- Orders: \`agentos trade orders [--status awaiting_approval] --json\`,
+- Send a token (the recipient must come from the user, in this chat):
+  \`agentos trade send --chain base --token USDC --to 0xADDR --amount 25 --note "<the user's words>" --wait --wait-seconds 600 --json\`.
+  \`--to\` is repeatable; \`--to 0xADDR=10\` sizes that recipient alone,
+  \`--amount\` / \`--usd\` size every recipient without its own. Several
+  \`--to\` make one batch (\`batchId\`) judged and approved as one; never
+  split it. From you a send **always** parks as \`awaiting_approval\`,
+  whatever the amount; \`--wait\` then blocks until the user decides.
+- Allowances: \`agentos trade allowances [--chain base|robinhood] [--wallet ADDR] --json\`
+  (live ERC-20 allowances, \`spenderLabel\`, \`exposureUsd\`, \`unlimited\`; it
+  polls until the scan has caught up, \`--no-wait\` returns at once).
+  \`agentos trade revoke --chain base --token 0xTOKEN --spender 0xSPENDER --wait --wait-seconds 600 --json\`
+  sends \`approve(spender, 0)\` and, from you, parks for approval like a send.
+- Explain a transaction: \`agentos trade decode --chain base 0xTXHASH --json\`
+  (or \`--data 0xCALLDATA [--to 0xCONTRACT]\`): function, transfers,
+  approvals; unknown selectors are reported, never guessed.
+- Chain health: \`agentos trade network --json\` (head block, block age,
+  gas, RPC latency, \`healthy\` per chain). Read it before blaming a swap
+  on the venue.
+- Orders: \`agentos trade orders [--status awaiting_approval] [--kind swap|send|revoke] --json\`,
   \`agentos trade order <ID> --wait --wait-seconds 600 --json\`.
 - Portfolio and PnL: \`agentos trade portfolio --json\`,
   \`agentos trade history --json\`, \`agentos trade limits ADDR --json\`.
 - Do not pass \`--as-agent\`; the gateway decides that your connection is the
   agent's, whatever the command declares. \`agentos trade approve\`,
-  \`agentos trade reject\`, \`agentos wallet export|create|import|remove|
-  setup|lock|unlock\` and \`agentos config set trading.*\` fail for you
-  with \`trading.operator_required\`: tell the user, do not retry.
+  \`agentos trade reject\`, \`agentos trade hide|unhide\` and \`agentos wallet
+  export|create|import|remove|setup|lock|unlock\` fail for you with
+  \`trading.operator_required\`; \`agentos config set trading.*\` is refused
+  for you too (only the operator can change it). Tell the user, do not retry.
 - Errors arrive on stderr as \`{"error": {"code", "message"}}\`; exit 1 is
   the gateway or provider, 2 is bad input, 3 is a conflict.
 `
