@@ -18,11 +18,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from agentos.scheduler import scripts as scripts_module
 from agentos.scheduler.delivery import DeliveryChain
 from agentos.scheduler.handlers import make_agent_run_handler, make_script_run_handler
 from agentos.scheduler.jobs import execute_with_timeout
 from agentos.scheduler.payloads import make_agent_turn_payload, make_script_payload
-from agentos.scheduler import scripts as scripts_module
 from agentos.scheduler.scripts import run_job_script
 from agentos.scheduler.types import CronJob
 

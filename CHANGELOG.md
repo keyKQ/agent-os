@@ -17,7 +17,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The default skills-block budget (`skills.max_skills_prompt_chars`) is
   28,000 characters, up from 26,000: the shipped set's own descriptions no
   longer fit the old number, which silently dropped installs into a narrower
-  render.
+  render. A saved config still carrying a previous default (8000, 24000 or
+  26000) is lifted at boot; a value chosen by hand is left alone.
+- Gateway boot no longer dies with a traceback when `agentos_router.strategy
+  = "pilot-v1"` is configured on an install without the `ml-router` /
+  `recommended` extra (no numpy). The asset probe reports the missing package
+  like any other missing asset, so the router degrades with a warning as
+  documented instead of the desktop showing "Gateway failed".
 - Engine wallet vault and trading subsystem (`agentos.trading`): keystore v3
   wallets under `~/.agentos/wallets/` with `auto`/`manual` unlock, Uniswap
   aggregator- or Uniswap-routed swaps on Base and Robinhood Chain, a chain-rebuildable SQLite

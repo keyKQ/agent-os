@@ -117,6 +117,14 @@ LEGACY_OPENROUTER_MODEL_IDS: dict[str, str] = {
 #: the end of :func:`migrate_config_payload`.
 LEGACY_MAX_SKILLS_PROMPT_CHARS = 8000
 
+#: Every default the budget has ever been materialised as, the current one
+#: included. A config carrying one of these was written by us, not chosen by an
+#: operator, so it follows the default when the default moves; any other value
+#: is left alone. Add the old value here whenever the default is raised.
+STALE_MAX_SKILLS_PROMPT_CHARS: frozenset[int] = frozenset(
+    {LEGACY_MAX_SKILLS_PROMPT_CHARS, 24000, 26000, 28000}
+)
+
 OPENROUTER_PROVIDER_ID = "openrouter"
 
 #: ``agentos.trading.providers.DEFAULT_PROVIDER_ID``, repeated rather than
@@ -694,15 +702,22 @@ def migrate_config_payload(data: dict[str, Any]) -> ConfigMigrationResult:
     # block stopped emitting a filesystem path per skill. 8000 could not fit the
     # descriptions for the shipped set, so every install that saved a config was
     # pinned to a name-only skill list — the raised default alone would never
-    # have reached them. Refresh only the exact old default, the same rule the
-    # legacy model ids use: a value someone chose deliberately is left alone.
+    # have reached them. The same happened again at 24000 and 26000 as bundled
+    # skills were added. Refresh only a value that was itself a default, the
+    # same rule the legacy model ids use: a value someone chose deliberately is
+    # left alone.
     skills_section = builder.payload.get("skills")
     if isinstance(skills_section, dict):
         current_budget = skills_section.get("max_skills_prompt_chars")
-        if current_budget == LEGACY_MAX_SKILLS_PROMPT_CHARS:
+        if (
+            isinstance(current_budget, int)
+            and not isinstance(current_budget, bool)
+            and current_budget in STALE_MAX_SKILLS_PROMPT_CHARS
+            and current_budget != DEFAULT_MAX_SKILLS_PROMPT_CHARS
+        ):
             skills_section["max_skills_prompt_chars"] = DEFAULT_MAX_SKILLS_PROMPT_CHARS
             builder.changes.append(
-                f"skills.max_skills_prompt_chars: {LEGACY_MAX_SKILLS_PROMPT_CHARS} -> "
+                f"skills.max_skills_prompt_chars: {current_budget} -> "
                 f"{DEFAULT_MAX_SKILLS_PROMPT_CHARS}"
             )
 

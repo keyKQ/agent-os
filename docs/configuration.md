@@ -217,7 +217,7 @@ prompt. `[skills].max_skills_prompt_chars` caps how large that block may get:
 
 ```toml
 [skills]
-max_skills_prompt_chars = 24000
+max_skills_prompt_chars = 28000
 ```
 
 The budget degrades one step at a time, so overrunning it by one skill costs a
