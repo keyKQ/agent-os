@@ -390,3 +390,7 @@ the ledger looks behind the chain, `agentos trade sync --json` first; if
   `trading.approval_threshold_usd` or the agent ceilings as a way to get a
   trade through; the user changes them, and the gateway refuses you anyway.
 - Never quote or swap on a chain other than `base` or `robinhood`.
+- Never send a token to `0x…dEaD` or any burn address from here. Destroying
+  a token is irreversible and has its own procedure — hand that request to
+  the `token-burner` skill, which prices it, revokes its allowances and
+  offers `trade hide` before anything is burnt.

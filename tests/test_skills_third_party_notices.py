@@ -41,6 +41,7 @@ ORIGINALS = {
     "summarize",
     "text-file-read",
     "title-card-image",
+    "token-burner",
     "tmux",
     "video-still-animator",
     "voice-clone-lab",

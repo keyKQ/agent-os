@@ -41,6 +41,8 @@ export interface Balance {
   change24hPct: number | null
   /** When the engine last read this row from the chain (ms). */
   updatedAt?: number
+  /** Junk the engine keeps out of the portfolio; only present when asked for. */
+  hidden?: boolean
 }
 
 /**

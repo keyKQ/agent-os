@@ -419,6 +419,7 @@ export function Book({
             onSend={() => openSheet('send')}
             onMultisend={() => openSheet('multisend')}
             onInspect={() => openSheet('inspect')}
+            onBurn={() => openSheet('burn')}
           />
         ) : (
           <History

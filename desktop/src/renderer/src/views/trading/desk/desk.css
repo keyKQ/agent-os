@@ -2654,3 +2654,113 @@ button.trd-tool:focus-visible {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* ── Burn: the one destructive tool ──────────────────────────────────────── */
+
+/* Both catalogues mark it the same way, and unlike every other tone here it
+   is not conditional on a live read: the card is dangerous at rest. */
+.trd-picker__card[data-tone='danger'] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.trd-picker__card[data-tone='danger'] svg,
+.trd-picker__card[data-tone='danger']:hover svg {
+  color: var(--danger);
+}
+.trd-picker__card[data-tone='danger']:hover {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+.trd-picker__danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.trd-picker__danger svg {
+  color: inherit;
+}
+.trd-tool[data-tone='danger'] {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, var(--border)),
+    inset 3px 0 0 var(--danger);
+}
+.trd-tool[data-tone='danger'] .trd-tool__icon {
+  color: var(--danger);
+}
+button.trd-tool[data-tone='danger']:hover {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--danger) 55%, var(--border)),
+    inset 3px 0 0 var(--danger);
+}
+
+.trd-burn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.trd-burn__lead {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+/* The one thing on the sheet that is a statement, not a control: the
+   recipient is pinned, so it reads as a fact about where this goes. */
+.trd-burn__to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 30%, transparent);
+}
+.trd-burn__to > span {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.trd-burn__to > b {
+  font-size: 11.5px;
+  color: var(--danger);
+  word-break: break-all;
+}
+.trd-burn__to > em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+/* Worth money: the argument against burning gets the loud treatment, above
+   the amount field rather than under it. */
+.trd-burn__valuable {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: var(--radius-surface);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.trd-burn__valuable svg {
+  flex: none;
+  margin-top: 1px;
+}
+.trd-burn__all {
+  font: inherit;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

@@ -22,12 +22,14 @@ export function ToolsPanel({
   onSend,
   onMultisend,
   onInspect,
+  onBurn,
 }: {
   wallet: string | undefined
   onSend: () => void
   /** Opens the send sheet with the list leading; falls back to `onSend`. */
   onMultisend?: () => void
   onInspect: () => void
+  onBurn: () => void
 }) {
   const [view, setView] = useState<'cards' | 'allowances'>('cards')
   const allowances = useAllowances(wallet, undefined, true)
@@ -60,6 +62,7 @@ export function ToolsPanel({
     allowances: () => setView('allowances'),
     inspect: onInspect,
     network: () => void network.refetch(),
+    burn: onBurn,
   }
 
   // The live line on the two cards that have one; the hint otherwise.
@@ -78,9 +81,10 @@ export function ToolsPanel({
         : t('trading.network.allHealthy')
       : t('trading.network.unknown'),
   }
-  const tone: Partial<Record<DeskToolId, 'warn'>> = {
+  const tone: Partial<Record<DeskToolId, 'warn' | 'danger'>> = {
     allowances: unlimited > 0 ? 'warn' : undefined,
     network: unhealthy.length ? 'warn' : undefined,
+    burn: 'danger',
   }
 
   return (

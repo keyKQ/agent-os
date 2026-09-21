@@ -43,6 +43,7 @@ import { MissionControls, MissionStrip, missionWord } from './MissionControls'
 import { MissionPicker } from './MissionPicker'
 import type { MissionsApi } from './missions'
 import type { MissionPreset } from './presets'
+import { BurnSheet } from './BurnSheet'
 import { SendSheet } from './SendSheet'
 import { AllowancesSheet, NetworkSheet } from './ToolSheets'
 import { ToolsPicker } from './ToolsPicker'
@@ -479,6 +480,16 @@ export function useDeskInstruments(
       <DecodeSheet chainId={inspectChain} onClose={() => openSheet(null)} />
     ) : sheet === 'network' ? (
       <NetworkSheet onBack={() => openSheet('pick')} onClose={() => openSheet(null)} />
+    ) : sheet === 'burn' ? (
+      <BurnSheet
+        wallets={desk.wallets}
+        primary={desk.primary}
+        onClose={() => openSheet(null)}
+        onAsk={(prompt) => {
+          submitText(prompt)
+          openSheet(null)
+        }}
+      />
     ) : sheet === 'send' || sheet === 'multisend' ? (
       <SendSheet
         wallets={desk.wallets}

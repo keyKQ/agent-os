@@ -61,7 +61,9 @@ describe('ToolsPanel', () => {
   it('shows every tool with its live headline and opens each one', async () => {
     const onSend = vi.fn()
     const onInspect = vi.fn()
-    renderDesk(<ToolsPanel wallet={WALLET.address} onSend={onSend} onInspect={onInspect} />)
+    renderDesk(
+      <ToolsPanel wallet={WALLET.address} onSend={onSend} onInspect={onInspect} onBurn={vi.fn()} />,
+    )
     await waitFor(() =>
       expect(screen.getByTestId('tool-allowances')).toHaveTextContent('1 unlimited allowance'),
     )
@@ -84,23 +86,29 @@ describe('ToolsPanel', () => {
     expect(screen.getByTestId('tool-send')).toBeInTheDocument()
   })
 
-  it('carries the same cards as the picker, Multisend included', async () => {
+  it('carries the same cards as the picker, Multisend and Burn included', async () => {
     const onSend = vi.fn()
     const onMultisend = vi.fn()
+    const onBurn = vi.fn()
     renderDesk(
       <ToolsPanel
         wallet={WALLET.address}
         onSend={onSend}
         onMultisend={onMultisend}
         onInspect={vi.fn()}
+        onBurn={onBurn}
       />,
     )
-    for (const id of ['send', 'multisend', 'allowances', 'inspect', 'network']) {
+    for (const id of ['send', 'multisend', 'allowances', 'inspect', 'network', 'burn']) {
       expect(screen.getByTestId(`tool-${id}`)).toBeInTheDocument()
     }
     fireEvent.click(screen.getByTestId('tool-multisend'))
     expect(onMultisend).toHaveBeenCalled()
     expect(onSend).not.toHaveBeenCalled()
+    // Burn wears its warning without waiting for any live read.
+    expect(screen.getByTestId('tool-burn')).toHaveAttribute('data-tone', 'danger')
+    fireEvent.click(screen.getByTestId('tool-burn'))
+    expect(onBurn).toHaveBeenCalled()
     await waitFor(() => expect(screen.getByTestId('tool-network')).toHaveTextContent('Base'))
   })
 })

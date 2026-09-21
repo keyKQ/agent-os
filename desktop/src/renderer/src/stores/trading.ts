@@ -48,7 +48,8 @@ export const TRADING_KEYS = {
   wallets: ['trading', 'wallets'] as const,
   portfolio: (wallet?: string, includeHidden = false) =>
     ['trading', 'portfolio', wallet ?? 'all', includeHidden ? 'with-hidden' : 'shown'] as const,
-  balances: (wallet?: string) => ['trading', 'balances', wallet ?? 'all'] as const,
+  balances: (wallet?: string, includeHidden = false) =>
+    ['trading', 'balances', wallet ?? 'all', includeHidden ? 'hidden' : 'visible'] as const,
   // `limit` and `wallet` shape the answer, so two callers asking for
   // different pages must not share one cache entry.
   orders: (status?: OrderStatus, limit?: number, wallet?: string, kind?: OrderKind) =>
@@ -198,15 +199,24 @@ interface BalanceList {
  * announces `trading.changed` when the ledger moves, which refetches this.
  * The interval is only a backstop for a missed event.
  */
-export function useBalances(wallet: string | undefined, enabled = true) {
+/**
+ * A wallet's holdings. `includeHidden` asks for the junk the engine normally
+ * filters out too — flagged `hidden`, and the only way to see the dust a
+ * burn is usually aimed at. It is part of the query key, so the two views
+ * never overwrite each other in the cache.
+ */
+export function useBalances(wallet: string | undefined, enabled = true, includeHidden = false) {
   const rpc = useRpc()
   const connected = useConnected()
   const query = useQuery<BalanceList>({
-    queryKey: TRADING_KEYS.balances(wallet),
+    queryKey: TRADING_KEYS.balances(wallet, includeHidden),
     enabled: connected && enabled,
     queryFn: async () => {
       await rpc.waitForConnection()
-      return rpc.call<BalanceList>('wallet.balances', wallet ? { address: wallet } : {})
+      return rpc.call<BalanceList>('wallet.balances', {
+        ...(wallet ? { address: wallet } : {}),
+        ...(includeHidden ? { includeHidden: true } : {}),
+      })
     },
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,

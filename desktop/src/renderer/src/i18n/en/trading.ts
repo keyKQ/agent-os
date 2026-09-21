@@ -436,6 +436,7 @@ export const trading = {
   'trading.tool.group.move': 'Move money',
   'trading.tool.group.safety': 'Safety',
   'trading.tool.group.watch': 'Watch',
+  'trading.tool.group.clean': 'Clean up',
   'trading.tool.send.name': 'Send tokens',
   'trading.tool.send.hint': 'One address, any token, asked of the desk or sent by you',
   'trading.tool.multisend.name': 'Multisend',
@@ -447,6 +448,10 @@ export const trading = {
   'trading.tool.inspect.hint': 'Paste a hash or calldata; see what it called and what moved',
   'trading.tool.network.name': 'Network',
   'trading.tool.network.hint': 'Head block, gas and RPC latency per chain',
+  'trading.tool.burn.name': 'Burn tokens',
+  'trading.tool.burn.hint':
+    'Destroy dust, spam or a token you cannot sell — it goes to the burn address and never comes back',
+  'trading.tool.destructive': 'Cannot be undone',
   'trading.tool.back': 'All tools',
   'trading.network.allHealthy': 'all chains healthy',
   'trading.network.ok': 'healthy',
@@ -456,6 +461,48 @@ export const trading = {
   'trading.quick.dca': 'DCA',
   'trading.quick.dip': 'Buy the dip',
   'trading.quick.rebalance': 'Rebalance',
+
+  // Burn sheet
+  'trading.burn.lead':
+    'Sending a token to the burn address destroys it. Nothing is sold, nothing comes back, and there is no order to cancel afterwards. If you only want it out of sight, hide it instead; if it is worth something, sell it.',
+  'trading.burn.irreversible': 'A burn cannot be undone, by you or by anyone',
+  'trading.burn.token': 'Token to burn',
+  'trading.burn.token.placeholder': 'Pick one of this wallet’s tokens',
+  'trading.burn.token.empty': 'Nothing to burn on this chain',
+  'trading.burn.token.junk': 'hidden as junk',
+  'trading.burn.token.unverified': 'unverified',
+  'trading.burn.amount': 'Amount to burn',
+  'trading.burn.all': 'all of it',
+  'trading.burn.note.placeholder': 'Why (kept with the order)',
+  'trading.burn.to': 'Goes to',
+  'trading.burn.to.help': 'the burn address — no key, no owner, no way back',
+  'trading.burn.valuable':
+    'This is worth about {value}. Burning it returns nothing; a swap would return that value. Only burn it if you are sure.',
+  'trading.burn.confirm': 'Type {symbol} to confirm',
+  'trading.burn.confirm.idle': 'Type the symbol to confirm',
+  'trading.burn.error.token': 'Pick a token this wallet holds',
+  'trading.burn.error.native':
+    'The chain’s own coin cannot be burnt here — that is money destroyed for nothing',
+  'trading.burn.error.amount': 'Enter how much to burn',
+  'trading.burn.error.balance': 'That is more than the wallet holds',
+  'trading.burn.error.confirm': 'The symbol does not match',
+  'trading.burn.review.title': 'About to burn',
+  'trading.burn.review.all': 'the whole balance',
+  'trading.burn.review.gone': 'Value destroyed',
+  'trading.burn.review.unpriced': 'unpriced',
+  'trading.burn.now': 'Burn now',
+  'trading.burn.now.confirm': 'Burn it for good',
+  'trading.burn.now.help':
+    'Signs as you, immediately. Click twice; the second click is the last one.',
+  'trading.burn.burning': 'Burning…',
+  'trading.burn.ask': 'Ask the desk',
+  'trading.burn.ask.help':
+    'Posts the burn into the chat; the agent runs it and it comes back here for your approval',
+  'trading.burn.sent': 'Burn submitted',
+  'trading.burn.sent.body': 'Watch it settle in Orders; the tokens are gone once it confirms.',
+  'trading.burn.failed': 'Burn failed',
+  'trading.burn.failed.body':
+    'Many spam tokens block transfers outright. If it keeps reverting, hide it instead — that always works.',
 
   // Send sheet
   'trading.send.title': 'Send',

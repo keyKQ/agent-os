@@ -46,7 +46,8 @@ function save(key: string, value: string): void {
 export type BookTab = 'portfolio' | 'swap' | 'orders' | 'history' | 'tools'
 
 /** A sheet the BOOK asks the chat to open: Send posts into the chat, so it lives there. */
-export type DeskSheet = 'pick' | 'send' | 'multisend' | 'allowances' | 'inspect' | 'network' | null
+export type DeskSheet =
+  'pick' | 'send' | 'multisend' | 'allowances' | 'inspect' | 'network' | 'burn' | null
 
 interface TradingUiStore {
   bookWidth: number

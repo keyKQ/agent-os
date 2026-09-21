@@ -2,6 +2,7 @@ import type { RawJob, RawRun } from '@/views/cron/logic'
 import {
   chainName,
   clampSymbol,
+  compareAmounts,
   formatAmount,
   formatPct,
   formatUsd,
@@ -557,6 +558,97 @@ export function composeSendPrompt(form: SendForm, ctx: { wallets: readonly Walle
     'Rules: use `agentos trade send` once, with every recipient in that one command (it is one batch). ' +
       'Use exactly these addresses and amounts; do not resolve names or change anything. ' +
       'It will wait for my approval here; wait for it with `--wait --wait-seconds 600` and report each leg with its tx link.',
+  )
+  return lines.join('\n')
+}
+
+/* ── Burn ────────────────────────────────────────────────────────────────── */
+
+/**
+ * Where a burnt token goes: an address with no known key, so the supply is
+ * stranded there for good. The zero address is **not** an alternative — the
+ * engine refuses it (`trading.invalid`) — and no other address is used.
+ */
+export const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD'
+
+export interface BurnForm {
+  chainId: number
+  wallet: string | null
+  /** The token's address, picked from what the wallet actually holds. */
+  token: string
+  amount: string
+  /** The symbol typed back by hand: the second half of the confirmation. */
+  confirm: string
+  note: string
+}
+
+/** What the paying wallet holds of the picked token, as the sheet knows it. */
+export interface BurnHolding {
+  symbol: string
+  decimals: number
+  /** Human units, as the balance reads. */
+  amount: string
+  native: boolean
+  valueUsd: number | null
+}
+
+export type BurnError = 'token' | 'native' | 'amount' | 'balance' | 'confirm'
+
+/**
+ * A burn is refused for five reasons, in the order a person hits them: no
+ * token picked, a native asset (ETH burnt is money destroyed, and no UI of
+ * ours offers that), an unusable amount, more than the wallet holds, and
+ * finally the symbol not typed back. The confirmation is checked last so
+ * the box only turns red once everything else is right.
+ */
+export function validateBurn(
+  form: BurnForm,
+  held: BurnHolding | null,
+): { ok: boolean; error?: BurnError } {
+  if (!form.token.trim() || !held) return { ok: false, error: 'token' }
+  if (held.native) return { ok: false, error: 'native' }
+  const amount = form.amount.trim()
+  if (!(AMOUNT_RE.test(amount) && Number(amount) > 0)) return { ok: false, error: 'amount' }
+  if (compareAmounts(amount, held.amount, held.decimals) > 0) return { ok: false, error: 'balance' }
+  // Case-insensitive, whitespace-trimmed: the point is that they read the
+  // symbol and typed it, not that they matched its capitalisation.
+  if (form.confirm.trim().toUpperCase() !== held.symbol.trim().toUpperCase())
+    return { ok: false, error: 'confirm' }
+  return { ok: true }
+}
+
+export const BURN_TAG = '[Trading desk burn]'
+
+/**
+ * The prompt the Burn sheet posts into the chat. It names the burn address
+ * in full rather than leaving the agent to recall it, and it says the two
+ * things an agent must not improvise around: one command, and no
+ * substitution if the amount or the token turns out to be awkward.
+ */
+export function composeBurnPrompt(
+  form: BurnForm,
+  ctx: { wallets: readonly Wallet[]; held: BurnHolding | null },
+): string {
+  const symbol = ctx.held?.symbol ?? form.token.trim()
+  const lines: string[] = []
+  // The raw amount, never `formatAmount`: the agent passes this straight to
+  // `--amount`, and a thousands separator is not a number to the CLI.
+  lines.push(`${BURN_TAG} Burn ${form.amount.trim()} ${symbol}`)
+  lines.push(`Chain: ${chainName(form.chainId)} · Token: ${form.token.trim()} (${symbol})`)
+  lines.push(
+    `From: ${form.wallet ? walletDisplay(form.wallet, ctx.wallets) : 'the primary wallet'}`,
+  )
+  lines.push(`To: ${BURN_ADDRESS} (the burn address)`)
+  if (ctx.held?.valueUsd != null)
+    lines.push(`Worth about ${formatUsd(ctx.held.valueUsd)} at the last price the desk read.`)
+  if (form.note.trim()) lines.push(`Note: ${form.note.trim()}`)
+  lines.push(
+    'Rules: I have already read the plan and typed the symbol back, so do not re-ask me to confirm. ' +
+      `Run \`agentos trade send\` exactly once, to ${BURN_ADDRESS} and to no other address, ` +
+      'with exactly this token, this amount and this wallet. Do not round it, do not switch to a ' +
+      'percentage, do not sell it instead, and do not burn anything else. Pass a --client-id so a ' +
+      'retry cannot burn twice. It will wait for my approval here; wait with `--wait --wait-seconds 600` ' +
+      'and report the tx link. If the transfer reverts, say so and stop — that token cannot be burnt.',
   )
   return lines.join('\n')
 }

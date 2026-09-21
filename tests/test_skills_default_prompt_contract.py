@@ -63,6 +63,7 @@ DEFAULTS = (
         "summarize",
         "text-file-read",
         "title-card-image",
+        "token-burner",
         "tmux",
         "video-merger",
         "video-still-animator",

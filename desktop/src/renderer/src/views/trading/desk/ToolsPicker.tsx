@@ -1,13 +1,21 @@
-import { Activity, ListChecks, Search, SendHorizontal, ShieldCheck, ShieldOff } from 'lucide-react'
+import {
+  Activity,
+  Flame,
+  ListChecks,
+  Search,
+  SendHorizontal,
+  ShieldCheck,
+  ShieldOff,
+} from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { t, type MessageKey } from '~/i18n'
 import { useAllowances, useNetwork } from '~/stores/trading'
 import { pipState } from '../NetworkPips'
 import { Sheet } from '../parts'
 
-export type DeskToolId = 'send' | 'multisend' | 'allowances' | 'inspect' | 'network'
+export type DeskToolId = 'send' | 'multisend' | 'allowances' | 'inspect' | 'network' | 'burn'
 
-type ToolGroup = 'move' | 'safety' | 'watch'
+type ToolGroup = 'move' | 'safety' | 'watch' | 'clean'
 
 interface ToolCard {
   id: DeskToolId
@@ -17,9 +25,13 @@ interface ToolCard {
   hint: MessageKey
   /** Reads only: never signs, never spends. */
   readOnly?: boolean
+  /** Destroys something for good: badged, and last in the catalogue. */
+  destructive?: boolean
 }
 
-const TOOL_GROUPS: readonly ToolGroup[] = ['move', 'safety', 'watch']
+// `clean` is last on purpose: the one destructive card should be the one a
+// person has to scroll to, not the one they brush past on the way to Send.
+const TOOL_GROUPS: readonly ToolGroup[] = ['move', 'safety', 'watch', 'clean']
 
 export const DESK_TOOLS: readonly ToolCard[] = [
   {
@@ -58,6 +70,14 @@ export const DESK_TOOLS: readonly ToolCard[] = [
     name: 'trading.tool.network.name',
     hint: 'trading.tool.network.hint',
     readOnly: true,
+  },
+  {
+    id: 'burn',
+    group: 'clean',
+    icon: Flame,
+    name: 'trading.tool.burn.name',
+    hint: 'trading.tool.burn.hint',
+    destructive: true,
   },
 ]
 
@@ -115,7 +135,9 @@ export function ToolsPicker({
                       key={card.id}
                       type="button"
                       className="trd-picker__card app-no-drag"
-                      data-tone={fact?.tone === 'warn' ? 'warn' : undefined}
+                      data-tone={
+                        card.destructive ? 'danger' : fact?.tone === 'warn' ? 'warn' : undefined
+                      }
                       onClick={() => onPick(card.id)}
                       data-testid={`tool-${card.id}`}
                     >
@@ -127,6 +149,12 @@ export function ToolsPicker({
                             <span className="trd-picker__safe">
                               <ShieldCheck className="size-3" strokeWidth={2} aria-hidden />
                               {t('trading.preset.readOnly')}
+                            </span>
+                          ) : null}
+                          {card.destructive ? (
+                            <span className="trd-picker__danger">
+                              <Flame className="size-3" strokeWidth={2} aria-hidden />
+                              {t('trading.tool.destructive')}
                             </span>
                           ) : null}
                         </span>
