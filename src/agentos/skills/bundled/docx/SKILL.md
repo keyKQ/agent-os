@@ -54,7 +54,7 @@ the input as the visual style baseline. Only choose path C when the user says
 Dump structure as JSON for inspection without mutating anything.
 
 ```bash
-python {baseDir}/scripts/inspect_docx.py /path/to/doc.docx
+{python} {baseDir}/scripts/inspect_docx.py /path/to/doc.docx
 ```
 
 Output schema:
@@ -84,7 +84,7 @@ When the change is "swap this string" or "fill these placeholders": mutate
 runs in place. This preserves all theme/style/font settings.
 
 ```bash
-python {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
+{python} {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
 ```
 
 `ops.json` is a list of operations:
@@ -96,8 +96,22 @@ python {baseDir}/scripts/edit_docx.py input.docx ops.json --out output.docx
 ]
 ```
 
-`replace_text` walks body paragraphs and every table cell (nested tables
-included), so placeholders inside contract or invoice tables are found too.
+`replace_text` walks body paragraphs, every table cell (nested tables
+included), each section's headers and footers (first-page and even-page
+variants too) and the paragraphs inside every text box, so placeholders inside
+contract or invoice tables, letterheads, pull quotes and confidentiality
+banners are all found. A shape that Word stored in both its modern and legacy
+spellings counts once per stored copy in `applied`, because both copies hold
+the text and both are rewritten.
+
+`ops.json` must be a JSON **array** of objects, each with a known `op`
+(`replace_run` or `replace_text`). An unparseable file, a non-array, or an
+unknown `op` exits 2 with `error: …` and writes nothing — the ops are
+validated before the document is opened, so a typo like `replace-text` fails
+loudly instead of producing an unchanged copy at `--out`. `create_docx.py`
+rejects a body entry with an unknown `kind` the same way (an empty `body` is
+a valid empty document) and prints an `{"entries": N, "out": …}` summary on
+success.
 
 Edit at the **run** level, not the paragraph level — replacing whole paragraph
 text drops formatting. If a placeholder spans multiple runs (often happens
@@ -136,7 +150,7 @@ success — silent failures are common.
 ## Path C: Create from scratch
 
 ```bash
-python {baseDir}/scripts/create_docx.py spec.json --out out.docx
+{python} {baseDir}/scripts/create_docx.py spec.json --out out.docx
 ```
 
 `spec.json` describes content declaratively:

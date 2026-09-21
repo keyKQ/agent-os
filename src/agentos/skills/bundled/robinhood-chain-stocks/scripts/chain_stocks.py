@@ -39,6 +39,14 @@ FEEDS_URL = "https://reference-data-directory.vercel.app/feeds-robinhood-mainnet
 # suffix is the offline signal that separates the two. `uiMultiplier()` is the
 # on-chain confirmation.
 _RH_SUFFIX_RE = re.compile(r"\s*[•·|-]?\s*robinhood token\s*$", re.IGNORECASE)
+# The truncation-tolerant form: a bullet followed by any prefix of the marker.
+# CoinGecko caps `name` at 60 characters, so long listings arrive with the
+# suffix chopped ("... • Robinhood Toke" for IBM, "... • Robinhood T" for SPYD).
+_RH_SUFFIX_LOOSE_RE = re.compile(
+    r"\s*[•·|-]\s*r(?:o(?:b(?:i(?:n(?:h(?:o(?:o(?:d)?)?)?)?)?)?)?)?"
+    r"(?:\s+t(?:o(?:k(?:e(?:n)?)?)?)?)?\s*$",
+    re.IGNORECASE,
+)
 _ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 # Function selectors (first 4 bytes of keccak256 of the signature).
@@ -51,6 +59,33 @@ SEL_ORACLE_PAUSED = "0x7706ba52"  # oraclePaused()
 SEL_LATEST_ROUND_DATA = "0xfeaf968c"  # latestRoundData() -- AggregatorV3Interface
 
 WAD = 10**18
+
+
+def _write_stdout(text: str) -> None:
+    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
+
+    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
+    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
+    outside that page raises ``UnicodeEncodeError`` before a byte is written —
+    the document decides whether the skill runs. The binary buffer is therefore
+    the primary path, matching the ``--out`` branch, which already passes
+    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
+    captured stdout — still gets the text, escaped rather than lost.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(text.encode("utf-8"))
+            buffer.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            # Buffer closed or not writable — fall through to the text layer.
+            pass
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
+    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
+    sys.stdout.flush()
 
 
 class RpcError(RuntimeError):
@@ -147,13 +182,22 @@ def _encode_address_arg(selector: str, address: str) -> str:
 
 
 def _clean_name(name: str) -> str:
-    """Strip the '- Robinhood Token' suffix so 'Apple' matches cleanly."""
-    return _RH_SUFFIX_RE.sub("", name or "").strip()
+    """Strip the '- Robinhood Token' suffix so 'Apple' matches cleanly.
+
+    Handles the truncated tail too: CoinGecko cuts `name` at 60 characters, so
+    'International Business Machines Corporation • Robinhood Toke' must still
+    display as the company name.
+    """
+    stripped = _RH_SUFFIX_RE.sub("", name or "").strip()
+    if stripped == (name or "").strip():
+        stripped = _RH_SUFFIX_LOOSE_RE.sub("", stripped).strip()
+    return stripped
 
 
 def is_stock_token(token: dict[str, Any]) -> bool:
     """True when the list entry is a Robinhood Stock Token, not a community token."""
-    return bool(_RH_SUFFIX_RE.search(token.get("name", "") or ""))
+    name = token.get("name", "") or ""
+    return bool(_RH_SUFFIX_RE.search(name) or _RH_SUFFIX_LOOSE_RE.search(name))
 
 
 def _norm(text: str) -> str:
@@ -459,13 +503,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.rpc_url = _validate_http_url(args.rpc_url)
     except ValueError as exc:
-        print(json.dumps({"error": f"invalid rpc-url: {exc}"}, ensure_ascii=False))
+        _write_stdout(json.dumps({"error": f"invalid rpc-url: {exc}"}, ensure_ascii=False) + "\n")
         return 0
 
     try:
         address, listed, feeds = _resolve_target(args, args.timeout)
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        print(json.dumps({"query": args.query, "error": str(exc)}, ensure_ascii=False))
+        _write_stdout(
+            json.dumps({"query": args.query, "error": str(exc)}, ensure_ascii=False) + "\n"
+        )
         return 0
 
     symbol = str((listed or {}).get("symbol", "")) or ""
@@ -514,7 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         "sources": {"tokenList": TOKEN_LIST_URL, "priceFeeds": FEEDS_URL},
         "token": state,
     }
-    print(json.dumps(result, ensure_ascii=False))
+    _write_stdout(json.dumps(result, ensure_ascii=False) + "\n")
     if not args.no_cards:
         _write_cards(result, args.cards or _default_cards_name(result))
     return 0

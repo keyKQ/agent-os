@@ -167,6 +167,54 @@ GMGN skills (`gmgn-token`, `gmgn-market`, `gmgn-portfolio`, `gmgn-track`,
 the group wears the AgentOS mark. Every mark ships with the client; no manifest
 field points the UI at an image, remote or local.
 
+## Declaring the Variables a Skill Reads
+
+`metadata.agentos.requires.env` (or `metadata.platform.requires.env`) lists
+the environment variables a skill's scripts read. Each entry carries a
+`description` and a `url` so the Environment page and `agentos env list` can
+say what the variable is for and where to obtain it, and `secret` when the
+name-based heuristic would guess wrong. `required` defaults to `true`; set it
+to `false` for a variable that unlocks part of the skill rather than gating all
+of it -- the `multi-search-engine` skill declares every engine key that way, so
+it stays offered on DuckDuckGo alone and grows engines as keys appear. A
+required variable that is missing hides the skill and is reported by
+`agentos skills doctor`; an optional one only shows as unset on the
+Environment page.
+
+Declared variables are also the ones forwarded into the `execute_code`
+sandbox when the skill is viewed, which is how a script running there can
+read its own key. AgentOS's own provider credentials are refused to hub and
+local skills; a bundled skill may declare them.
+
+## How a Skill Reaches Its Own Scripts
+
+A `SKILL.md` is written before anyone knows where it will be installed or which
+Python will be running, so it names both through placeholders that the tool
+layer fills in when the body is handed to the agent (`skill_view`):
+
+| Placeholder | Becomes | Why |
+| --- | --- | --- |
+| `{baseDir}` | The skill's own install directory | Bundled skills live under site-packages on one machine and under a workspace on the next; an absolute path is wrong everywhere but where it was typed. |
+| `{python}` | The interpreter AgentOS itself runs on (`sys.executable` of the gateway) | A bare `python` in a shell command is whatever the user's PATH says — a Homebrew 3.9 with a stray `httpx`, or nothing at all on Windows. Only AgentOS's own interpreter is guaranteed to carry the skill's dependencies and to be new enough for its syntax. |
+
+So a script invocation in a skill body is written as:
+
+```bash
+{python} {baseDir}/scripts/run.py --flag value
+```
+
+and an `entrypoint.command` in frontmatter as `"{python} {baseDir}/scripts/run.py"`
+(quoted — YAML would otherwise read the leading `{` as a mapping). `agentos
+skills init --with-script` scaffolds it that way. The expanded text also leads
+with `[Skill directory: …]` and `[Skill interpreter: …]` lines, so a third-party
+skill that still says `python3 script.py` can be steered onto the right
+interpreter too.
+
+Expansion happens only on the copy the agent reads. The file on disk keeps the
+placeholders, which is what lets `skill_edit` write it back without baking a
+machine-specific path into it, and what lets the same skill directory move
+between machines.
+
 ## Whether the Agent Is Offered a Skill
 
 Installed, eligible, and offered are three different states. A skill can be

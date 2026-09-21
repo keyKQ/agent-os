@@ -70,6 +70,33 @@ _STATUS_RANK = {
 }
 
 
+def _write_stdout(text: str) -> None:
+    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
+
+    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
+    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
+    outside that page raises ``UnicodeEncodeError`` before a byte is written —
+    the document decides whether the skill runs. The binary buffer is therefore
+    the primary path, matching the ``--out`` branch, which already passes
+    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
+    captured stdout — still gets the text, escaped rather than lost.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(text.encode("utf-8"))
+            buffer.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            # Buffer closed or not writable — fall through to the text layer.
+            pass
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
+    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
+    sys.stdout.flush()
+
+
 class RpcError(RuntimeError):
     """A JSON-RPC call returned an error or an unusable result."""
 
@@ -408,7 +435,7 @@ def main() -> int:
     warning = _warning_for(matches, verification_skipped=args.no_verify)
     if warning:
         result["warning"] = warning
-    print(json.dumps(result, ensure_ascii=False))
+    _write_stdout(json.dumps(result, ensure_ascii=False) + "\n")
     if not args.no_cards:
         _write_cards(result, args.cards or _default_cards_name(result))
     return 0
@@ -447,7 +474,9 @@ def _write_cards(result: dict[str, Any], output: str) -> None:
         payload = rwa_cards.build_payload(result)
         if not payload["cards"]:
             return
-        Path(output).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         print(f"publish_artifact path={output} mime={rwa_cards.CARDS_MIME}", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - lookup already printed; never fail on the card
         print(f"[card not written: {exc}]", file=sys.stderr)

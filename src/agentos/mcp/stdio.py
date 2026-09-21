@@ -226,6 +226,64 @@ class MCPStdioClient(MCPClient):
             )
 
         result = response.get("result", {})
-        content_list = result.get("content", [])
-        text = "\n".join(c.get("text", "") for c in content_list if c.get("type") == "text")
-        return MCPToolResult(content=text)
+
+        try:
+            from mcp.types import CallToolResult
+
+            call_result = CallToolResult.model_validate(result)
+        except Exception:
+            # The server completed the call; only the pinned SDK's model of
+            # what a result looks like fell short of it -- a structured-only
+            # result with no ``content`` key, or a content block newer than the
+            # installed ``mcp``. That is the server's answer, rendered less
+            # richly, not a tool failure: ``is_error`` is the signal the model
+            # retries on, and a validation dump is not the tool's output.
+            return self._render_raw_result(result)
+
+        chunks: list[str] = []
+        for block in call_result.content:
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                chunks.append(text)
+                continue
+            if hasattr(block, "model_dump_json"):
+                chunks.append(block.model_dump_json())
+
+        structured = getattr(call_result, "structuredContent", None)
+        if not chunks and structured is not None:
+            chunks.append(json.dumps(structured, ensure_ascii=False))
+
+        return MCPToolResult(
+            content="\n".join(chunks),
+            is_error=bool(getattr(call_result, "isError", False)),
+        )
+
+    @staticmethod
+    def _render_raw_result(result: Any) -> MCPToolResult:
+        """Render a ``tools/call`` result straight from its JSON.
+
+        Mirrors the SDK-backed path block for block: a text block contributes
+        its text, any other block its JSON, and ``structuredContent`` stands in
+        when there is nothing else -- so the two spellings of a structured-only
+        result come out the same.
+        """
+        if not isinstance(result, dict):
+            return MCPToolResult(
+                content=f"Unexpected tools/call result: {json.dumps(result, ensure_ascii=False)}",
+                is_error=True,
+            )
+        chunks: list[str] = []
+        content = result.get("content")
+        for block in content if isinstance(content, list) else []:
+            text = block.get("text") if isinstance(block, dict) else None
+            if isinstance(text, str):
+                chunks.append(text)
+            else:
+                chunks.append(json.dumps(block, ensure_ascii=False))
+        structured = result.get("structuredContent")
+        if not chunks and structured is not None:
+            chunks.append(json.dumps(structured, ensure_ascii=False))
+        return MCPToolResult(
+            content="\n".join(chunks),
+            is_error=bool(result.get("isError", False)),
+        )

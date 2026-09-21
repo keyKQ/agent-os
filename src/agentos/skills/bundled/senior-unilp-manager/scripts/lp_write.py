@@ -49,6 +49,9 @@ from unilp.fmt import (  # noqa: E402
     die,
     fmt_units,
     heading,
+    opt_float,
+    opt_int,
+    opt_str,
     parse_amount,
     parse_args,
     render_kv,
@@ -111,8 +114,10 @@ senior-unilp-manager — Uniswap V4 LP writes (DRY RUN unless --broadcast --conf
            (--tick <t> | --price <currency1 per currency0>) [--allow-odd-tier]
            hook-less pools only; the starting price can never be changed afterwards
   mint     --pool <poolId> (--tick-lower <t> --tick-upper <t>)
-           (--amount0 <n> | --amount1 <n> | --liquidity <raw>)
+           (--amount0 <n|max> | --amount1 <n|max> | --liquidity <raw>)
            [--slippage-bps 100] [--recipient <addr>] [--allow-hooked]
+           "max" deposits the signer's whole ERC-20 balance and caps the slippage
+           buffer at it. --pool alone is enough for any pool this skill has read before.
   increase --token-id <id> (--amount0 <n> | --amount1 <n> | --liquidity <raw>)
            [--slippage-bps 100] [--recipient <addr>]   recipient = native SWEEP refund
   decrease --token-id <id> (--pct <0-100> | --liquidity <raw>) [--slippage-bps 100]
@@ -230,10 +235,11 @@ class MandateAuthorization:
 
 def resolve_signer(args: dict) -> dict:
     """Either a real key (from the environment) or a plan-only address."""
-    if args.get("from"):
-        return {"address": checksum_address(args["from"]), "privateKey": None,
+    sender = opt_str(args, "from")
+    if sender:
+        return {"address": checksum_address(sender), "privateKey": None,
                 "simulateOnly": True}
-    signer_env = args.get("signer-env") or ENV_SIGNER
+    signer_env = opt_str(args, "signer-env") or ENV_SIGNER
     private_key = resolve_private_key(signer_env)
     account = account_from_private_key(private_key)
     # Only the derived address is ever surfaced; the key itself is never logged.
@@ -380,18 +386,110 @@ def check_allowances(client, chain: dict, owner: str, currencies: list[str]) -> 
     return rows
 
 
-def allowance_problem(row: dict, needed: int, now_secs: int) -> str | None:
+class Problem(str):
+    """A reason the mint cannot settle, tagged with what would fix it.
+
+    ``kind`` is ``"balance"`` (the wallet is short — a sizing problem) or
+    ``"approval"`` (Permit2 / ERC-20 legs — run ``approve``). The two used to share one
+    message that always ended in "run approve", which sent an agent whose only fault was
+    a +100 bps buffer larger than its balance off to refresh approvals it already had.
+    """
+
+    kind: str
+
+    def __new__(cls, kind: str, message: str) -> Problem:
+        self = super().__new__(cls, message)
+        self.kind = kind
+        return self
+
+    @property
+    def message(self) -> str:
+        return str(self)
+
+
+def allowance_problem(row: dict, needed: int, now_secs: int, *,
+                      required: int | None = None) -> Problem | None:
+    """Why ``needed`` base units of this currency cannot be pulled, or None.
+
+    ``needed`` is the slippage-padded maximum the transaction may take; ``required`` is
+    the exact amount the position needs at today's price. When the balance covers
+    ``required`` but not ``needed``, the shortfall is the buffer, and the message says
+    so — that is fixed by ``--amount<n> max`` or a smaller ``--slippage-bps``, not by
+    an approval.
+    """
     if row["native"]:
         return None
     if row["balance"] < needed:
-        return f"balance {row['balance']} < required {needed}"
+        if required is not None and row["balance"] >= required:
+            return Problem(
+                "balance",
+                f"balance {row['balance']} covers the {required} required but not the "
+                f"slippage buffer ({needed}) — pass --amount0/--amount1 max to size from "
+                "the wallet and cap the buffer at the balance, or lower --slippage-bps",
+            )
+        return Problem("balance", f"balance {row['balance']} < required {needed}")
     if row["erc20ToPermit2"] < needed:
-        return f"ERC20 approval to Permit2 is {row['erc20ToPermit2']}, need {needed}"
+        return Problem("approval",
+                       f"ERC20 approval to Permit2 is {row['erc20ToPermit2']}, need {needed}")
     if row["permit2ToPosm"] < needed:
-        return f"Permit2 approval to PositionManager is {row['permit2ToPosm']}, need {needed}"
+        return Problem("approval", f"Permit2 approval to PositionManager is "
+                                   f"{row['permit2ToPosm']}, need {needed}")
     if row["permit2Expiration"] != 0 and row["permit2Expiration"] < now_secs:
-        return f"Permit2 approval expired at {_iso(row['permit2Expiration'])}"
+        return Problem("approval",
+                       f"Permit2 approval expired at {_iso(row['permit2Expiration'])}")
     return None
+
+
+_MAX_WORDS = {"max", "all"}
+
+
+def resolve_max_amounts(client, chain: dict, owner: str, args: dict,
+                        pool_key: dict) -> dict[str, int]:
+    """Turn ``--amount0/--amount1 max`` into the wallet's balance, in place.
+
+    "Deposit all of it" is the common single-sided request, and until now it meant a
+    hand-written ``balanceOf`` call and a second round trip when the slippage buffer
+    pushed the maximum past the balance. Each maxed side is rewritten as raw base units
+    (``<n>w``) so :func:`size_liquidity` needs no change, and the returned map tells
+    :func:`cmd_mint` which sides to cap at the balance. Native currency is refused:
+    "all the ETH" would leave nothing for gas.
+    """
+    maxed: dict[str, int] = {}
+    wanted = []
+    for side, currency in (("amount0", pool_key["currency0"]),
+                           ("amount1", pool_key["currency1"])):
+        raw = opt_str(args, side)
+        if raw is None or str(raw).strip().lower() not in _MAX_WORDS:
+            continue
+        if is_native_currency(currency):
+            raise RuntimeError(
+                f"--{side} max is not allowed for the native currency — it would leave "
+                "nothing for gas. Give an explicit amount."
+            )
+        wanted.append((side, checksum_address(currency)))
+    if not wanted:
+        return maxed
+    balances = client.multicall([
+        {"address": currency, "abi": ERC20_ABI, "functionName": "balanceOf", "args": [owner]}
+        for _side, currency in wanted
+    ], allow_failure=False)
+    for (side, _currency), row in zip(wanted, balances):
+        balance = int(row["result"])
+        args[side] = f"{balance}w"
+        maxed[side] = balance
+    return maxed
+
+
+def cap_at_balance(amount_max: int, balance: int) -> tuple[int, str]:
+    """Clamp a slippage-padded maximum to what the wallet holds.
+
+    Only meaningful when the amount itself came from the balance: the padding exists
+    to absorb price drift, and a wallet cannot supply more than it has. Returns the
+    (possibly lowered) maximum and a note for the plan table.
+    """
+    if amount_max > balance:
+        return balance, "capped at balance"
+    return amount_max, ""
 
 
 # ---------------------------------------------------------------------------
@@ -525,11 +623,11 @@ def _send(client, chain: dict, args: dict, signer: dict, to: str, data: str,
     ``on_sent`` is passed straight through to :func:`send_transaction` so an unattended
     caller can persist the hash and nonce before the broadcast leaves the process.
     """
-    max_fee_cap = args.get("max-fee-per-gas")
+    max_fee_cap = opt_str(args, "max-fee-per-gas")
     tx = prepare_transaction(
         client, chain, signer["address"], to, data, value,
-        gas_multiplier=float(args.get("gas-multiplier") or DEFAULT_GAS_MULTIPLIER),
-        max_fee_cap=int(str(max_fee_cap).replace("_", "")) if max_fee_cap else None,
+        gas_multiplier=opt_float(args, "gas-multiplier", DEFAULT_GAS_MULTIPLIER),
+        max_fee_cap=int(max_fee_cap.replace("_", "")) if max_fee_cap else None,
     )
     prefix = f"  {label} " if label else "\n  "
     tx_hash = send_transaction(client, chain, tx, signer["privateKey"],
@@ -554,7 +652,7 @@ def encode_call(plan: dict, deadline: int) -> str:
 
 def deadline_offset(args: dict) -> int:
     """Seconds from now, not the absolute deadline. PLAN_HASH binds this; see plan_hash."""
-    return int(args.get("deadline-secs") or DEFAULT_DEADLINE_SECS)
+    return opt_int(args, "deadline-secs", DEFAULT_DEADLINE_SECS)
 
 
 def with_slippage_up(amount: int, bps: int) -> int:
@@ -592,10 +690,10 @@ def cmd_approve(client, chain: dict, args: dict, signer: dict) -> None:
     if info["isNative"]:
         raise RuntimeError("native ETH needs no approval")
 
-    raw_amount = args.get("amount")
-    amount = (parse_amount(str(raw_amount), info["decimals"])
+    raw_amount = opt_str(args, "amount")
+    amount = (parse_amount(raw_amount, info["decimals"])
               if raw_amount and raw_amount != "max" else MAX_UINT160)
-    expiration_days = int(args.get("expiration-days") or 30)
+    expiration_days = opt_int(args, "expiration-days", 30)
     now_secs = int(client.get_block()["timestamp"], 16)
     expiration = now_secs + expiration_days * 86400
 
@@ -666,16 +764,19 @@ def cmd_approve(client, chain: dict, args: dict, signer: dict) -> None:
 def size_liquidity(sqrt_p: int, sqrt_lower: int, sqrt_upper: int, args: dict,
                    info0: dict, info1: dict) -> int:
     """Resolve the liquidity to add from whichever sizing flag the user gave."""
-    if args.get("liquidity"):
-        return int(str(args["liquidity"]).replace("_", ""))
+    liquidity = opt_str(args, "liquidity")
+    if liquidity:
+        return int(liquidity.replace("_", ""))
 
-    has0 = args.get("amount0") is not None
-    has1 = args.get("amount1") is not None
+    raw0 = opt_str(args, "amount0")
+    raw1 = opt_str(args, "amount1")
+    has0 = raw0 is not None
+    has1 = raw1 is not None
     if not has0 and not has1:
         raise RuntimeError("need one of --amount0, --amount1 or --liquidity")
 
-    amount0 = parse_amount(str(args["amount0"]), info0["decimals"]) if has0 else 0
-    amount1 = parse_amount(str(args["amount1"]), info1["decimals"]) if has1 else 0
+    amount0 = parse_amount(raw0, info0["decimals"]) if raw0 is not None else 0
+    amount1 = parse_amount(raw1, info1["decimals"]) if raw1 is not None else 0
 
     if has0 and has1:
         return get_liquidity_for_amounts(sqrt_p, sqrt_lower, sqrt_upper, amount0, amount1)
@@ -752,18 +853,18 @@ def cmd_create_pool(client, chain: dict, args: dict, signer: dict) -> dict | Non
     # v4 does not require the initial tick to sit on the tickSpacing grid — only position
     # boundaries do — so neither branch snaps. --price still lands on the 1.0001^n grid,
     # which is why the effective price is echoed back before anything is signed.
-    # `is not None` would not do: parse_args turns a valueless `--tick` into True, and
+    # opt_str refuses a valueless `--tick` outright: parse_args turns it into True, and
     # int(True) is 1 — a silently wrong starting price is exactly the failure to avoid.
-    has_tick = args.get("tick") not in (None, True)
-    has_price = args.get("price") not in (None, True)
-    if has_tick == has_price:
+    raw_tick = opt_str(args, "tick")
+    raw_price = opt_str(args, "price")
+    if (raw_tick is None) == (raw_price is None):
         raise RuntimeError("give exactly one of --tick <t> or --price <currency1 per currency0>")
-    if has_tick:
-        tick = int(args["tick"])
+    if raw_tick is not None:
+        tick = int(raw_tick)
         price_source = "--tick"
     else:
-        tick = tick_at_price(float(args["price"]), info0["decimals"], info1["decimals"])
-        price_source = f"--price {args['price']}"
+        tick = tick_at_price(float(raw_price), info0["decimals"], info1["decimals"])
+        price_source = f"--price {raw_price}"
     sqrt_price_x96 = get_sqrt_ratio_at_tick(tick)
 
     price_1_per_0 = token_price_in_quote_at_tick(tick, False, info0["decimals"],
@@ -859,6 +960,7 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
         raise RuntimeError("--tick-lower must be below --tick-upper after snapping to "
                            "tickSpacing")
 
+    maxed = resolve_max_amounts(client, chain, signer["address"], args, pool_key)
     sqrt_lower = get_sqrt_ratio_at_tick(tick_lower)
     sqrt_upper = get_sqrt_ratio_at_tick(tick_upper)
     liquidity = size_liquidity(pool["sqrtPriceX96"], sqrt_lower, sqrt_upper, args, info0, info1)
@@ -869,20 +971,29 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
     # slippage. Doing it the other way round produces MaximumAmountExceeded reverts.
     required = get_amounts_for_liquidity(pool["sqrtPriceX96"], sqrt_lower, sqrt_upper,
                                          liquidity, True)
-    bps = int(args.get("slippage-bps") or DEFAULT_SLIPPAGE_BPS)
+    bps = opt_int(args, "slippage-bps", DEFAULT_SLIPPAGE_BPS)
     amount0_max = 0 if required["amount0"] == 0 else with_slippage_up(required["amount0"], bps)
     amount1_max = 0 if required["amount1"] == 0 else with_slippage_up(required["amount1"], bps)
+    # A side sized from the wallet cannot be padded past the wallet.
+    cap0 = cap1 = ""
+    if "amount0" in maxed:
+        amount0_max, cap0 = cap_at_balance(amount0_max, maxed["amount0"])
+    if "amount1" in maxed:
+        amount1_max, cap1 = cap_at_balance(amount1_max, maxed["amount1"])
 
-    recipient = checksum_address(args["recipient"]) if args.get("recipient") else signer["address"]
+    recipient = opt_str(args, "recipient")
+    recipient = checksum_address(recipient) if recipient else signer["address"]
     plan = build_mint_plan(pool_key, tick_lower, tick_upper, liquidity,
                            amount0_max, amount1_max, recipient)
 
-    max_drift = int(args.get("max-tick-drift") or pool_key["tickSpacing"])
+    max_drift = opt_int(args, "max-tick-drift", pool_key["tickSpacing"])
     now_secs = int(client.get_block()["timestamp"], 16)
     allowances = check_allowances(client, chain, signer["address"],
                                   [pool_key["currency0"], pool_key["currency1"]])
-    problems = [p for p in (allowance_problem(allowances[0], amount0_max, now_secs),
-                            allowance_problem(allowances[1], amount1_max, now_secs)) if p]
+    problems = [p for p in (
+        allowance_problem(allowances[0], amount0_max, now_secs, required=required["amount0"]),
+        allowance_problem(allowances[1], amount1_max, now_secs, required=required["amount1"]),
+    ) if p]
 
     rows = [
         ["signer", signer["address"] + ("  (simulate-only, --from)"
@@ -899,9 +1010,9 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
         ["requires", f"{fmt_units(required['amount0'], info0['decimals'])} {info0['symbol']} + "
                      f"{fmt_units(required['amount1'], info1['decimals'])} {info1['symbol']}"],
         ["amount0Max", f"{fmt_units(amount0_max, info0['decimals'])} {info0['symbol']}  "
-                       f"(+{bps} bps)"],
+                       f"(+{bps} bps{', ' + cap0 if cap0 else ''})"],
         ["amount1Max", f"{fmt_units(amount1_max, info1['decimals'])} {info1['symbol']}  "
-                       f"(+{bps} bps)"],
+                       f"(+{bps} bps{', ' + cap1 if cap1 else ''})"],
         ["recipient", recipient],
         ["max tick drift", f"{max_drift}  (re-checked against the pool just before sending)"],
         ["actions", describe_actions(plan["actions"])],
@@ -911,10 +1022,16 @@ def cmd_mint(client, chain: dict, args: dict, signer: dict, *,
     ]
 
     if problems and not signer["simulateOnly"]:
-        print(heading("mint — blocked on approvals"))
+        needs_approval = any(p.kind == "approval" for p in problems)
+        print(heading("mint — blocked on approvals" if needs_approval
+                      else "mint — blocked: the wallet cannot cover the amounts"))
         print(render_kv(rows))
-        print("\n  Run this first:\n    python3 scripts/lp_write.py approve --token <address> "
-              "--broadcast --confirm <hash>")
+        if needs_approval:
+            print("\n  Run this first:\n    python3 scripts/lp_write.py approve --token <address> "
+                  "--broadcast --confirm <hash>")
+        else:
+            print("\n  Approvals are fine. Re-size the position: --amount0/--amount1 max "
+                  "deposits the whole balance,\n  or lower the amount / --slippage-bps.")
         sys.exit(2)
     if problems:
         # --from is a planning mode: keep going so the simulation still reports what the
@@ -977,11 +1094,12 @@ def cmd_increase(client, chain: dict, args: dict, signer: dict) -> None:
 
     required = get_amounts_for_liquidity(pool["sqrtPriceX96"], sqrt_lower, sqrt_upper,
                                          liquidity, True)
-    bps = int(args.get("slippage-bps") or DEFAULT_SLIPPAGE_BPS)
+    bps = opt_int(args, "slippage-bps", DEFAULT_SLIPPAGE_BPS)
     amount0_max = 0 if required["amount0"] == 0 else with_slippage_up(required["amount0"], bps)
     amount1_max = 0 if required["amount1"] == 0 else with_slippage_up(required["amount1"], bps)
 
-    recipient = checksum_address(args["recipient"]) if args.get("recipient") else signer["address"]
+    recipient = opt_str(args, "recipient")
+    recipient = checksum_address(recipient) if recipient else signer["address"]
     plan = build_increase_plan(pos["poolKey"], pos["tokenId"], liquidity,
                                amount0_max, amount1_max, recipient)
     deadline = int(client.get_block()["timestamp"], 16) + deadline_offset(args)
@@ -1036,8 +1154,9 @@ def cmd_decrease(client, chain: dict, args: dict, signer: dict) -> None:
     info0 = token_info(client, chain, pos["poolKey"]["currency0"])
     info1 = token_info(client, chain, pos["poolKey"]["currency1"])
 
-    if args.get("liquidity"):
-        liquidity = int(str(args["liquidity"]).replace("_", ""))
+    raw_liquidity = opt_str(args, "liquidity")
+    if raw_liquidity:
+        liquidity = int(raw_liquidity.replace("_", ""))
     else:
         pct = float(require_arg(args, "pct", "0-100"))
         if not 0 < pct <= 100:
@@ -1054,11 +1173,12 @@ def cmd_decrease(client, chain: dict, args: dict, signer: dict) -> None:
         pool["sqrtPriceX96"], get_sqrt_ratio_at_tick(pos["tickLower"]),
         get_sqrt_ratio_at_tick(pos["tickUpper"]), liquidity,
     )
-    bps = int(args.get("slippage-bps") or DEFAULT_SLIPPAGE_BPS)
+    bps = opt_int(args, "slippage-bps", DEFAULT_SLIPPAGE_BPS)
     amount0_min = with_slippage_down(expected["amount0"], bps)
     amount1_min = with_slippage_down(expected["amount1"], bps)
 
-    recipient = checksum_address(args["recipient"]) if args.get("recipient") else signer["address"]
+    recipient = opt_str(args, "recipient")
+    recipient = checksum_address(recipient) if recipient else signer["address"]
     plan = build_decrease_plan(pos["poolKey"], pos["tokenId"], liquidity,
                                amount0_min, amount1_min, recipient)
     deadline = int(client.get_block()["timestamp"], 16) + deadline_offset(args)
@@ -1108,7 +1228,8 @@ def cmd_collect(client, chain: dict, args: dict, signer: dict) -> None:
     info0 = token_info(client, chain, pos["poolKey"]["currency0"])
     info1 = token_info(client, chain, pos["poolKey"]["currency1"])
 
-    recipient = checksum_address(args["recipient"]) if args.get("recipient") else signer["address"]
+    recipient = opt_str(args, "recipient")
+    recipient = checksum_address(recipient) if recipient else signer["address"]
     plan = build_collect_plan(pos["poolKey"], pos["tokenId"], recipient)
     deadline = int(client.get_block()["timestamp"], 16) + deadline_offset(args)
 
@@ -1148,11 +1269,12 @@ def cmd_burn(client, chain: dict, args: dict, signer: dict, *,
         pool["sqrtPriceX96"], get_sqrt_ratio_at_tick(pos["tickLower"]),
         get_sqrt_ratio_at_tick(pos["tickUpper"]), pos["liquidity"],
     )
-    bps = int(args.get("slippage-bps") or DEFAULT_SLIPPAGE_BPS)
+    bps = opt_int(args, "slippage-bps", DEFAULT_SLIPPAGE_BPS)
     amount0_min = with_slippage_down(expected["amount0"], bps)
     amount1_min = with_slippage_down(expected["amount1"], bps)
 
-    recipient = checksum_address(args["recipient"]) if args.get("recipient") else signer["address"]
+    recipient = opt_str(args, "recipient")
+    recipient = checksum_address(recipient) if recipient else signer["address"]
     plan = build_burn_plan(pos["poolKey"], pos["tokenId"], pos["liquidity"],
                            amount0_min, amount1_min, recipient)
     deadline = int(client.get_block()["timestamp"], 16) + deadline_offset(args)
@@ -1195,7 +1317,7 @@ def cmd_address(args: dict) -> None:
     want the address itself — to check which wallet is configured, or to hand to another
     tool. The key is never printed.
     """
-    signer_env = args.get("signer-env") or ENV_SIGNER
+    signer_env = opt_str(args, "signer-env") or ENV_SIGNER
     address = resolve_signer_address(signer_env)
     if args.get("json"):
         print(json.dumps({"address": address, "signerEnv": signer_env}, indent=2))
@@ -1239,8 +1361,8 @@ def main() -> None:
     if not handler:
         raise RuntimeError(f'unknown command "{command}"\n{USAGE}')
 
-    chain = resolve_chain(args.get("chain"))
-    client = RpcClient(chain, args.get("rpc"))
+    chain = resolve_chain(opt_str(args, "chain"))
+    client = RpcClient(chain, opt_str(args, "rpc"))
     handler(client, chain, args, resolve_signer(args))
 
 

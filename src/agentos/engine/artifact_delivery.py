@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import mimetypes
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -15,6 +15,8 @@ from agentos.artifacts import (
     ArtifactBudgetError,
     ArtifactStore,
     artifact_payload,
+    ensure_file_within_budget,
+    sha256_file,
 )
 from agentos.tools.types import ToolContext
 
@@ -41,6 +43,23 @@ class OmittedArtifactPublishResult:
     failure_summaries: list[str] = field(default_factory=list)
 
 
+# A written file counts as mentioned only when its name sits on a filename
+# boundary in the reply. Plain containment is not enough: ``data.json`` is a
+# substring of ``metadata.json`` and ``out.csv`` of ``checkout.csv``, and the
+# backstop would deliver an intermediate the reply never named. ``\b`` is not
+# enough either, since ``.`` and ``-`` are non-word characters, so the guard is
+# written in terms of filename characters: nothing that could continue a
+# filename directly before the match, and nothing that could continue one
+# directly after. A trailing ``.`` stays allowed so a name that ends a sentence
+# keeps matching, while ``.`` followed by a word character is rejected so
+# ``out.csv`` does not match inside ``out.csv.bak``. ``/`` and ``\`` are
+# boundaries on purpose: a bare name still matches when the text spells the
+# path it sits in.
+_FILENAME_CHAR = r"[\w.\-]"
+_MENTION_PREFIX = rf"(?<!{_FILENAME_CHAR})"
+_MENTION_SUFFIX = r"(?![\w\-])(?!\.\w)"
+
+
 def _text_mentions_written_file(final_text: str, record: dict[str, Any]) -> bool:
     text = final_text.casefold()
     candidates = {
@@ -48,7 +67,13 @@ def _text_mentions_written_file(final_text: str, record: dict[str, Any]) -> bool
         str(record.get("path") or ""),
         str(record.get("name") or ""),
     }
-    return any(candidate and candidate.casefold() in text for candidate in candidates)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        pattern = _MENTION_PREFIX + re.escape(candidate.casefold()) + _MENTION_SUFFIX
+        if re.search(pattern, text):
+            return True
+    return False
 
 
 def _published_artifact_keys(ctx: ToolContext) -> set[tuple[str, str]]:
@@ -111,8 +136,16 @@ def auto_publish_omitted_workspace_artifacts(
         if not _text_mentions_written_file(final_text, record):
             continue
 
+        max_bytes = (
+            ctx.artifact_max_bytes
+            if ctx.artifact_max_bytes is not None
+            else DEFAULT_ARTIFACT_MAX_BYTES
+        )
         try:
-            target_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+            # Size first, from stat(); hashing and publishing only read files
+            # that already fit the budget.
+            ensure_file_within_budget(target, max_bytes)
+            target_sha256 = sha256_file(target)
             artifact_key = (target_sha256, target.name)
             if artifact_key in known_artifact_keys:
                 continue
@@ -132,9 +165,7 @@ def auto_publish_omitted_workspace_artifacts(
                     name=target.name,
                     mime=artifact_mime,
                     source="auto_publish_omitted",
-                    max_bytes=ctx.artifact_max_bytes
-                    if ctx.artifact_max_bytes is not None
-                    else DEFAULT_ARTIFACT_MAX_BYTES,
+                    max_bytes=max_bytes,
                     disk_budget_bytes=ctx.artifact_disk_budget_bytes
                     if ctx.artifact_disk_budget_bytes is not None
                     else DEFAULT_ARTIFACT_DISK_BUDGET_BYTES,

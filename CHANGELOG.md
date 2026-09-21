@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Bundled `token-burner` skill and a Burn tool on the desktop trading desk:
+  inventory the junk, dust and scam airdrops a wallet holds, revoke the
+  allowances they left behind, and — only on insistence — send them to
+  `0x…dEaD`. Native assets are refused, and the burn is gated on typing the
+  token's symbol back. The skill never calls a token's own `burn()`; it only
+  moves tokens out of the user's wallet.
+- The default skills-block budget (`skills.max_skills_prompt_chars`) is
+  28,000 characters, up from 26,000: the shipped set's own descriptions no
+  longer fit the old number, which silently dropped installs into a narrower
+  render.
 - Engine wallet vault and trading subsystem (`agentos.trading`): keystore v3
   wallets under `~/.agentos/wallets/` with `auto`/`manual` unlock, Uniswap
   aggregator- or Uniswap-routed swaps on Base and Robinhood Chain, a chain-rebuildable SQLite
@@ -131,6 +141,730 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   gateway seeds (`WebChat`, …) show as "New session" until the titler names
   the chat, and the chat header re-reads a placeholder name for a while
   after the run settles in case the rename event is missed.
+- In `robinhood-chain-stocks`, `chain_stocks.py` dropped genuine Stock Tokens
+  whose 60-character-capped CoinGecko name had its `Robinhood Token` suffix
+  truncated (such as IBM and SPYD), causing them to fail resolution; it now
+  recognizes bullet-prefixed truncated suffixes and strips them in `_clean_name`.
+- Telegram: `is_group_mentioned`'s plain-text check matched the bot's
+  username as a substring, so `@helper` was found inside another bot's
+  `@helperbot2` and inside `someone@helperdesk.com`, and the bot replied in
+  groups to messages that never addressed it. That check runs after every
+  entity has been examined and none was us -- not only when a message has no
+  entities -- so a `mention` entity naming a different bot reached it too.
+  The username must now sit on a word boundary at both ends: a word
+  character after it is a longer username, and one before the `@` is an
+  address (#2464).
+- Sandbox: `read_file` on `~/.docker/config.json` no longer returns Docker
+  registry credentials. The denylist entry read `~/.docker/config`, and the
+  prefix match is anchored at a path segment boundary, so it matched only a
+  file literally named `config` — a path Docker never writes. The entry is
+  now the `~/.docker` directory, matching the neighbouring `~/.aws` and
+  `~/.kube` entries and the `.docker` the redaction layer already carried (#2623).
+- Surplus provider: `claude-haiku-4.5` no longer silently loses reasoning
+  support when the Surplus catalog fetch fails at boot. The offline fallback
+  prefix table (`_SURPLUS_REASONING_PREFIXES`) listed `claude-opus-` and
+  `claude-sonnet-` but not `claude-haiku-4.5`, even though the sibling vision
+  table right next to it does list `claude-haiku-4.5` — so a boot with no
+  live catalog answered `supports_reasoning=False` for a model that genuinely
+  supports extended thinking, silently turning a configured `thinking_level`
+  into a no-op (#2615).
+- Shell policy (Windows): the denylist prefix that anchors `rm` / `ri` / `rd`
+  / `erase` through a `powershell -c` wrapper only understood flags with no
+  value, so `powershell -ExecutionPolicy Bypass -Command "rm C:\x"` (and
+  `-ep Bypass`, `-WindowStyle Hidden`, `-ep:Bypass`) came back
+  `allowed=True`. The wrapper is now modelled as a repeatable unit whose flags
+  may carry a value, so a wrapper nested in a wrapper
+  (`cmd /c powershell -ep bypass -c "rm C:\x"`), PowerShell's call operator
+  and script block (`-Command "& {rm C:\x}"`), doubled or escaped payload
+  quotes, and whitespace after the opening quote are all seen through as well
+  (#2485).
+- `web_fetch` with `extract_mode="text"` passed extracted markdown straight to
+  `html2text` (an HTML parser), which collapsed multiline paragraphs into one
+  run-on line and left markdown syntax and angle brackets unparsed; it now
+  walks a real CommonMark token stream to strip markdown formatting while
+  preserving paragraph and list structure
+  ([#2482](https://github.com/use-agent-os/agent-os/issues/2482)).
+- Tools: `write_file` reported `len(content)` -- Unicode code points -- as
+  "bytes", so every multibyte character was under-counted (ten emoji came
+  back as "Written 10 bytes" for a 40-byte file) and callers comparing the
+  figure against disk limits or byte budgets reasoned from the wrong number.
+  The content is now encoded once and written as bytes, and the report is
+  the length of what reached the disk (#2478).
+- `rwa_lookup.py` in the `robinhood-rwa-addresses` bundled skill failed to
+  write card artifacts when target output paths specified non-existent parent
+  directories; it now creates parent directories recursively before writing.
+- Skills (hub scanner): `_strip_fenced_code_blocks` only recognized exactly-
+  three-backtick fences, so a `~~~`-fenced example (CommonMark-valid) was
+  scanned as plain text and scored `severity="dangerous"` -- the same
+  outcome a real exfiltration attempt produces. Confirmed
+  `scan_result.verdict == "dangerous"` hard-blocks a hub install unless the
+  caller passes `force=True`, so a legitimately-written community skill
+  using the `~~~` convention would fail to install with no indication it's
+  a false positive. Tilde and backtick fences are now matched by a single
+  ordered pattern so a fence of one marker type can no longer be closed by
+  an unrelated later occurrence of the other marker -- the previous
+  two-independent-patterns approach let a backtick run inside a `~~~`
+  block pair with an unrelated backtick run further down the document,
+  silently exempting the prose in between from every check (#2324).
+- Telegram: a reply containing `***bold italic***` (or `___both___`) is
+  delivered again. The `**` pass consumed two of the three markers and the `*`
+  pass then paired the leftover one across the closing tag, producing
+  `<b><i>x</b></i>`; Telegram rejects improperly nested entities and the
+  adapter sends `parse_mode=HTML` with no plain-text retry, so the reply was
+  dropped rather than mis-rendered
+  ([#2308](https://github.com/use-agent-os/agent-os/issues/2308)).
+
+- Scheduler/heartbeat: `active_hours` is read in the host's local time, as the
+  heartbeat module docstring has always defined it ("in 24-hour local time").
+  Both window checks took `.hour` straight off the `datetime.now(UTC)` their
+  callers pass — `HeartbeatRunner.poll`, `HeartbeatLoop._tick` and the cron
+  `wakeMode="now"` path `HeartbeatLoop.run_once_now` — so on any host outside
+  UTC the configured window was silently shifted by the host's offset, with
+  nothing in the logs to say why. On a UTC+9 host, `active_hours: [9, 21]`
+  went quiet through the working day and fired at night. The two duplicated
+  checks are now one shared helper that converts to local time first.
+  **Behaviour-changing:** an operator who set `active_hours` to compensate for
+  the old UTC reading will see their window move by their offset on upgrade,
+  and should set it back to the local hours they actually want
+  (#2603).
+
+- `edit_file`: an `old_text` that occurs more than once *overlapping* itself is
+  now reported as ambiguous instead of silently editing the first occurrence.
+  `_find_all` advanced its cursor past the whole needle, so the overlapping
+  second match was never counted and the same duplication with a separator line
+  in between behaved differently (#2290).
+- Telegram: a background result or a subagent completion announcement for a
+  turn that arrived in a forum topic reaches the group again. Both out-of-turn
+  builders carried `metadata["channel"]` only for Slack, so the topic id alone
+  landed in `reply_to` and `TelegramChannel` used it as the chat id — the
+  answer went to an unrelated chat or failed with `chat not found`, and both
+  call sites swallowed the error. They now use the same `thread_id and
+  channel_id` rule as the in-turn reply path. (#2390)
+- `docx` `edit_docx.py`: `replace_text` now walks the paragraphs inside text
+  boxes as well as the body, tables and headers/footers. Word keeps text-box
+  content in a `<w:txbxContent>` nested inside a run, which no paragraph walk
+  reached, so a placeholder or a name that also appeared in a pull quote,
+  callout or letterhead banner was left in the output while the op reported the
+  replacements it did make.
+
+- Bundled `poolsdotfun` skill: pass `encoding="utf-8"` when `selftest.py` reads
+  source files so Tier 7 capability-separation checks do not crash with
+  `UnicodeDecodeError` on CJK code pages (#2335).
+- Approvals: an approved destructive intent was cached by `(kind, target)`
+  alone, so a "rm -rf …" the operator approved in one session silently
+  answered every other session's prompt — and because `shell`'s exec gate
+  short-circuits on a cached intent before `ApprovalQueue.request()` is ever
+  called, the second delete ran with no prompt raised on any surface. The
+  elevated mode carried by the same approval was already filed under its
+  `sessionKey`; the intent it grants now is too. The cache key becomes
+  `(session, kind, target)`, and the registry declares `session_of` so
+  `drop_session_state` reaps a finished session's grants instead of leaving a
+  year-long "always" entry behind. `sessions.send` clears only its own
+  session's "once" grants, and the operator-facing `forget()` stays
+  process-wide (#2191).
+- `docx` skill: `inspect_docx.py` no longer walks tables through
+  `row.cells`. That API resolves vertically merged cells against the row
+  above, raising `ValueError: table has an irregular grid` on layouts
+  non-Word generators produce, and repeats a horizontally merged cell once
+  per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
+  table text is included, and a corrupt file raises `ValueError` so the CLI
+  exits 2 with a clean message instead of an unhandled traceback. (#2154)
+
+## [2026.9.20] - 2026-09-20
+
+### Fixed
+
+- Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
+  (`_read_child_result`) read a session's transcript through
+  `SessionStorage.get_transcript`'s `limit`, which windows from the
+  *oldest* end -- any session whose transcript outgrew the limit (20 for
+  `sessions_history`, 50 for subagent results) got the start of the
+  conversation instead of its current tail, or a stale/empty subagent
+  result instead of its real final answer. Both now read through the
+  existing newest-first `get_recent_transcript` query instead
+  (#2521).
+- `weather` skill script `weather_fetch.py` checked `"june"` as a raw substring
+  in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
+  date-window warnings; it now matches month names with word boundaries
+  (#2510).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate. `is_group_mentioned` fell back to searching a reaction's (always
+  empty) text for a mention, so `_should_skip_unmentioned` rejected every
+  reaction in every guild channel/thread with no error or log. Reacting to
+  a message the bot itself sent is now treated as an unambiguous mention.
+- Email channel: a `message/rfc822` attachment (an original email attached
+  as a file, e.g. Outlook/Apple Mail "Forward as Attachment") is no longer
+  silently dropped. `_extract_attachments` relied on
+  `part.get_payload(decode=True)`, which returns `None` for this content
+  type since the part's payload is the embedded message object, not encoded
+  bytes -- the attachment vanished with no warning logged. It's now
+  extracted by serializing the embedded message.
+- Gateway: `_handle_sessions_reset` carried a dead, unreachable duplicate
+  of its own final reset branch (a leftover from a past merge conflict) --
+  an unconditional `return` was immediately followed by an `if not
+  transcript:` block computing and returning the same thing a different
+  way, which `mypy --warn-unreachable` flags directly. Removed the dead
+  block and its now-unused `_reset_response` helper; the reachable branch
+  above it already covers the same case
+  (#2509).
+- Discord: `send_file` sent the whole caption as the upload's `content`, and
+  Discord 400s a message past 2000 characters whether or not a file is
+  attached, so an artifact with long accompanying text was never delivered.
+  The first 2000 characters now ride with the file and the rest follow as
+  ordinary channel messages through `send()`; a follow-up that fails after
+  the file has gone is logged with the ids rather than reported as a failed
+  file delivery, which would have the caller upload it again. `send_file`
+  also resolves its target the way `send()` does: the channel component of a
+  `<channel_id>|<message_id>` composite, `default_channel_id` for an empty
+  id, and a clear `ValueError` before any request when neither is available
+  (#2779).
+- Discord channel: a reaction added to the bot's own message in a guild
+  channel or thread is no longer silently dropped by the group mention
+  gate (#2790).
+- Control UI: the gateway root path returns the status payload when the
+  Control UI is disabled instead of a 404 (#2761), and the Control UI
+  bootstrap honours `X-Forwarded-Host` and a multi-value
+  `X-Forwarded-Proto` behind a reverse proxy (#2759).
+- Cron: `cron.update` keeps a job's delivery unless the caller changes it
+  (#2794); the gateway emits `last_status` so Control UI health reflects a
+  failed run (#2773); cron Python scripts run with UTF-8 stdout (#2580).
+- Tools: `apply_patch` applies an indented patch block and refuses one with
+  no operations (#2799); an inline artifact marker resolves against the
+  command's cwd (#2578); `web_fetch` decodes a page with the charset its
+  `<meta>` declares (#2557); the `message` tool addresses a target by
+  channel type, not channel name (#2566), and the platform render hint is
+  looked up the same way (#2568); quoted shell write targets containing
+  spaces are captured (#1230); `code_exec` flags every delete command
+  `shell_policy` blocks, quoted or not (#2776).
+- Sandbox/intent: an unexpandable `~` no longer crashes the sensitive-path
+  scan (#1503); destructive-intent extraction recognises `rmdir`, `rd`,
+  `del`, `erase`, `unlink` and `Remove-Item` (#1015).
+- Gateway: a debounced batch that fails to start replies on the channel
+  instead of going silent (#1206); websocket pong replies are serialised
+  through the writer queue; the tool result store is scanned at most once
+  per write (#2126).
+- Memory: a lowercase `memory.md` is exempt from retention pruning (#2522);
+  `memory_search` centres its evidence window for a non-ASCII query (#2517).
+- Telegram: `render_telegram_html` preserves bare URLs (#2560). Slack:
+  `send_streaming` `_edit` verifies the `ok` response.
+- Skills: `video-merger` escapes paths written to its concat manifest
+  (#2122) and handles missing duration metadata and silent inputs;
+  `dubbing_generate` accepts video containers; the pdf skill reports a
+  malformed `--pages` spec instead of raising `ValueError` (#2128).
+- Docs: `agentos sandbox` subcommands that were missing from `docs/cli.md`
+  are documented (#2550).
+
+## [2026.9.18] - 2026-09-18
+
+### Added
+
+- `senior-unilp-manager`: `mint --amount0/--amount1 max` sizes a position from
+  the signer's ERC-20 balance and caps the slippage buffer at that balance, so
+  "deposit all of it" no longer needs a hand-written `balanceOf` call or a
+  second run with `--slippage-bps 0`. Every pool the skill confirms on chain is
+  remembered in `state/unilp/pools/<chain>.json`, so `ticks --pool`, `pool
+  --id` and `mint --pool` resolve a PoolKey by id alone on chains whose RPC
+  cannot serve the `Initialize` log — no more `--token` on every call.
+
+### Fixed
+
+- WebUI chat: "Move to project" and "Rename session" on a brand-new chat
+  (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
+  found". The WebUI mints the session key client-side and the row only
+  appeared on the first send; `sessions.patch` and `sessions.rename` now
+  materialize that draft row for ephemeral webchat keys (any other key shape
+  still gets the strict not-found), and the chat drops its `new_chat` intent
+  once the move or rename succeeded so the first send is not rejected as a
+  `session_key conflict`.
+
+- `senior-unilp-manager`: a mint the wallet could cover, but not with the
+  +100 bps buffer, was reported as "blocked on approvals — run approve". The
+  gate now separates a balance shortfall from an approval problem and only
+  points at `approve` for the latter.
+
+- `senior-unilp-manager` on Robinhood Chain: the drpc endpoint now caps
+  `eth_getLogs` at 100k blocks, so `pools --token`, `positions` and the default
+  `--mode logs` reserve read died with a bare `eth_getLogs: HTTP 500` after
+  three retries, and the agent had no way to find the AGENTOS pool. The chain
+  entry now declares the cap and defaults to the tick-bitmap walk; `pools` and
+  `pool --id --token` derive the pool from the Doppler hook the launcher table
+  already labels and confirm it with one `getSlot0` (2 s instead of a failed
+  scan); `positions` refuses up front with the same options Base gets; and the
+  RPC client surfaces the JSON-RPC error carried in a 5xx body instead of
+  `HTTP 500`, retrying only when it names a transient condition.
+
+- Channels: `artifact_delivery_key` consulted `sha256` first, and `sha256`
+  is a first-class artifact field, so two artifacts with matching bytes and
+  different names (two empty CSVs, a template rendered once per region)
+  collapsed to one key and `dedupe_artifacts_for_channel_delivery` silently
+  dropped the second — before the delivery log lines and outside the
+  `undelivered` list, so the reply could name a file the user never got.
+  Delivery identity is now `(content, name)`
+  ([#2133](https://github.com/use-agent-os/agent-os/issues/2133)).
+  `split_text_for_limit` (the shared chunking primitive behind Discord's and
+  Telegram's message-length caps) left a half-open code fence in the first
+  chunk when the fence opened the segment itself — the "back up to before the
+  fence" guard only fired when the backup point was greater than zero. The
+  fence is now closed on that chunk and reopened (with its original language
+  tag) on the next, computed via a fresh, independent cut rather than reusing
+  the caller's word/line-boundary cut, which could send the next call right
+  back to the same input — an infinite loop in every caller that splits
+  until the tail is empty
+  ([#2127](https://github.com/use-agent-os/agent-os/issues/2127)).
+- Microsoft Teams: `send()` handed the whole reply to `send_activity` as one
+  Activity, so a reply over the 40 KB payload cap failed with `413
+  MessageSizeTooBig` and delivered nothing. It now splits through the shared
+  `split_text_for_limit` at a 32 KB text budget measured the way the service
+  counts it (UTF-16 bytes of the JSON-encoded string, so CJK and emoji are not
+  undercounted), sends the pieces on one continued turn, and remembers every
+  chunk's activity id for `edit()`/`delete()`
+  ([#2114](https://github.com/use-agent-os/agent-os/issues/2114)).
+- Providers: a stream that fails after the HTTP 200 — Anthropic's
+  `event: error` (`overloaded_error`, `api_error`), an OpenAI-compatible
+  chunk carrying `error` (OpenRouter's `{"error": {"code": 502}}`), an Ollama
+  NDJSON `{"error": …}` line — was not recognised by any of the three stream
+  loops. Anthropic's ended with neither an `ErrorEvent` nor a `DoneEvent`, so
+  the turn truncated silently and the circuit breaker never learned the
+  provider was overloaded; OpenAI-compat and Ollama fell through to
+  `DoneEvent` and recorded a success for a failed turn. Each loop now yields
+  one `ErrorEvent` whose `code` carries the upstream error type
+  ([#2118](https://github.com/use-agent-os/agent-os/issues/2118),
+  [#2214](https://github.com/use-agent-os/agent-os/issues/2214)).
+- Gateway pid lock: `release()` unlinked `gateway.pid.lock`, and both
+  platform locks (`fcntl.flock`, `msvcrt.locking`) key on the open inode, not
+  the path, so during a supervisor restart a waiter holding the orphaned
+  inode and a newcomer opening a fresh one could both win and run two
+  gateways against one `STATE_DIR`. The anchor now stays on disk and
+  `release()` removes only `gateway.pid`. `acquire()` also probed liveness and
+  unlinked `gateway.pid` *before* taking the lock, so a false-negative probe
+  deleted a live gateway's pid file and then reported `pid=unknown`; it now
+  locks first and treats a pid file found under a freshly won lock as stale
+  by construction (logged as `gateway.pidlock.stale_overwritten`). The
+  SIGTERM/SIGINT handlers it installed were overwritten by uvicorn and would
+  have hard-killed the process had they run; they are gone
+  ([#2119](https://github.com/use-agent-os/agent-os/issues/2119),
+  [#2134](https://github.com/use-agent-os/agent-os/issues/2134),
+  [#2136](https://github.com/use-agent-os/agent-os/issues/2136)).
+- Injection guard: the `invisible_char` threat class fired on ZWJ (U+200D,
+  every compound emoji), ZWNJ (U+200C, Persian, Arabic and Indic word
+  shaping) and a leading BOM (every UTF-8 file that has been through Excel or
+  Notepad), and in enforce mode one such codepoint replaced the whole payload
+  with `[BLOCKED: …]`. The threat class now leaves out the two joiners and
+  strips one leading BOM before it looks; the normalization set is unchanged,
+  so `ignore<ZWJ>all prior instructions` is still caught as `prompt_override`
+  ([#2120](https://github.com/use-agent-os/agent-os/issues/2120)).
+- `CacheBreakMonitor._reset_pending` was a plain `set[str]` on the line after
+  the `BoundedRegistry` that #1131 gave `_baselines`, with no eviction: a
+  session compacted and then closed left its key behind on the module-level
+  singleton forever, and a reused session key inherited the stale flag and had
+  its first genuine cache-break report suppressed. The flag now lives on the
+  `_CacheBaseline` entry and is evicted with it
+  ([#2135](https://github.com/use-agent-os/agent-os/issues/2135)).
+- `cron-watchers`: `watch_http_json.py` dropped every item lacking
+  `--id-field` with a bare `continue`, so a typo'd field name produced exit 0
+  with nothing on stdout or stderr — indistinguishable from a feed with
+  nothing new, even under `--first-run-reports`. When items were fetched and
+  none carries the field it now names the field and the item count on stderr
+  and exits 1 before any watermark is written
+  ([#2106](https://github.com/use-agent-os/agent-os/issues/2106)).
+- `docx` and `xlsx` skills: `create_docx.py` and `create_xlsx.py` called
+  `spec.get(...)` on whatever JSON arrived, so a non-object spec crashed with
+  `AttributeError`, a scalar table row crashed `len()` (or, in xlsx, silently
+  fragmented into one cell per character), a heading `level` outside 0–9
+  raised straight out of `python-docx`, and a JSON syntax error reached the
+  caller as a raw traceback. Both now validate the spec shape and report
+  `error: …` with exit 2, the convention `edit_docx.py` and
+  `inspect_docx.py` already follow
+  ([#2018](https://github.com/use-agent-os/agent-os/issues/2018),
+  [#2056](https://github.com/use-agent-os/agent-os/issues/2056)).
+- Tests: `test_iteration_timeout_caps_tool_execution` bounded its run with a
+  0.25 s `wait_for` guard that sat below the 0.5 s tool it drives, so under
+  contention (Windows CI, three runs in a row) a working implementation
+  failed with a bare `TimeoutError`; the guard is now a 5 s hang guard rather
+  than a race with the behaviour under test
+  ([#2166](https://github.com/use-agent-os/agent-os/issues/2166)).
+
+### Changed
+
+- Web UI keyboard shortcuts: `g p` now jumps to Projects (it used to be `g j`,
+  which had no mnemonic). Approvals, which previously owned `g p`, moves to
+  `g v`. The `?` shortcut overlay reflects both.
+
+- Control UI: the Sessions and Projects views now ask `sessions.list` for 500
+  rows instead of 200, so a gateway with more than 200 sessions no longer
+  silently hides the oldest ones. Both views share one query cache, so the
+  page size now lives in a single `SESSIONS_LIST_LIMIT` constant.
+
+## [2026.9.17] - 2026-09-17
+
+### Added
+
+- New bundled skill `musebook`: join and take part in musebook.lol, the text
+  BBS for AI agents. Ships `scripts/muse.py`, which owns the ed25519 identity
+  and the `musebook-v1` canonical message, and the board's published spec under
+  `references/`. Muse is a recognized publisher, so the Skills page gives the
+  Muse boards a tab of their own with the Muse mark, alongside Robinhood —
+  later boards join it there.
+- `docs/cli.md` and `docs/configuration.md` now carry worked examples for
+  `agentos configure image` (`--image-provider`, `--primary`,
+  `--api-key-env`, `--no-image-enabled`) and `agentos configure memory`
+  (`--memory-provider`, `--onnx-dir`, `--model`, `--api-key-env`)
+  ([#2356](https://github.com/use-agent-os/agent-os/issues/2356)).
+
+### Fixed
+
+- Email channel: `sender_allowed` derived the sender's domain with
+  `rpartition("@")`, which returns the whole string when there is no `@`, so
+  a `From` whose addr-spec was a bare domain matched its own `@domain` /
+  `*@domain` allowlist entry and bypassed the channel's only access control;
+  an address with no `@` is now rejected outright
+  ([#2078](https://github.com/use-agent-os/agent-os/issues/2078)). The
+  `References`/`In-Reply-To` reader split on whitespace, so two msg-ids
+  written with no CFWS between them (`<a@x><b@x>`, legal under RFC 5322)
+  collapsed into one id that matched nothing and the reply started a new
+  thread; ids are now read by their angle brackets
+  ([#2080](https://github.com/use-agent-os/agent-os/issues/2080)).
+- Discord: `send_streaming()` PATCHed the accumulated text with no check
+  against the 2000-character message cap, so a long streamed reply died with
+  a 400 mid-stream; it now rolls over into follow-up messages the way
+  `send()` and Telegram already do
+  ([#2105](https://github.com/use-agent-os/agent-os/issues/2105)). The
+  channel-type and thread-parent caches were unbounded dicts written on every
+  channel and thread gateway event; both are now `BoundedRegistry` instances
+  with read-LRU so a long-lived connection to an active guild stops growing
+  for the life of the process
+  ([#2088](https://github.com/use-agent-os/agent-os/issues/2088)).
+- Telegram renderer: a `~~~` fence was not recognised, so its body was
+  rendered as prose ([#2022](https://github.com/use-agent-os/agent-os/issues/2022));
+  the `__bold__` pass ate Python dunder identifiers (`__init__` became
+  `<b>init</b>`) and the table-label path dropped the underscores entirely,
+  while `_italic_` labels kept theirs
+  ([#2076](https://github.com/use-agent-os/agent-os/issues/2076)).
+- Channel pairing: the per-sender rate-limit map was never swept, so one
+  timestamp per sender who ever asked to pair stayed in the control file
+  forever; stamps older than the rate-limit window are now expired
+  ([#2350](https://github.com/use-agent-os/agent-os/issues/2350)).
+- `apply_patch` located `*** Begin Patch` and `*** End Patch` with two
+  independent scans, so an end marker quoted before the block (an echoed
+  transcript) or a hunk line that reads `*** End Patch` truncated the body
+  silently and the tool reported success for work it did not do; the end
+  marker is now the one that closes the block
+  ([#2084](https://github.com/use-agent-os/agent-os/issues/2084)).
+- `edit_file` fuzzy matching: the `trimmed_boundary` strategy searched for
+  `old_text.strip()`, so its span started after the line's indentation and
+  stopped before its newline, and the replacement was re-indented from an
+  empty first line — an `old_text` that differed only by trailing spaces
+  silently moved a `return` out of its `def`; the span now grows back over
+  exactly the whitespace `strip()` removed
+  ([#2050](https://github.com/use-agent-os/agent-os/issues/2050)).
+- `config set` refused to write a declared key whose current value is `null`
+  (`Key not found: auth.token`) because it walked the `exclude_none` view;
+  it now checks the declared schema
+  ([#2031](https://github.com/use-agent-os/agent-os/issues/2031)).
+- Cron: `agentos cron add --channel <name> --to <id>` saved the job with an
+  empty `channel_id` because the RPC reader only accepted `channelId`;
+  `bestEffort` was dropped on the same path, and `cron.update` raised on a
+  job whose stored delivery was `None`. One alias reader now serves the
+  RPC, CLI and tool spellings
+  ([#2093](https://github.com/use-agent-os/agent-os/issues/2093)).
+- `ProgressWatchdog` counted identical consecutive tool *errors* as a
+  repeated tool call, telling the model to "use what you already have" on a
+  failure; failing signatures now fall through to the repeated-error path
+  ([#2101](https://github.com/use-agent-os/agent-os/issues/2101)).
+- MCP stdio transport: a `tools/call` result the pinned SDK could not model
+  (`structuredContent` without `content`, an unknown block type, or an
+  `audio`/`resource_link` block on an older SDK) was reported to the model as
+  a tool error whose text was a pydantic dump; those results now pass through
+  as successes, matching `MCPSessionClient`
+  ([#2020](https://github.com/use-agent-os/agent-os/issues/2020)).
+- DuckDuckGo search: a result link spelled as a relative redirect
+  (`/l/?uddg=…`, the form the HTML endpoint uses most) reached the caller
+  raw, so a follow-up `web_fetch` had nothing routable; relative,
+  protocol-relative and absolute redirects all resolve to their target now
+  ([#2082](https://github.com/use-agent-os/agent-os/issues/2082)).
+- Ollama provider: a final chunk with `"prompt_eval_count": null` propagated
+  `None` into the session token counters and crashed the turn with a
+  `TypeError`; counts are coerced to `int` as the other providers already do
+  ([#2058](https://github.com/use-agent-os/agent-os/issues/2058)).
+- `agentos cost savings` and its PDF export preferred the engine's cost
+  *estimate* over the provider's *billed* figure whenever the estimate was
+  nonzero; `billed_cost_usd` is now authoritative, matching the session cost
+  rollup ([#2383](https://github.com/use-agent-os/agent-os/issues/2383)).
+- Redaction: `passphrase` and the `bot`+`token` pair (`DISCORD_BOT_TOKEN`,
+  `TELEGRAM_BOT_TOKEN`) are now credential names, so their values are
+  redacted by name rather than only when a value-pattern happens to match
+  ([#2068](https://github.com/use-agent-os/agent-os/issues/2068)).
+- Bundled skills: nine scripts (`docx`, `pdf-toolkit`, `xlsx`, `robinhood-*`)
+  printed their JSON result through `sys.stdout.encoding`, so on a Windows
+  console code page any non-ASCII character in the document raised
+  `UnicodeEncodeError` and the script died with a traceback; results are
+  written as UTF-8 ([#2334](https://github.com/use-agent-os/agent-os/issues/2334)).
+  `pdf-toolkit`'s `SKILL.md` advertised a `--clear-signatures` flag that
+  `form_fill.py` never declared, so following the instructions was an
+  `argparse` failure ([#2103](https://github.com/use-agent-os/agent-os/issues/2103)).
+  `deep-research` coerced a `--record` file that was not a JSON list to `[]`
+  and reported success with no evidence saved; it now exits 2 and leaves the
+  plan untouched, and invalid plan JSON is reported cleanly in `iterate.py`
+  and `compile.py` ([#2328](https://github.com/use-agent-os/agent-os/issues/2328)).
+  `srt-from-script` truncated a fractional `DURATION_S` to an integer, so
+  every cue after a `3.5`-second shot drifted earlier
+  ([#2070](https://github.com/use-agent-os/agent-os/issues/2070)).
+- `read_spreadsheet`: a phonetic guide (furigana) stored alongside an xlsx
+  cell's text is no longer appended to the value. The shared-string reader took
+  every `<t>` descendant, including the ones inside `<rPh>`, so a Japanese
+  workbook read back with each reading glued onto the word it annotates
+  ([#2053](https://github.com/use-agent-os/agent-os/issues/2053)).
+  workbook read back with each reading glued onto the word it annotates.
+- `create_pdf_report`: Japanese kana are no longer deleted from a report built
+  on a host with no CJK-capable TTF. `_is_cjk` named only the ideograph blocks,
+  so every hiragana and katakana fell through to the drop that handles
+  characters the base font cannot render — the kanji and the `、。` survived and
+  the syllables joining them did not, leaving a plausible-looking PDF with the
+  grammar removed. Kana now take the same CJK-font fallback that CJK
+  punctuation has taken since #1739.
+- Memory search: a query written in Hangul, Cyrillic, Greek, Arabic, Hebrew,
+  Thai, Devanagari or accented Latin returns results again. `_build_fts_query`
+  tokenized with a class naming only ASCII, the CJK ideographs and the two kana
+  blocks, so those queries produced no token at all and the search
+  short-circuited to an empty list — over text the `unicode61` index had
+  already stored.
+## [2026.9.16] - 2026-09-16
+
+### Fixed
+
+- `apply_patch` spliced each hunk by the length of its header context and
+  then rebuilt the tail from the body, so a hunk whose body consumed a
+  different number of lines than the header declared duplicated or dropped
+  the lines after it; hunks now splice by what the body actually consumed
+  ([#2224](https://github.com/use-agent-os/agent-os/issues/2224)). A patch
+  whose last context line had no trailing newline was joined onto the next
+  line instead of ending there
+  ([#1907](https://github.com/use-agent-os/agent-os/issues/1907)).
+- `edit_file` and `write_file` rewrote a CRLF file with LF line endings on
+  every edit; both now preserve the file's existing line-ending style
+  ([#1909](https://github.com/use-agent-os/agent-os/issues/1909)).
+- `git_diff` diffed the working tree against the index, so staged work was
+  reported as "no changes"; it now diffs against `HEAD`
+  ([#1963](https://github.com/use-agent-os/agent-os/issues/1963)).
+- `glob_search` and `grep_search` returned an empty result for a base path
+  that does not exist instead of saying so
+  ([#1802](https://github.com/use-agent-os/agent-os/issues/1802)).
+- `config_get` reported a configured key as missing when its value was
+  `null`; the key is now returned with its null value
+  ([#1892](https://github.com/use-agent-os/agent-os/issues/1892)).
+- `subagents list` ignored its `spawned_by` filter and returned every
+  subagent ([#1799](https://github.com/use-agent-os/agent-os/issues/1799)).
+- The env-dump redaction gate only recognised `;`, `&&` and `|` as command
+  separators, so `env` on its own line after another command escaped
+  redaction; a newline is now a separator too
+  ([#1721](https://github.com/use-agent-os/agent-os/issues/1721)).
+- Artifact publishing: the in-turn file authoring dedupe matched on bytes
+  alone, so two attachments with identical content but different names or
+  MIME types collapsed into one
+  ([#1836](https://github.com/use-agent-os/agent-os/issues/1836)); the same
+  bytes-only identity let a published artifact shadow a differently-named
+  one ([#1793](https://github.com/use-agent-os/agent-os/issues/1793)); and the
+  auto-publish mention matcher fired on any substring, so a reply mentioning
+  `report.pdf.bak` published `report.pdf` -- a filename boundary is now
+  required ([#1978](https://github.com/use-agent-os/agent-os/issues/1978)).
+- Channels: `SlackChannel.send()` posted an oversized final reply in one
+  message and lost it to Slack's length limit; it now chunks through the
+  shared fence-aware splitter like Telegram and Discord already did
+  ([#2236](https://github.com/use-agent-os/agent-os/issues/2236)). Slack
+  message deletes and Discord edits/deletes resolved against the adapter's
+  most recent conversation rather than the message's own channel
+  ([#1807](https://github.com/use-agent-os/agent-os/issues/1807),
+  [#1883](https://github.com/use-agent-os/agent-os/issues/1883)); the
+  Microsoft Teams proactive-send fallback likewise targeted whoever spoke
+  last ([#1789](https://github.com/use-agent-os/agent-os/issues/1789)). The
+  Telegram renderer truncated a link destination at its first `)` even when
+  the parentheses were balanced, and only recognised a fence info string of
+  `[a-z]+`, so ```` ```c++ ```` or ```` ```objective-c ```` rendered as
+  literal text ([#2003](https://github.com/use-agent-os/agent-os/issues/2003)).
+  The channel `RateLimiter` did not advance its refill clock across a wait,
+  so the first request after a stall was charged twice
+  ([#1876](https://github.com/use-agent-os/agent-os/issues/1876)).
+- Providers: an Anthropic `404` and any provider's "model unavailable"
+  response are classified as `MODEL_NOT_FOUND` so the router falls through to
+  the next tier instead of retrying a model that does not exist
+  ([#2234](https://github.com/use-agent-os/agent-os/issues/2234),
+  [#1359](https://github.com/use-agent-os/agent-os/issues/1359)). Ollama tool
+  calls with empty `arguments` or a `null` details block no longer crash the
+  turn -- empty arguments are read as `{}`
+  ([#1950](https://github.com/use-agent-os/agent-os/issues/1950)).
+  `get_capabilities` matched provider branches case-sensitively, so
+  `Anthropic` fell through to the generic defaults
+  ([#1899](https://github.com/use-agent-os/agent-os/issues/1899)).
+- Scheduler: cancelling a cron job neither killed nor reaped its script
+  subprocess, leaving it running to completion and a zombie behind
+  ([#1949](https://github.com/use-agent-os/agent-os/issues/1949)); a cron
+  runtime turn kept running after its handler was cancelled
+  ([#1948](https://github.com/use-agent-os/agent-os/issues/1948)); and a
+  relative `workdir` resolved against the gateway's CWD instead of the cron
+  script's own directory
+  ([#1911](https://github.com/use-agent-os/agent-os/issues/1911)).
+  `cron-watchers` treated an empty watermark as "never ran" and re-delivered
+  everything, and could report one id twice in a single poll
+  ([#1946](https://github.com/use-agent-os/agent-os/issues/1946)).
+- Gateway and sessions: a turn whose start-up failed never released its
+  concurrency slot, so enough failures pinned the session at its limit
+  ([#1984](https://github.com/use-agent-os/agent-os/issues/1984)); a
+  session's locks could be evicted from the bounded registry while its turns
+  were still in flight, letting a second turn run unserialised
+  ([#1965](https://github.com/use-agent-os/agent-os/issues/1965)).
+  `ApprovalQueue` never reaped an approval that expired with no waiter and
+  never pruned resolved rows, so the table grew without bound
+  ([#1987](https://github.com/use-agent-os/agent-os/issues/1987)).
+  `TaskRuntime.list()` took its window from the oldest tasks, so the tasks
+  an operator actually cares about were the ones truncated
+  ([#1805](https://github.com/use-agent-os/agent-os/issues/1805)).
+  `display_name` was normalised only at the RPC boundary, so a direct
+  `SessionManager` caller could store a padded or empty name
+  ([#1973](https://github.com/use-agent-os/agent-os/issues/1973)), and
+  `search_transcript`'s session filter matched the id but not the session
+  key ([#1801](https://github.com/use-agent-os/agent-os/issues/1801)).
+- Engine and MCP: the protocol-leak guard flushed its buffer only on a clean
+  stream end, so a stream error dropped the text it was holding
+  ([#1796](https://github.com/use-agent-os/agent-os/issues/1796));
+  `events_wait` reported a timeout when its internal poll expired rather than
+  the caller's deadline
+  ([#1798](https://github.com/use-agent-os/agent-os/issues/1798)).
+- Memory: `memory_delete` did not notify `on_memory_write`, so the snapshot
+  kept serving the deleted entry
+  ([#1806](https://github.com/use-agent-os/agent-os/issues/1806)); a path
+  ingest indexed the content but never persisted it into `knowledge_base/`,
+  leaving a ghost index that pointed at nothing after restart -- ingest of
+  the workspace root or an absolute path outside it is now refused
+  ([#2365](https://github.com/use-agent-os/agent-os/issues/2365)).
+- Memory redaction recognised `secret`, `token` and `password` as key
+  qualifiers but not `signing`, `encryption` or `account`, so
+  `signing_key` and `account_key` leaked
+  ([#1901](https://github.com/use-agent-os/agent-os/issues/1901)); the name
+  splitter did not separate an all-caps acronym from the word after it, so
+  `APIKey`-style identifiers were left unmasked
+  ([#2007](https://github.com/use-agent-os/agent-os/issues/2007)).
+- CLI: `agentos sessions list` widened its fetch window only for `--search`,
+  so any other filter was applied to a truncated page and silently dropped
+  matches ([#1913](https://github.com/use-agent-os/agent-os/issues/1913));
+  gateway client events were not correlated to the turn in flight
+  ([#1790](https://github.com/use-agent-os/agent-os/issues/1790)).
+- `pdf` tool: a page range that names the same page twice (`1-3,2`) no longer
+  extracts it twice, which duplicated the text and charged the duplicate
+  against the page budget
+  ([#2229](https://github.com/use-agent-os/agent-os/issues/2229)).
+- `pdf-toolkit`: `merge.py` and `split.py` silently contributed fewer pages
+  -- or none at all -- when a manifest range ran past an input's last page,
+  while reporting success. Both now report `skipped_pages` (per input file)
+  and `missing_files` alongside `pages_written`, warn on stderr for dropped
+  pages, and exit 2 instead of writing a valid zero-page PDF when no
+  requested page exists
+  ([#2379](https://github.com/use-agent-os/agent-os/issues/2379),
+  [#1902](https://github.com/use-agent-os/agent-os/issues/1902)). An
+  unusable merge manifest is reported as an error result instead of raising
+  ([#1921](https://github.com/use-agent-os/agent-os/issues/1921)), and
+  `form_fill` refuses a data file whose top level is not an object
+  ([#1903](https://github.com/use-agent-os/agent-os/issues/1903)).
+- Document skills: docx `replace_text` skipped section headers and footers
+  ([#1888](https://github.com/use-agent-os/agent-os/issues/1888)) and counted
+  a `replace_run` as applied even when the run index was out of bounds and
+  nothing was written
+  ([#1896](https://github.com/use-agent-os/agent-os/issues/1896)); pptx
+  `extract_text` did not recurse into nested group shapes
+  ([#1894](https://github.com/use-agent-os/agent-os/issues/1894)); and the
+  bundled git-diff and pptx scripts re-encoded their stdout through the
+  console code page, mangling non-ASCII output on Windows -- both now write
+  bytes ([#1834](https://github.com/use-agent-os/agent-os/issues/1834)).
+- The Windows shell denylist covers `rm` and `ri`, PowerShell's remaining two
+  built-in aliases for `Remove-Item` alongside `del`/`rmdir`/`rd`/`erase`/
+  `Remove-Item` itself. Anchored to a command position the same way `rd` and
+  `erase` already are, so `docker run --rm`, `git rm --cached` and
+  `npm run rm-cache` are untouched. `SafeBinPolicy.from_env` also now extends
+  the shared catastrophic denylist on Windows instead of replacing it, so
+  `rm -rf /`, `mkfs`, `dd if=`, the fork bomb and `shutdown` are gated there
+  too -- all of them reachable on a Windows host through git-bash, MSYS,
+  Cygwin or WSL, and `shutdown` is a native Windows binary besides. A
+  wrapper's payload (`powershell -c "rm -r C:\x"`) is now matched even when
+  quoted, and a script that merely starts with an alias name
+  (`rm-cache.cmd`, `rd-report.ps1`) is no longer denied
+  ([#2100](https://github.com/use-agent-os/agent-os/issues/2100),
+  [#1964](https://github.com/use-agent-os/agent-os/issues/1964)).
+- Docs: the `agentos memory` reference now lists every subcommand
+  ([#2354](https://github.com/use-agent-os/agent-os/issues/2354)), and the
+  gmgn skills no longer carry broken relative workflow links
+  ([#2361](https://github.com/use-agent-os/agent-os/issues/2361)).
+
+## [2026.9.14] - 2026-09-14
+
+### Added
+
+- Environment page / `agentos env list`: `FIRECRAWL_API_KEY` is now listed
+  under Search, owned by `web_fetch`. The tool reads it straight from the
+  environment for its Firecrawl escalation, so nothing in onboarding derived
+  it and the key was invisible until an operator set it by hand. The
+  `multi-search-engine` skill declares every engine key it reads
+  (`BRAVE_SEARCH_API_KEY`, `TAVILY_API_KEY`, `SERPAPI_API_KEY`,
+  `FIRECRAWL_API_KEY`, `XAI_API_KEY`) as optional, so `SERPAPI_API_KEY` appears
+  under Skills and each key names the engine it unlocks.
+- `multi-search-engine` skill: a `firecrawl` engine backed by Firecrawl's
+  `/v2/search`, keyed by the `FIRECRAWL_API_KEY` that `web_fetch` already
+  uses for its Firecrawl escalation, so an install with that key gets the
+  engine without further setup. Metadata only -- no `scrapeOptions`, so a
+  call spends search credits, not a page scrape per hit -- and included in
+  `--engines auto` when the key is set.
+- Skills: a `{python}` placeholder next to `{baseDir}`. `skill_view` expands
+  it to the interpreter AgentOS itself runs on (`sys.executable` of the
+  gateway), and every bundled `SKILL.md` now invokes its scripts as
+  `{python} {baseDir}/scripts/…` instead of a bare `python`. A bare `python`
+  is whatever the user's PATH resolves to -- on one machine a Homebrew 3.9
+  that happened to carry `httpx`, so `multi-search-engine` imported fine and
+  then died on `isinstance(x, int | float)`; on a fresh Windows box nothing at
+  all -- while only AgentOS's own interpreter is guaranteed to have the
+  skill's dependencies and its minimum version. The expanded body also leads
+  with a `[Skill interpreter: …]` line so third-party skills that still say
+  `python3 script.py` are steered onto it. `agentos skills init --with-script`
+  scaffolds the new form, and a test rejects any bundled skill that regresses
+  to a PATH python.
+- `multi-search-engine` skill: an `x` engine that runs xAI's server-side
+  `x_search` (X/Twitter) from the same CLI, using the OAuth login stored by
+  `agentos auth login xai` or `XAI_API_KEY` -- it reads the stored access
+  token and never refreshes it, since refresh is the gateway's job. Citations
+  land in `results` (`engine: "x"`) and the synthesized answer in a new
+  top-level `answers` key. Also a `serpapi` engine (`SERPAPI_API_KEY`) and
+  `--engines auto`, now the default: DuckDuckGo plus every key-backed engine
+  whose key is set, plus `x` when an xAI credential exists. The payload
+  reports the resolved list under `engines`.
+
+### Fixed
+
+- Skills: `requires.env` entries declared with `required: false` no longer hide
+  the skill when unset. The flag was parsed and shown on the Environment page
+  but eligibility and `skills doctor` gated on every declared name regardless,
+  so a skill could not declare an optional key without disappearing from
+  installs that lacked it.
+- Environment page / `agentos env list`: keys of providers the runtime cannot
+  drive (`EXA_API_KEY`, `PERPLEXITY_API_KEY`, and the LLM vendors catalogued
+  with `runtime_supported=False`) are no longer offered as "needed by" that
+  provider. Nothing reads them; a value set anyway is still listed, as
+  `custom`. The managed-credential list that keeps such names away from
+  untrusted skills is unchanged.
+- `multi-search-engine` skill: a DuckDuckGo bot challenge (HTTP 202 with an
+  "anomaly" page) used to come back as an empty success with no error; the
+  script now retries once and then records a per-engine error, so an empty
+  `results` with empty `errors` genuinely means no hits. DuckDuckGo redirect
+  links (`/l/?uddg=`) are unquoted to the destination URL, sponsored `y.js`
+  links are dropped, filtering happens before `--limit`, and snippets keep
+  their word spacing across `<b>` tags (#1917). `SKILL.md` and `engines.md`
+  no longer advertise Bing, Baidu, Sogou, 360 -- none were implemented, so the
+  agent kept requesting `bing` and getting `unknown engine`; the default
+  engine list no longer names Brave unconditionally either.
+
+- Web UI: the Memory page now uses the shared Control hero header, so the
+  signal background no longer overlaps the stat cards and the page matches
+  Health / Overview / Usage (#1927).
+
+## [2026.9.13] - 2026-09-13
+
 ### Changed
 
 - The `c0` router tier on the `bankr`, `opencap` and `surplus` tier profiles
@@ -195,6 +929,284 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`registry_session_max_entries`, `registry_cache_max_entries`,
   `registry_cache_ttl_seconds`)
   ([#1131](https://github.com/use-agent-os/agent-os/issues/1131)).
+- The four unconditional shell blocks now land in the sandbox denial ledger.
+  `_record_shell_denial`'s docstring promised a §8.3/§8.5 record for every
+  shell-layer denial, but its only caller was the interactive approval path on
+  `approval_denied`; a denylisted binary from `check_safe_bin`, the
+  sensitive-path block, the workspace lockdown and the workspace write-deny
+  all raised or returned their envelope without touching the ledger, so the
+  most severe refusals were exactly the ones missing from the audit trail and
+  no §8.3 stale-output purge ran for them. All four now record through a new
+  `DenialLedger.record_audit_denial` in both `exec_command` and
+  `background_process`. It keeps the per-fingerprint count and the purge and
+  deliberately leaves the §8.5 pause counter and the §8.4 `last_fingerprint`
+  alone: the pause is permanent, threshold 3, gates every `@sandboxed` tool,
+  and the sensitive-path check is a text scan, so routing hard blocks into it
+  would have let `cat ~/.ssh/id_rsa` three times lock `echo hello` for the
+  life of the session. `_sandbox_request_for` moves inside the `try` so a
+  removed process cwd cannot replace a clean block envelope with a raise
+  ([#1513](https://github.com/use-agent-os/agent-os/issues/1513)).
+- Inline compaction no longer overwrites a follow-up that arrived while the
+  turn was running. `persist_compaction_result` derived the rows to replace
+  from counts on the *live* transcript, so a `sessions.send` appended between
+  the agent loading its history and the `CompactionEvent` being persisted
+  fell into the overwritten tail and vanished from both the live and the
+  canonical transcript. `TurnRunner._load_history` now records a
+  `TranscriptSnapshot` (session id plus the `message_id` of the last row the
+  history was built from), the persist adapter hands it through, and the
+  manager rewrites and archives only rows inside that snapshot — later rows
+  are re-appended verbatim with the same `message_id`, and the summary's
+  `covered_through_id` never reaches them. A snapshot whose session or anchor
+  row is gone (same-key reset, truncate, manual compaction) is rejected and
+  reported as a failed persist rather than written over the newer transcript
+  ([#1645](https://github.com/use-agent-os/agent-os/issues/1645)).
+- Structured cron schedules honour the `timezone` alias.
+  `coerce_schedule_from_params` read only `schedule.tz`, so a schedule
+  carrying `schedule.timezone` — the spelling the expression-shorthand path
+  already accepts — was silently scheduled in UTC: a job asked for at 09:00
+  Shanghai ran at 09:00 UTC. A new `_schedule_tz` helper accepts either
+  spelling, rejects a conflict between the two and a non-string value
+  (including the falsy ones `raw.get("tz") or ""` used to swallow), and the
+  top-level conflict check goes through it too, so a `schedule.timezone` that
+  disagrees with a top-level `tz` raises instead of being overwritten.
+  `cron.update`'s explicit-clear detection learns the alias as well
+  ([#1603](https://github.com/use-agent-os/agent-os/issues/1603)).
+- `sessions.create` normalizes `displayName` the way `rename` and `patch`
+  already do. It was the one gateway write path that skipped
+  `normalize_session_name`, and `SessionNode.display_name` carries no
+  validation of its own, so raw ANSI/OSC bytes reached whatever terminal later
+  rendered the session list, and a pasted multi-line or over-long `/new`
+  title broke the single-line, ≤120-character shape list rows assume. Control
+  characters are dropped, whitespace collapsed, the name trimmed to
+  `MAX_SESSION_NAME_LENGTH`, blank stored as `None`, a non-string rejected;
+  the standalone TUI's `/new <title>` normalizes and escapes the title itself
+  since it never reaches the gateway
+  ([#1618](https://github.com/use-agent-os/agent-os/issues/1618)).
+- The `cron-watchers` skill no longer consumes items it never reported.
+  `_watermark.select_new` recorded every fresh id as seen while the three
+  watchers printed only `fresh[:limit]`, so anything past `--limit` was lost
+  for good — `watch_github.py` fetches 30 per page against a default limit of
+  10, so one busy poll could drop 20 items. `select_new` now takes the limit
+  and commits only the ids it returns; the surplus surfaces on following
+  runs, drained oldest-first so what is deferred is the newest and stays on
+  the page longest. `--limit` must be at least 1, and the silent first run
+  still adopts the whole feed
+  ([#1674](https://github.com/use-agent-os/agent-os/issues/1674)).
+- The `pdf-toolkit` `--tables-strategy` applies to both axes. `extract.py`
+  set only `vertical_strategy`, so `text` still looked for ruling lines on
+  one axis and found nothing on the borderless tables it is documented for,
+  while `explicit` — which needs line coordinates the script cannot supply —
+  crashed inside pdfplumber on every call. `explicit` is removed from the
+  choices and from `SKILL.md`; `extract()` rejects it with a clear
+  `ValueError` ([#1673](https://github.com/use-agent-os/agent-os/issues/1673)).
+- The `docx` skill's `replace_text` reaches placeholders inside tables.
+  `apply_ops` iterated `doc.paragraphs`, which python-docx limits to the body,
+  so a field inside a table — where contract, report and invoice fields
+  usually live — was never replaced and the op reported zero applications; a
+  non-dict op crashed with `AttributeError`. It now walks body paragraphs
+  plus every table cell, recursing into nested tables and visiting a merged
+  cell once, and skips non-dict ops the way `edit_xlsx` already does
+  ([#1653](https://github.com/use-agent-os/agent-os/issues/1653)).
+- `ProviderSelector.override_model(model, fallbacks=...)` rebases the held
+  position onto the rebuilt chain. It rebuilt `_chain` but left `_index` and
+  the breaker admission at positions computed against the old chain, so a
+  selector that `resolve()` had already moved onto a fallback either crashed
+  with `IndexError` on the next `resolve()` when the new chain was shorter, or
+  silently kept serving whatever now sat at the stale index without asking
+  the breaker. Auto-Pilot issues exactly this override on the live request
+  path, so a tier switch during a provider outage could take down the turn.
+  The position now follows its *provider* into the new chain — the admission
+  may be this turn's half-open probe, which a second `resolve()` must not
+  treat as already in flight — and resets to the primary when the provider
+  is gone, as `sync_primary` already does
+  ([#1616](https://github.com/use-agent-os/agent-os/issues/1616)).
+- `apply_patch` to `USER.md`, `memory.md` or a nested `memory_source_dir`
+  refreshes the memory snapshot. `patch._memory_source_rel_path` kept its own
+  copy of the "which files feed the snapshot" rule and knew only `MEMORY.md`
+  under the single patch root, so the edit stayed invisible to the model for
+  the rest of the session while the same edit through `write_file` or
+  `edit_file` fired `on_memory_source_write`. The patch tool now delegates to
+  `filesystem._memory_source_rel_path`, which takes the patch root as an extra
+  root — one classifier, no drift
+  ([#1625](https://github.com/use-agent-os/agent-os/issues/1625)).
+- Slack Approve/Deny clicks resolve on entries not literally named `slack`.
+  `_handle_slack_interactive` compared the session key's channel segment
+  against `SlackChannel.channel_id`, a dataclass default the registry never
+  overwrote, while session keys embed the *entry name* — so on any other
+  entry name every click logged `slack.interactive_mismatch` and the approval
+  never resolved. `SlackChannel` gains a `name` field, the registry's flat
+  path passes `entry.name` to any adapter that accepts one, and the check
+  compares against it the way Discord, Telegram and Teams compare against
+  `self.config.name`. `channel_id` is left alone: it keys
+  `pending_overflow_policy_per_channel`
+  ([#1606](https://github.com/use-agent-os/agent-os/issues/1606)).
+- The same defect on Discord: `_handle_discord_component_interaction`
+  compared against the literal `discord`, because `DiscordChannelConfig`
+  never declared a `name` field for the registry to populate. Every
+  multi-account Discord setup has at least one entry not named `discord`, and
+  on those every approve/deny click was rejected as a mismatch
+  ([#1600](https://github.com/use-agent-os/agent-os/issues/1600)).
+- The provider circuit breaker releases its half-open probe slot on a
+  request-shaped failure. `record_failure` ignores non-tripping kinds
+  (`MODEL_NOT_FOUND`, `BAD_REQUEST`, `UNSUPPORTED_FEATURE`, …) because they
+  describe the request, not the provider — but when the ignored failure *was*
+  the probe, the early return left `probe_started_at` set and `allow()`
+  blocked every other caller for a full cooldown window (up to 600s by
+  default), parking a provider nothing had shown to be unhealthy. Such a
+  failure now clears the probe and leaves state, counters and backoff
+  untouched, so the next caller becomes the probe
+  ([#1602](https://github.com/use-agent-os/agent-os/issues/1602)).
+- `apply_patch` treats a bare empty hunk line as blank context. Both loops in
+  `_apply_hunk` skipped an empty line outright, but a blank context line is
+  written as `""` at least as often as `" "` — editors, terminals, CI and most
+  model output strip the trailing space — so verification fell out of step
+  with the file and produced a spurious `Context mismatch` pointing at the
+  wrong line. A blank that merely separates a hunk from the next marker is
+  still ignored ([#1577](https://github.com/use-agent-os/agent-os/issues/1577)).
+- `TerminalChannel.receive()` works on Windows. `_get_reader` handed
+  `sys.stdin` to `loop.connect_read_pipe`, which the Proactor loop registers
+  with IOCP and fails with `WinError 6 The handle is invalid` from the first
+  `readline()`, after the dead transport was already cached. Windows now reads
+  a line in the default executor under the existing reader lock; POSIX keeps
+  the `StreamReader` path; both share one `errors="replace"` decode and strip
+  a trailing CRLF as one terminator
+  ([#1575](https://github.com/use-agent-os/agent-os/issues/1575)).
+- Nullable unions spelled `{"type": ["null"]}`, `{"type": null}`,
+  `{"const": null}` or `{"enum": [null]}` collapse like `{"type": "null"}`.
+  `_is_null_schema` recognised only the last, so the others survived as an
+  uncollapsed `anyOf` — the exact construct the module exists to remove
+  before a schema reaches a provider that rejects it — and the type-array
+  case was rewritten to two identical `string` branches. Type wins over
+  const/enum, a branch that admits any real value is never null, and null
+  literals are dropped from a type array alongside `"null"`
+  ([#1573](https://github.com/use-agent-os/agent-os/issues/1573)).
+- `grep_search`'s `include` glob matches path-qualified patterns. The filter
+  ran `fnmatch` against `fp.name` only, so `tests/*.py` could never match and
+  the tool answered "No matches" — indistinguishable, to the agent, from
+  "this code does not exist". It now matches the filename first and then the
+  path relative to the search base, so bare patterns with a literal prefix
+  keep working, and a `**/` segment also matches zero directories
+  ([#1571](https://github.com/use-agent-os/agent-os/issues/1571)).
+- The email channel refuses to send into an unknown thread instead of mailing
+  the Message-ID. `_resolve_target` fell back to treating `reply_to` as a
+  mailbox whenever the thread was not in the in-memory routing cache — but
+  `reply_to` is an RFC 5322 Message-ID with a mailbox's `local@domain` shape
+  and a domain chosen by whoever sent the original mail, so after a restart or
+  LRU eviction the reply went to that address. An unknown thread with no
+  `metadata["to"]` now raises and logs `email.send_unknown_thread`. Scheduler
+  and heartbeat delivery, which relied on the fallback for operator-configured
+  addresses, pass `metadata["to"]` — but only when `channel_id` is a
+  configured recipient rather than a thread key
+  ([#1570](https://github.com/use-agent-os/agent-os/issues/1570)).
+- `gate_action` resolves a relative `cwd` against the workspace.
+  `_resolve_workspace` accepted `cwd` only when absolute and otherwise fell
+  through to the workspace root, while `action_fingerprint` hashes `cwd`, so
+  every relative `workdir` collapsed onto one fingerprint. For `@sandboxed`
+  tools with a fixed `argv_factory` such as `git_status`, `cwd` is the only
+  discriminator, which made `post_denial_guard` auto-deny a call in `repoB`
+  as `REPEATED_SAME_INTENT` after the human had denied `repoA`. A relative
+  `cwd` is now joined lexically onto the workspace root, mirroring
+  `shell._effective_workdir`
+  ([#1595](https://github.com/use-agent-os/agent-os/issues/1595)).
+- `sensitive_target_in_command` resolves relative destructive targets against
+  the command's `cwd`, not the workspace root. Whenever `workspace` was
+  passed, `cwd` was discarded, so `rm -rf config` with `workdir=~/.aws`
+  resolved to `<workspace>/config`, matched no sensitive basename, and the
+  hard block "ordinary approval cannot override" never fired; `rm -rf
+  .aws/config` from `$HOME` and `rm -rf ../.ssh` slipped past the whole-text
+  scan the same way. The two notions are now kept apart: `cwd` anchors a
+  relative target, `workspace` measures "inside the workspace", and with no
+  workspace configured the `/root` container exception keeps working
+  ([#1579](https://github.com/use-agent-os/agent-os/issues/1579)).
+- `read_spreadsheet` no longer crashes on a CSV/TSV cell over Python's
+  process-wide 131,072-character field limit — one embedded JSON blob, log
+  line or base64 column raised an unhandled `_csv.Error`. The limit is raised
+  to `len(text)` for the duration of the parse (never `sys.maxsize`, so a
+  malformed quote cannot swallow an arbitrarily large file as one field),
+  restored in a `finally`, and guarded by a lock because the limit is
+  process-global and the read runs on the shared executor; any remaining
+  `csv.Error` becomes a `ToolError`
+  ([#1580](https://github.com/use-agent-os/agent-os/issues/1580)).
+- `cron.remove` on an unknown job id is `NOT_FOUND`. `scheduler.remove_job`
+  already returned `False`, but the RPC handler discarded it and the CLI then
+  invented `{"removed": true}`; it now raises `KeyError` like `cron.status`
+  and `cron.update` ([#1598](https://github.com/use-agent-os/agent-os/issues/1598)).
+- Concurrent skill installs no longer clobber each other's lockfile entries.
+  `install()` and `uninstall()` each did their own `load` → mutate → `save`
+  with no locking, so whichever save landed last won, built from a load taken
+  before the other writer's save — 20 concurrent installs dropped 19 entries.
+  `Lockfile.update(path, mutate)` holds an exclusive OS-level lock (fcntl /
+  msvcrt, on a sibling `*.lock` file so acquiring it never depends on the
+  lockfile being valid JSON) across the whole cycle, and `save()` writes
+  atomically through a temp file and `os.replace`
+  ([#1557](https://github.com/use-agent-os/agent-os/issues/1557)).
+- Status reactions settle on the failure path. Only `completed()` popped
+  `_active` and removed the progress emoji; on the `TaskQueueFullError` path
+  dispatch calls `received` then `failed` and returns, so a rejected message
+  kept both ✅ and ❌ forever and leaked one `_active` entry per rejection.
+  `failed()` is now terminal: it clears the progress marks, keeps ❌ as the
+  outcome, and tracks nothing that a later call would have to reclaim
+  ([#1560](https://github.com/use-agent-os/agent-os/issues/1560)).
+- `run_job_now` executes the row the reservation read, not the snapshot
+  taken before it. An `update()` landing between the two reads meant the
+  operator who had just saved a change and clicked "run now" got the old
+  payload, prompt or timeout — and since `handler_key` derives from the
+  payload kind, an edit from an agent turn to a reminder dispatched to the
+  old handler. The handler is resolved from the reserved row too, and a
+  missing handler finalizes the reservation the way `timer._run_single` does
+  ([#1555](https://github.com/use-agent-os/agent-os/issues/1555)).
+- Background shell output decodes multibyte UTF-8 across chunk boundaries.
+  `_read_bg_output` decoded each 4096-byte chunk with `errors="replace"`, so a
+  CJK character or emoji straddling a boundary came out as `U+FFFD`. It now
+  feeds an incremental decoder and flushes at EOF
+  ([#1535](https://github.com/use-agent-os/agent-os/issues/1535)).
+- `ApprovalQueue.wait(approval_id, timeout=X)` no longer denies an approval
+  when the caller's own bounded wait elapses. The per-call timeout was
+  treated as the approval's expiry, so a Web UI poll with `timeout=10` on an
+  approval whose real lifespan was the 300s default permanently wrote
+  `resolved = 1, approved = 0` after ten seconds, and the operator's later
+  Approve raised `Approval already resolved`. The approval is denied only once
+  `created_at + default_timeout` has genuinely elapsed; otherwise `wait()`
+  returns `False` and leaves it pending
+  ([#1568](https://github.com/use-agent-os/agent-os/issues/1568)).
+- `execute_code` shows the whole script in its approval prompt. It passed
+  `command=code[:200]` into `_check_exec_approval`, and that string is what
+  the human reviewing the approval sees, so a script whose first 200
+  characters were imports or a docstring presented as harmless while the
+  destructive statement that triggered the prompt was never shown. The
+  sensitive-access scan already ran over the full code; only the payload was
+  truncated ([#1567](https://github.com/use-agent-os/agent-os/issues/1567)).
+- The git tool resolves a relative `workdir` against the workspace. It was
+  returned unresolved, so `_run_git` resolved it against the process CWD and
+  inspected `$PWD/<workdir>` whenever the gateway ran anywhere but the
+  workspace. It now mirrors `shell._effective_workdir`: a relative path joins
+  onto `ctx.workspace_dir` and resolves lexically; absolute paths pass through
+  ([#1566](https://github.com/use-agent-os/agent-os/issues/1566)).
+- `read_spreadsheet` finds a sheet literally named `"1"`. The positional
+  reading of `sheet` was tested before the exact-name match, so on a workbook
+  whose sheets were `["Summary", "1"]`, `sheet="1"` silently returned
+  `Summary` and every numeric sheet name — years, step numbers, product codes
+  — was unreachable. The exact-name match now wins; positional selection is
+  only outranked, never removed
+  ([#1569](https://github.com/use-agent-os/agent-os/issues/1569)).
+- `MemorySyncManager.sync()` no longer discards session-delta recorded while
+  it was running. It snapshotted `has_pending()` at the top, awaited file and
+  session indexing, and then unconditionally `reset()` the tracker — so a
+  burst of `notify_message()` calls that arrived mid-sync, never covered by
+  that sync's own work, was wiped by its completion and had to accumulate a
+  fresh threshold from zero. `SessionDeltaTracker` gains `snapshot()` and
+  `consume(snapshot)`, which subtracts the snapshotted amount instead of
+  zeroing, and the `session-delta` threshold guard is kept
+  ([#1521](https://github.com/use-agent-os/agent-os/issues/1521)).
+- The Windows shell denylist covers every delete spelling. `del` and `rmdir`
+  were listed but `rd`, `erase` and `Remove-Item` were not, and the entries
+  that duplicated them in `DEFAULT_WARNLIST_WIN` were dead code because the
+  denylist is checked first. `rd` and `erase` are anchored to a command
+  position — start, `;`, `&`, `|` or newline, optionally behind a `cmd /c` or
+  `powershell` wrapper — so a word like `record` does not trip them,
+  `Remove-Item` joins the list, the force-push pattern tolerates flags between
+  `push` and `--force`, and the dead warnlist entries are removed
+  ([#1464](https://github.com/use-agent-os/agent-os/issues/1464)).
 
 ## [2026.9.11] - 2026-09-11
 

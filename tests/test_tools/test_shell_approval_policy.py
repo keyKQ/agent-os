@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -8,9 +9,10 @@ import pytest
 
 from agentos.gateway.approval_queue import get_approval_queue, reset_approval_queue
 from agentos.sandbox.config import SandboxSettings
-from agentos.sandbox.integration import configure_runtime, reset_runtime
+from agentos.sandbox.integration import configure_runtime, get_runtime, reset_runtime
 from agentos.sandbox.intent_cache import get_intent_cache, reset_intent_cache
-from agentos.tools.builtin import code_exec, filesystem, shell
+from agentos.sandbox.types import DenialReason
+from agentos.tools.builtin import code_exec, filesystem, shell, shell_policy
 from agentos.tools.builtin.code_exec import execute_code
 from agentos.tools.builtin.shell_policy import PolicyResult
 from agentos.tools.types import (
@@ -95,6 +97,57 @@ async def test_sandbox_off_forces_prompt_over_cached_intent() -> None:
     assert result is not None
     assert result["status"] == "approval_required"
     assert shell._elevate_current_call.get() is False
+
+
+@pytest.mark.asyncio
+async def test_cached_intent_from_another_session_does_not_skip_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The short-circuit returns before the queue is ever asked.
+
+    So an approval leaking across sessions is not merely a stale cache entry —
+    it is a delete that runs with no prompt shown anywhere.
+    """
+    monkeypatch.setattr(shell, "_sandbox_effectively_off", lambda: False)
+    get_intent_cache().record("rm target.txt", session_key="agent:main:somebody-else")
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        "rm target.txt",
+        None,
+        "command requires approval",
+        None,
+        True,
+    )
+
+    assert result is not None
+    assert result["status"] == "approval_required"
+    assert shell._elevate_current_call.get() is False
+    assert len(get_approval_queue().list_pending("exec")) == 1
+
+
+@pytest.mark.asyncio
+async def test_cached_intent_from_this_session_still_skips_the_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The paraphrase short-circuit the cache exists for must keep working."""
+    monkeypatch.setattr(shell, "_sandbox_effectively_off", lambda: False)
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    get_intent_cache().record("rm -rf target.txt", session_key=ctx.session_key)
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        'shutil.rmtree("target.txt")',
+        None,
+        "command requires approval",
+        None,
+        True,
+    )
+
+    assert result is None
+    assert shell._elevate_current_call.get() is True
+    assert get_approval_queue().list_pending("exec") == []
 
 
 @pytest.mark.asyncio
@@ -549,6 +602,114 @@ def test_shell_write_targets_ignores_words_ending_in_tee(command: str) -> None:
     assert shell._shell_write_targets(command) == []
 
 
+# --- #1230: quoted write targets containing spaces -------------------------
+#
+# A quoted path with a space matched neither pattern, so ``_shell_write_targets``
+# returned ``[]`` and every lockdown / deny-glob check below iterated an empty
+# list and allowed the write.
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        'echo ok > "{target}"',
+        "echo ok > '{target}'",
+        'echo ok>"{target}"',
+        'echo ok >> "{target}"',
+        'echo ok 2> "{target}"',
+        'echo ok &> "{target}"',
+        '>&"{target}"',
+    ],
+)
+def test_shell_write_targets_detects_quoted_redirection_targets_with_spaces(
+    template: str,
+) -> None:
+    target = "/tmp/my custom folder/outside.txt"
+    assert shell._shell_write_targets(template.format(target=target)) == [target]
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        'echo ok | tee "{target}"',
+        "echo ok | tee '{target}'",
+        'echo ok|tee "{target}"',
+        'echo ok | tee -a "{target}"',
+        'echo ok | tee --append "{target}"',
+        'echo ok | tee --output-error=warn "{target}"',
+        'echo ok | /usr/bin/tee "{target}"',
+    ],
+)
+def test_shell_write_targets_detects_quoted_tee_targets_with_spaces(template: str) -> None:
+    target = "/tmp/my custom folder/outside.txt"
+    assert shell._shell_write_targets(template.format(target=target)) == [target]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("""echo ok > "/tmp/John's Notes/out.txt\"""", "/tmp/John's Notes/out.txt"),
+        ("""echo ok | tee "/tmp/John's Notes/out.txt\"""", "/tmp/John's Notes/out.txt"),
+        ("""echo ok > '/tmp/say "hi"/out.txt'""", '/tmp/say "hi"/out.txt'),
+        ("""echo ok | tee '/tmp/say "hi"/out.txt'""", '/tmp/say "hi"/out.txt'),
+    ],
+)
+def test_shell_write_targets_detects_quoted_targets_holding_the_other_quote(
+    command: str,
+    expected: str,
+) -> None:
+    """Only the *matching* quote ends a quoted target.
+
+    ``~/John's Notes`` is an ordinary directory name on macOS and Windows, and a
+    body that excluded both quote characters would leave exactly the reported
+    fail-open in place for it: the closing ``"`` is never reached, the bare
+    alternative cannot start on a quote, and the parser reports no target at all.
+    """
+    assert shell._shell_write_targets(command) == [expected]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo ok > "AT&T report.txt"',
+        'echo ok | tee "AT&T report.txt"',
+    ],
+)
+def test_shell_write_targets_quoted_target_survives_the_fd_dup_prepass(command: str) -> None:
+    """``_FD_DUP_PATTERN`` runs first; a quoted ``&`` must not be blanked out."""
+    assert shell._shell_write_targets(command) == ["AT&T report.txt"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        # Bash redirects to the first word and passes the rest to the command:
+        # ``echo ok > /tmp/John Doe/out.txt`` writes ``/tmp/John``. Truncating at
+        # whitespace is correct for a bare target and must stay that way.
+        ("echo ok > /tmp/John Doe/out.txt", ["/tmp/John"]),
+        ("echo ok > /tmp/.env extra", ["/tmp/.env"]),
+        ("echo ok > out.txt # note", ["out.txt"]),
+        ("echo ok > out.txt 2>/dev/null", ["out.txt"]),
+        ("echo ok | tee reports/o.txt;whoami", ["reports/o.txt"]),
+        ("cat > out.txt <<'EOF'", ["out.txt"]),
+        ("echo ok 2>&1", []),
+        ("echo ok >&2", []),
+        ("echo x|mytee foo.txt", []),
+    ],
+)
+def test_shell_write_targets_leaves_unquoted_targets_unchanged(
+    command: str,
+    expected: list[str],
+) -> None:
+    """Pins the bare-target class to the behaviour it has on ``main``.
+
+    The quoted body is the only thing #1230 changes. A bare target that swallowed
+    whitespace would mis-model the shell *and* fail open: ``> reports/out.txt
+    2>/dev/null`` would resolve as one long path that matches no deny glob.
+    """
+    assert shell._shell_write_targets(command) == expected
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -641,7 +802,7 @@ async def test_workspace_lockdown_still_blocks_a_real_target_beside_a_null_sink(
 
     result = await shell._check_exec_approval(
         "exec_command",
-        f"echo ok > {outside} 2>/dev/null",
+        f'echo ok > "{outside}" 2>/dev/null',
         str(workspace),
         "command requires approval",
         None,
@@ -658,12 +819,12 @@ async def test_workspace_lockdown_still_blocks_a_real_target_beside_a_null_sink(
 @pytest.mark.parametrize(
     "template",
     [
-        "echo ok>{target}",
-        "echo ok>>{target}",
-        "echo ok 2>{target}",
-        ">&{target}",
-        "echo ok &>{target}",
-        "cat<in>{target}",
+        'echo ok>"{target}"',
+        'echo ok>>"{target}"',
+        'echo ok 2>"{target}"',
+        '>&"{target}"',
+        'echo ok &>"{target}"',
+        'cat<in>"{target}"',
     ],
 )
 async def test_workspace_lockdown_blocks_redirection_without_whitespace(
@@ -699,10 +860,10 @@ async def test_workspace_lockdown_blocks_redirection_without_whitespace(
 @pytest.mark.parametrize(
     "template",
     [
-        "echo ok|tee {target}",
-        "echo ok|tee -a {target}",
-        "echo ok | tee --append {target}",
-        "echo ok | tee --output-error=warn {target}",
+        'echo ok|tee "{target}"',
+        'echo ok|tee -a "{target}"',
+        'echo ok | tee --append "{target}"',
+        'echo ok | tee --output-error=warn "{target}"',
     ],
 )
 async def test_workspace_lockdown_blocks_tee_without_whitespace_or_long_options(
@@ -748,6 +909,134 @@ async def test_workspace_write_deny_globs_block_tee_without_whitespace(tmp_path:
     result = await shell._check_exec_approval(
         "exec_command",
         "echo ok|tee --append reports/out.txt",
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workspace_write_deny"
+    assert result["matched_pattern"] == "reports/*.txt"
+
+
+# --- #1230: the block decision, one layer past the parser -------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "template",
+    [
+        'echo ok > "{target}"',
+        "echo ok > '{target}'",
+        'echo ok >> "{target}"',
+        'echo ok | tee "{target}"',
+        "echo ok | tee -a '{target}'",
+    ],
+)
+async def test_workspace_lockdown_blocks_quoted_targets_with_spaces(
+    tmp_path: Path,
+    template: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside_dir = tmp_path / "my custom folder"
+    outside_dir.mkdir()
+    outside = outside_dir / "outside.txt"
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_lockdown = True  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        template.format(target=outside),
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workspace_lockdown"
+    assert result["target"] == str(outside)
+    assert result["resolved_path"] == str(outside)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo ok > "reports/my report.txt"',
+        "echo ok > 'reports/my report.txt'",
+        'echo ok | tee --append "reports/my report.txt"',
+    ],
+)
+async def test_workspace_write_deny_globs_block_quoted_targets_with_spaces(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_write_deny_globs = ["reports/*.txt"]  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        command,
+        str(workspace),
+        "command requires approval",
+        None,
+        False,
+    )
+
+    assert result is not None
+    assert result["status"] == "blocked"
+    assert result["reason"] == "workspace_write_deny"
+    assert result["matched_pattern"] == "reports/*.txt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo ok > reports/out.txt 2>/dev/null",
+        "echo ok > reports/out.txt extra",
+        "echo ok > reports/out.txt # note",
+        "echo ok|tee --append reports/out.txt;whoami",
+    ],
+)
+async def test_workspace_write_deny_globs_block_bare_target_with_a_trailing_token(
+    tmp_path: Path,
+    command: str,
+) -> None:
+    """A bare target followed by another token must stay blocked.
+
+    This is the regression the quoted fix has to avoid re-opening: if the bare
+    body swallowed whitespace, the target would resolve to
+    ``reports/out.txt 2>/dev/null`` — one path that matches no deny glob — and
+    ordinary, non-adversarial shell would slip past the check.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.interaction_mode = InteractionMode.UNATTENDED
+    ctx.elevated = "bypass"
+    ctx.workspace_dir = str(workspace)
+    ctx.workspace_write_deny_globs = ["reports/*.txt"]  # type: ignore[attr-defined]
+
+    result = await shell._check_exec_approval(
+        "exec_command",
+        command,
         str(workspace),
         "command requires approval",
         None,
@@ -1102,3 +1391,193 @@ def test_sandbox_request_for_populates_env_and_matches_fingerprint(tmp_path: Pat
     finally:
         current_tool_context.reset(token)
 
+
+@pytest.mark.asyncio
+async def test_inline_web_approval_timeout_returns_pending_and_no_ledger_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1563: inline browser approval timeout must return approval_pending
+    and NOT record a HUMAN_REJECTED denial into the sandbox audit ledger."""
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.WEB
+    ctx.workspace_dir = str(tmp_path)
+    session_id = ctx.session_key or "default"
+
+    configure_runtime(
+        SandboxSettings(
+            sandbox=True,
+            security_grading=True,
+            backend="noop",
+            allow_legacy_mode=True,
+        ),
+        workspace=tmp_path,
+    )
+    runtime = get_runtime()
+    assert runtime is not None
+
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 0.05)
+    if sys.platform == "win32":
+        monkeypatch.setattr(
+            shell_policy,
+            "_policy",
+            shell_policy.SafeBinPolicy(denylist=[], allowlist=[], warnlist=[r"\brm\b"]),
+        )
+
+    cmd = "rm target.txt"
+    target = tmp_path / "target.txt"
+    target.write_text("keep me", encoding="utf-8")
+
+    res_json = await shell.exec_command(cmd)
+    res = json.loads(res_json)
+
+    assert res["status"] == "approval_pending"
+    assert "Approval is still pending" in res["message"]
+    approval_id = res["approval_id"]
+    assert approval_id
+
+    # The entry remains unresolved in the queue
+    queue = get_approval_queue()
+    entry = queue.get(approval_id)
+    assert entry.resolved is False
+    assert entry.approved is False
+
+    # The sandbox audit ledger recorded NO denial (operator did not reject)
+    assert await runtime.ledger.count_session(session_id) == 0
+    _, last_reason = await runtime.ledger.last_denial(session_id)
+    assert last_reason is None
+
+    # Later operator approval still works and is consumed
+    queue.resolve(approval_id, True)
+    assert queue.get(approval_id).resolved is True
+    assert queue.get(approval_id).approved is True
+
+    approval_granted = await shell._check_exec_approval(
+        "exec_command",
+        cmd,
+        None,
+        "warning",
+        approval_id=approval_id,
+        background=False,
+    )
+    assert approval_granted is None
+    assert shell._elevate_current_call.get() is True
+    assert queue.get(approval_id).consumed is True
+
+    # Ledger still has 0 denials after approval
+    assert await runtime.ledger.count_session(session_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_inline_web_approval_explicit_denial_records_human_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit operator rejection during inline browser approval returns approval_denied
+    and records exactly ONE DenialReason.HUMAN_REJECTED in the audit ledger."""
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.WEB
+    ctx.workspace_dir = str(tmp_path)
+    session_id = ctx.session_key or "default"
+
+    configure_runtime(
+        SandboxSettings(
+            sandbox=True,
+            security_grading=True,
+            backend="noop",
+            allow_legacy_mode=True,
+        ),
+        workspace=tmp_path,
+    )
+    runtime = get_runtime()
+    assert runtime is not None
+
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 0.5)
+    if sys.platform == "win32":
+        monkeypatch.setattr(
+            shell_policy,
+            "_policy",
+            shell_policy.SafeBinPolicy(denylist=[], allowlist=[], warnlist=[r"\brm\b"]),
+        )
+
+    cmd = "rm target.txt"
+    target = tmp_path / "target.txt"
+    target.write_text("keep me", encoding="utf-8")
+
+    async def deny_shortly():
+        queue = get_approval_queue()
+        for _ in range(50):
+            pending = queue.list_pending("exec")
+            if pending:
+                queue.resolve(pending[0]["id"], False)
+                return
+            await asyncio.sleep(0.01)
+
+    deny_task = asyncio.create_task(deny_shortly())
+    res_json = await shell.exec_command(cmd)
+    await deny_task
+    res = json.loads(res_json)
+
+    assert res["status"] == "approval_denied"
+    assert "Approval was denied" in res["message"]
+
+    # Exactly one HUMAN_REJECTED denial recorded in the audit ledger
+    assert await runtime.ledger.count_session(session_id) == 1
+    _, last_reason = await runtime.ledger.last_denial(session_id)
+    assert last_reason == DenialReason.HUMAN_REJECTED
+
+
+@pytest.mark.asyncio
+async def test_retry_approval_timeout_returns_pending_and_no_ledger_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #1563/#1568: retry branch waiting for approval decision returns
+    approval_pending on timeout and does NOT record a denial in the ledger."""
+    ctx = current_tool_context.get()
+    assert ctx is not None
+    ctx.caller_kind = CallerKind.CLI
+    ctx.workspace_dir = str(tmp_path)
+    session_id = ctx.session_key or "default"
+
+    configure_runtime(
+        SandboxSettings(
+            sandbox=True,
+            security_grading=True,
+            backend="noop",
+            allow_legacy_mode=True,
+        ),
+        workspace=tmp_path,
+    )
+    runtime = get_runtime()
+    assert runtime is not None
+
+    monkeypatch.setattr(shell, "_APPROVAL_RETRY_WAIT_SECONDS", 0.05)
+    if sys.platform == "win32":
+        monkeypatch.setattr(
+            shell_policy,
+            "_policy",
+            shell_policy.SafeBinPolicy(denylist=[], allowlist=[], warnlist=[r"\brm\b"]),
+        )
+
+    cmd = "rm target.txt"
+
+    # CLI caller: initial call returns approval_required without inline waiting
+    res_json = await shell.exec_command(cmd)
+    res = json.loads(res_json)
+    assert res["status"] == "approval_required"
+    approval_id = res["approval_id"]
+
+    # Retry call with approval_id: waits inline on the retry branch
+    retry_json = await shell.exec_command(cmd, approval_id=approval_id)
+    retry_res = json.loads(retry_json)
+
+    assert retry_res["status"] == "approval_pending"
+    assert "Approval is still pending" in retry_res["message"]
+    assert await runtime.ledger.count_session(session_id) == 0
+
+    entry = get_approval_queue().get(approval_id)
+    assert entry.resolved is False
+    assert entry.approved is False

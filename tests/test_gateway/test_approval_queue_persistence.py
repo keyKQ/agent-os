@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 
 import pytest
 
@@ -45,7 +46,8 @@ def test_approval_queue_ignores_corrupt_json_payload(tmp_path) -> None:
         "INSERT OR REPLACE INTO approval_queue "
         "(approval_id, namespace, params, created_at, resolved, approved, consumed) "
         "VALUES (?, ?, ?, ?, 0, 0, 0)",
-        (bad_id, "exec", "{not-json}", 0.0),
+        # Current, so the startup sweep (#1987) does not reap it as expired.
+        (bad_id, "exec", "{not-json}", time.time()),
     )
     conn.commit()
     conn.close()
@@ -191,3 +193,58 @@ def test_approval_queue_consume_is_one_shot_with_stale_unconsumed_read(
         assert queue.get(approval_id).consumed is True
     finally:
         queue.close()
+
+
+def test_resolve_persists_elevated_mode_in_params(tmp_path) -> None:
+    """`resolve(..., elevated_mode=...)` used to write ``elevatedMode`` onto the
+    in-memory entry only; the next ``get()``/``status()`` re-read the row from
+    SQLite and dropped it, so the exec tool never saw the elevation."""
+    db_path = tmp_path / "approval_queue.sqlite"
+    queue = ApprovalQueue(db_path=str(db_path))
+    approval_id = queue.request("exec", {"toolName": "exec_command", "command": "id"})
+
+    queue.resolve(approval_id, True, elevated_mode="full")
+
+    # Same instance: status() goes through get(), which re-reads the row.
+    status = queue.status(approval_id)
+    assert status["approved"] is True
+    assert status["params"] == {
+        "toolName": "exec_command",
+        "command": "id",
+        "elevatedMode": "full",
+    }
+    assert queue.get(approval_id).params["elevatedMode"] == "full"
+
+    # The SQLite row itself carries it.
+    with sqlite3.connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT params FROM approval_queue WHERE approval_id = ?", (approval_id,)
+        ).fetchone()
+    assert '"elevatedMode": "full"' in row[0]
+    queue.close()
+
+    # And so does a fresh queue reading the same file.
+    reloaded = ApprovalQueue(db_path=str(db_path))
+    assert reloaded.status(approval_id)["params"]["elevatedMode"] == "full"
+    reloaded.close()
+
+
+@pytest.mark.parametrize(
+    ("approved", "elevated_mode"),
+    [
+        (False, "full"),
+        (True, None),
+        (True, "not-a-mode"),
+    ],
+)
+def test_resolve_leaves_params_alone_when_no_valid_elevation(
+    tmp_path, approved: bool, elevated_mode: str | None
+) -> None:
+    db_path = tmp_path / "approval_queue.sqlite"
+    queue = ApprovalQueue(db_path=str(db_path))
+    approval_id = queue.request("exec", {"toolName": "exec_command", "command": "id"})
+
+    queue.resolve(approval_id, approved, elevated_mode=elevated_mode)
+
+    assert queue.status(approval_id)["params"] == {"toolName": "exec_command", "command": "id"}
+    queue.close()

@@ -23,17 +23,58 @@ DEFAULT_DENYLIST: list[str] = [
     r"(?i)\bRestart-Computer\b",  # PowerShell system reboot
 ]
 
-_WIN_CMD_PREFIX: str = (
-    r"(?:^|[;&|\n])\s*"
-    r"(?:(?:cmd(?:\.exe)?\s+/[ck]|(?:powershell|pwsh)(?:\.exe)?(?:\s+-[a-zA-Z]+)*)\s+)?"
+# One wrapper hop: `cmd /c` or `powershell [flags]`, followed by the payload's
+# optional opening quote. A PowerShell flag may carry a value, written either
+# `-Flag Value` or `-Flag:Value` (`-ExecutionPolicy Bypass`, `-ep:Bypass`,
+# `-WindowStyle Hidden`); a value never starts with `-`, which is what keeps
+# the next flag from being read as this one's value. `-Command`/`-c` is a
+# flag like any other here: the regex engine backtracks off an unquoted
+# `-c rm C:\x` so `rm` is left for the command match. The wrapper's payload
+# is commonly quoted (`powershell -c "rm -r C:\x"` is how subprocess/cmd
+# hand PowerShell a full command string), so opening quotes are allowed
+# there -- but only there, not after a bare separator. More than one, and a
+# backslash before one, because a payload nested in a payload arrives with
+# its quote doubled (`cmd /c "pwsh -c ""rm C:\x"""`) or escaped
+# (`-c \"rm C:\x\"`). The payload may also open with whitespace.
+#
+# A value is also never a wrapper name. Without that, `pwsh -c pwsh -c pwsh`
+# parses two ways at every hop -- `pwsh` as `-c`'s value, or as the next
+# wrapper -- and the `*` on the wrapper multiplies them: 20 hops took
+# seconds, 25 never returned, inside the synchronous check every exec_command
+# runs (review on #2690). Refusing the name as a value leaves one parse.
+_WIN_WRAPPER_NAME: str = r"(?:cmd|powershell|pwsh)(?:\.exe)?(?![\w.\-])"
+_WIN_WRAPPER: str = (
+    r"(?:cmd(?:\.exe)?\s+/[ck]"
+    r"|(?:powershell|pwsh)(?:\.exe)?"
+    r"(?:\s+-[a-zA-Z]+(?:(?::|\s+)(?!-)(?!" + _WIN_WRAPPER_NAME + r")[^\s\"';&|]+)?)*)"
+    r"\s+(?:\\?[\"'])*\s*"
 )
+
+# Anchors a command name to the start of a command: line start or a shell
+# separator, through any number of nested wrappers (`cmd /c powershell -c`),
+# then PowerShell's call operator and an opening script-block brace, both of
+# which precede the command in `powershell -Command "& {rm C:\x}"`.
+_WIN_CMD_PREFIX: str = r"(?:^|[;&|\n])\s*(?:" + _WIN_WRAPPER + r")*(?:&\s*)?(?:\{\s*)?"
+
+# What may follow an anchored command name: an optional `.exe`, then a
+# separator, whitespace, or end of string. Unlike a bare `\b`, this refuses
+# `rm-cache.cmd` / `rd-report.ps1` -- scripts that merely start with the
+# alias -- while still matching the real `rm.exe` / `rd.exe` binaries.
+_WIN_CMD_END: str = r"(?:\.exe)?(?![\w.\-])"
 
 DEFAULT_DENYLIST_WIN: list[str] = [
     r"\bdel\b",
     r"\brmdir\b",
     r"\bRemove-Item\b",
-    _WIN_CMD_PREFIX + r"rd\b",
-    _WIN_CMD_PREFIX + r"erase\b",
+    _WIN_CMD_PREFIX + r"rd" + _WIN_CMD_END,
+    _WIN_CMD_PREFIX + r"erase" + _WIN_CMD_END,
+    # `rm` and `ri` are PowerShell's other two built-in aliases for
+    # Remove-Item, exactly as real as del/rd/erase/rmdir/Remove-Item above.
+    # Anchored the same way rd/erase are: both are short enough that a bare
+    # `\bword\b` would fire inside `docker run --rm`, `git rm --cached`,
+    # `npm run rm-cache`, branch names, and ordinary arguments.
+    _WIN_CMD_PREFIX + r"rm" + _WIN_CMD_END,
+    _WIN_CMD_PREFIX + r"ri" + _WIN_CMD_END,
     r"\bFormat-Volume\b",
     r"\bStop-Computer\b",
     r"\bRestart-Computer\b",
@@ -107,7 +148,15 @@ class SafeBinPolicy:
         if not deny:
             deny = _legacy_denylist_if_set()
             if not deny:
-                deny = DEFAULT_DENYLIST_WIN if os.name == "nt" else DEFAULT_DENYLIST
+                # Windows EXTENDS the shared catastrophic list, it never
+                # replaces it -- `rm -rf /`, `mkfs`, `dd if=`, the fork bomb,
+                # `shutdown`, etc. are platform-independent hazards that also
+                # reach a Windows host through git-bash, MSYS, Cygwin, or WSL.
+                deny = (
+                    [*DEFAULT_DENYLIST, *DEFAULT_DENYLIST_WIN]
+                    if os.name == "nt"
+                    else list(DEFAULT_DENYLIST)
+                )
         if not warn and not warn_env_present:
             warn = DEFAULT_WARNLIST_WIN if os.name == "nt" else DEFAULT_WARNLIST
 

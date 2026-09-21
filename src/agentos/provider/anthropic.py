@@ -298,6 +298,26 @@ def _anthropic_iteration_token_counts(usage: dict[str, Any]) -> tuple[int, int]:
     return input_tokens, output_tokens
 
 
+def _mid_stream_error_event(event: dict[str, Any]) -> ErrorEvent:
+    """Translate a streaming ``{"type": "error", "error": {...}}`` event.
+
+    ``code`` carries the upstream error type (``overloaded_error``,
+    ``api_error``, ...) so ``classify_provider_error`` can route it exactly
+    like the pre-stream HTTP-status path does; ``message`` keeps both so the
+    surfaced text still names the cause when the type is unfamiliar.
+    """
+    raw = event.get("error")
+    detail = raw if isinstance(raw, dict) else {}
+    error_type = str(detail.get("type") or "") or "stream_error"
+    message = str(detail.get("message") or "")
+    if not message and isinstance(raw, str):
+        message = raw
+    return ErrorEvent(
+        message=f"{error_type}: {message}" if message else error_type,
+        code=error_type,
+    )
+
+
 class AnthropicProvider:
     """Streams from Anthropic Messages API with SSE parsing."""
 
@@ -483,6 +503,19 @@ class AnthropicProvider:
 
                         etype = event.get("type", "")
 
+                        if etype == "error":
+                            # Anthropic can fail *after* the 200 and the first
+                            # events: ``event: error`` (overloaded_error,
+                            # api_error, ...) followed by a closed connection
+                            # with no ``message_stop``. Without this branch the
+                            # loop just ran out and the turn ended with
+                            # neither an ErrorEvent nor a DoneEvent, so the
+                            # caller saw a silently truncated reply and the
+                            # circuit breaker never learned the provider was
+                            # unhealthy (#2118).
+                            yield _mid_stream_error_event(event)
+                            return
+
                         if etype == "message_start":
                             usage = event.get("message", {}).get("usage", {})
                             base_input_tokens = _coerce_int(usage.get("input_tokens"))
@@ -542,29 +575,37 @@ class AnthropicProvider:
                                 )
 
                         elif etype == "message_delta":
-                            usage = event.get("usage", {})
-                            (
-                                iteration_input_tokens,
-                                iteration_output_tokens,
-                            ) = _anthropic_iteration_token_counts(usage)
-                            output_tokens = iteration_output_tokens
-                            cached_tokens = max(
-                                cached_tokens,
-                                usage.get("cache_read_input_tokens", 0),
-                            )
-                            cache_creation_tokens = max(
-                                cache_creation_tokens,
-                                _cache_creation_input_tokens(usage),
-                            )
-                            if "input_tokens" in usage:
-                                base_input_tokens = _coerce_int(usage.get("input_tokens"))
-                            if isinstance(usage.get("iterations"), list):
-                                input_tokens = iteration_input_tokens
-                            else:
-                                input_tokens = (
-                                    base_input_tokens + cached_tokens + cache_creation_tokens
+                            # Last-write-wins guards: a delta that omits
+                            # ``usage`` or ``delta.stop_reason`` (some
+                            # Anthropic-compatible proxies emit trailing or
+                            # empty deltas) must not zero the counts or reset
+                            # ``tool_use`` back to ``end_turn``.
+                            usage = event.get("usage") or {}
+                            if isinstance(usage, dict) and usage:
+                                (
+                                    iteration_input_tokens,
+                                    iteration_output_tokens,
+                                ) = _anthropic_iteration_token_counts(usage)
+                                output_tokens = iteration_output_tokens
+                                cached_tokens = max(
+                                    cached_tokens,
+                                    _coerce_int(usage.get("cache_read_input_tokens")),
                                 )
-                            stop_reason = event.get("delta", {}).get("stop_reason", "end_turn")
+                                cache_creation_tokens = max(
+                                    cache_creation_tokens,
+                                    _cache_creation_input_tokens(usage),
+                                )
+                                if "input_tokens" in usage:
+                                    base_input_tokens = _coerce_int(usage.get("input_tokens"))
+                                if isinstance(usage.get("iterations"), list):
+                                    input_tokens = iteration_input_tokens
+                                else:
+                                    input_tokens = (
+                                        base_input_tokens + cached_tokens + cache_creation_tokens
+                                    )
+                            delta_stop_reason = (event.get("delta") or {}).get("stop_reason")
+                            if delta_stop_reason:
+                                stop_reason = delta_stop_reason
 
                         elif etype == "message_stop":
                             reasoning_content = "".join(thinking_parts) or None

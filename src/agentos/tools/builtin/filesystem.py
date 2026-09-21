@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import csv
 import fnmatch
 import functools
@@ -662,15 +663,34 @@ def _read_xlsx_sheets(path: Path) -> list[tuple[str, dict[int, list[str]], int]]
         raise ToolError(f"Invalid .xlsx XML content in {path}: {exc}") from exc
 
 
+def _xlsx_rich_text(element: ET.Element) -> str:
+    """The displayed text of a shared-string or inline-string node.
+
+    A rich string (``CT_Rst``) keeps its value in a direct ``<t>`` child or, when
+    the cell mixes formatting, in the ``<t>`` of each direct ``<r>`` run. Its
+    ``<rPh>`` siblings hold the phonetic guide instead -- the furigana Excel
+    writes by itself whenever text is entered through a Japanese IME -- and are
+    not part of the value the sheet displays.
+
+    A descendant search over ``<t>`` cannot tell the two apart and appends the
+    reading to the cell, so walk the runs the schema actually defines.
+    """
+
+    parts: list[str] = []
+    for child in element:
+        if child.tag == f"{{{_XLSX_MAIN_NS}}}t":
+            parts.append(child.text or "")
+        elif child.tag == f"{{{_XLSX_MAIN_NS}}}r":
+            for run_text in child.findall(f"{{{_XLSX_MAIN_NS}}}t"):
+                parts.append(run_text.text or "")
+    return "".join(parts)
+
+
 def _read_xlsx_shared_strings(zf: zipfile.ZipFile, names: set[str]) -> list[str]:
     if "xl/sharedStrings.xml" not in names:
         return []
     root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
-    shared: list[str] = []
-    for si in root.findall(f".//{{{_XLSX_MAIN_NS}}}si"):
-        texts = [node.text or "" for node in si.findall(f".//{{{_XLSX_MAIN_NS}}}t")]
-        shared.append("".join(texts))
-    return shared
+    return [_xlsx_rich_text(si) for si in root.findall(f".//{{{_XLSX_MAIN_NS}}}si")]
 
 
 def _read_xlsx_workbook_relationships(
@@ -754,8 +774,11 @@ def _xlsx_column_index(cell_ref: str) -> int:
 def _xlsx_cell_value(cell_el: ET.Element, shared_strings: list[str]) -> str:
     cell_type = cell_el.attrib.get("t")
     if cell_type == "inlineStr":
-        texts = [node.text or "" for node in cell_el.findall(f".//{{{_XLSX_MAIN_NS}}}t")]
-        return "".join(texts)
+        # The value lives in <is>; a writer that omits it and hangs <t> straight
+        # off <c> still reads correctly, since _xlsx_rich_text takes direct
+        # children either way.
+        inline = cell_el.find(f"{{{_XLSX_MAIN_NS}}}is")
+        return _xlsx_rich_text(cell_el if inline is None else inline)
 
     value_el = cell_el.find(f"{{{_XLSX_MAIN_NS}}}v")
     raw = value_el.text if value_el is not None else ""
@@ -864,15 +887,81 @@ async def write_file(path: str, content: str, approval_id: str | None = None) ->
 
     loop = asyncio.get_running_loop()
 
-    def _write() -> None:
+    def _write() -> int:
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
+        # Encode once and write the bytes: no newline translation (the content
+        # is the sole authority on line endings, where write_text() would stamp
+        # os.linesep onto every line), and the count reported is exactly what
+        # reached the disk. len(content) was code points, which under-reported
+        # every multibyte character -- 10 emoji as "10 bytes" for a 40-byte
+        # file -- to callers comparing against byte budgets and limits.
+        data = content.encode("utf-8")
+        p.write_bytes(data)
+        return len(data)
 
-    await loop.run_in_executor(None, _write)
+    written = await loop.run_in_executor(None, _write)
     record_workspace_file_write(p)
     _notify_memory_source_write(p)
     _notify_bootstrap_source_write(p)
-    return f"Written {len(content)} bytes to {p}"
+    return f"Written {written} bytes to {p}"
+
+
+def _read_raw_text(p: Path) -> str:
+    """Read *p* with universal-newline translation off, so CRLF survives."""
+    with p.open("r", encoding="utf-8", newline="") as handle:
+        return handle.read()
+
+
+_NEWLINE_RE = re.compile(r"\r\n|\r|\n")
+
+
+def _dominant_newline(text: str) -> str:
+    """Return the line ending a line inserted into *text* should use.
+
+    Majority convention, first ending seen breaking a tie, ``"\n"`` when the
+    text has no line ending at all — the same rule ``patch._detect_newline``
+    applies to an added hunk line, extended to a lone ``"\r"`` because this
+    tool also has to leave a CR-only file the way it found it.
+    """
+    crlf = text.count("\r\n")
+    counts = {"\r\n": crlf, "\n": text.count("\n") - crlf, "\r": text.count("\r") - crlf}
+    best = max(counts.values())
+    if best == 0:
+        return "\n"
+    for found in _NEWLINE_RE.finditer(text):
+        if counts[found.group()] == best:
+            return found.group()
+    return "\n"  # pragma: no cover — a leader exists, so the loop returns
+
+
+def _normalise_newlines(raw: str) -> str:
+    """Fold CRLF and lone CR to LF — what universal-newline mode showed before."""
+    return raw.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _splice_edit(raw: str, normalised: str, match: FuzzyMatchResult) -> str:
+    """Apply *match* (found in *normalised*) to *raw*, keeping untouched endings.
+
+    The matcher sees LF-only text because the model writes LF-separated
+    old_text; its offsets are mapped back onto the raw text, so every line the
+    edit did not name keeps its own ending byte-for-byte. The replacement
+    takes the file's dominant convention.
+    """
+    ((start, end),) = match.spans
+    replacement = match.updated[start : len(match.updated) - (len(normalised) - end)]
+    newline = _dominant_newline(raw)
+    replacement = _NEWLINE_RE.sub(newline, replacement)
+
+    # Folding CRLF to LF drops one character per CRLF (a lone CR folds in
+    # place), so a normalised offset is behind the raw one by the number of
+    # CRLFs that precede it. Record the normalised index of each folded CRLF
+    # and count them with bisect.
+    folded = [m.start() - k for k, m in enumerate(re.finditer("\r\n", raw))]
+
+    def to_raw(offset: int) -> int:
+        return offset + bisect.bisect_left(folded, offset)
+
+    return raw[: to_raw(start)] + replacement + raw[to_raw(end) :]
 
 
 def _locate_edit(original: str, old_text: str, new_text: str, *, path: str) -> FuzzyMatchResult:
@@ -932,7 +1021,11 @@ async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | 
         raise FileNotFoundError(f"File not found: {path}")
 
     loop = asyncio.get_running_loop()
-    original = await loop.run_in_executor(None, p.read_text, "utf-8")
+    raw = await loop.run_in_executor(None, _read_raw_text, p)
+    # Match against LF-only text — old_text from a model is LF-separated and
+    # would miss every multi-line edit on a CRLF file — then splice the result
+    # back into the raw text so the file's own endings survive.
+    original = _normalise_newlines(raw)
 
     # The matcher is the CPU-bound part of an edit, not the read or the write:
     # a miss on a large file sweeps every window in it. Run it in the same
@@ -941,12 +1034,16 @@ async def edit_file(path: str, old_text: str, new_text: str, approval_id: str | 
         None,
         functools.partial(_locate_edit, original, old_text, new_text, path=path),
     )
-    updated = match.updated
+    updated = _splice_edit(raw, original, match)
 
     def _write() -> None:
-        p.write_text(updated, encoding="utf-8")
+        with p.open("w", encoding="utf-8", newline="") as handle:
+            handle.write(updated)
 
     await loop.run_in_executor(None, _write)
+    # Same bookkeeping as write_file / apply_patch: an edited deliverable is
+    # still a workspace write, and artifact delivery only sees the ones recorded.
+    record_workspace_file_write(p)
     _notify_memory_source_write(p)
     _notify_bootstrap_source_write(p)
     summary = f"replaced {len(old_text)} chars with {len(new_text)} chars"
@@ -1035,6 +1132,12 @@ async def glob_search(pattern: str, path: str | None = None) -> str:
     if blocked is not None:
         return json.dumps(blocked)
     _gate_workspace_strict_read("glob_search", base, path or str(base))
+    # After the access gates, never before: a blocked path must report as
+    # blocked rather than leak its existence through this error. "No matches"
+    # for a path that is not there is not self-correcting -- the model reads
+    # it as "the symbol does not exist" and stops looking.
+    if not base.exists():
+        raise FileNotFoundError(f"Path not found: {path or base}")
 
     loop = asyncio.get_running_loop()
     strict_roots = _strict_read_roots()
@@ -1117,6 +1220,12 @@ async def grep_search(
     if blocked is not None:
         return json.dumps(blocked)
     _gate_workspace_strict_read("grep_search", base, path or str(base))
+    # After the access gates, never before: a blocked path must report as
+    # blocked rather than leak its existence through this error. "No matches"
+    # for a path that is not there is not self-correcting -- the model reads
+    # it as "the symbol does not exist" and stops looking.
+    if not base.exists():
+        raise FileNotFoundError(f"Path not found: {path or base}")
 
     loop = asyncio.get_running_loop()
     strict_roots = _strict_read_roots()
@@ -1134,6 +1243,8 @@ async def grep_search(
             if _is_sensitive_access_path(fp.resolve(strict=False), workspace=workspace_root):
                 return
             try:
+                if _looks_binary(_read_binary_sample(fp), fp):
+                    return
                 text = fp.read_text(encoding="utf-8", errors="replace")
                 for lineno, line in enumerate(text.splitlines(), 1):
                     if regex.search(line):

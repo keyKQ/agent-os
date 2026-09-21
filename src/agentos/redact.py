@@ -146,6 +146,15 @@ _STRONG_NAME_SEGMENTS: frozenset[str] = frozenset(
         "secret",
         "password",
         "passwd",
+        # A passphrase is a password that happens to be a sentence, and it is
+        # the one credential no shape rule can ever catch: `_is_secret_literal_value`
+        # requires a single opaque run with no whitespace, so
+        # ``correct horse battery staple`` is invisible to the value pass. The
+        # name is the only thing standing between it and the model. The word
+        # sits alongside ``password`` and ``passwd`` rather than being treated
+        # more conservatively than they are — ``password_required`` and
+        # ``passwd_hint`` are already recognized today.
+        "passphrase",
         "apikey",
         "credential",
         "credentials",
@@ -168,22 +177,44 @@ _QUALIFIED_NAME_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("auth", "token"),
         ("auth", "key"),
         ("bearer", "token"),
+        # ``token`` is qualified by what issues it. ``bot`` was missing, so
+        # ``SLACK_BOT_TOKEN`` / ``DISCORD_BOT_TOKEN`` / ``TELEGRAM_BOT_TOKEN``
+        # were not credential names at all — and for Discord and Telegram the
+        # value pass does not cover them either, so a correctly-shaped bot
+        # token reached the model verbatim.
+        ("bot", "token"),
         ("client", "secret"),
         ("private", "key"),
         ("secret", "key"),
         ("session", "token"),
         ("service", "key"),
+        # Qualifiers that can only mean key material. ``key`` on its own stays
+        # out (``sort_key``, ``partition_key`` are field names), but nothing
+        # signs a token, encrypts a column or authenticates a storage account
+        # with a value the model is meant to read.
+        ("signing", "key"),
+        ("encryption", "key"),
+        ("account", "key"),
     }
 )
 
-_NAME_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])")
+_NAME_SPLIT_RE = re.compile(
+    # Separators, then the two camel-case boundaries. The second one is what
+    # makes an all-caps acronym split from a Capitalised word after it:
+    # `APISecret` has no lower-to-upper transition, so without it the whole
+    # name stays one segment and matches nothing, while `apiSecret`,
+    # `ApiSecret`, `API_SECRET` and `api-secret` all match. Same credential,
+    # four spellings, one of them leaked.
+    r"[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
+)
 
 
 def _name_segments(name: str) -> list[str]:
     """Split an identifier into lower-cased word segments.
 
-    Handles the three casings a credential name arrives in: ``CAP_API_KEY``,
-    ``x-cap-api-key`` and ``capApiKey`` all reduce to the same segments.
+    Handles the casings a credential name arrives in: ``CAP_API_KEY``,
+    ``x-cap-api-key``, ``capApiKey`` and ``APISecret`` all reduce to the same
+    segments.
     """
     return [segment.lower() for segment in _NAME_SPLIT_RE.split(name) if segment]
 
@@ -276,7 +307,7 @@ def _is_secret_literal_value(value: str) -> bool:
 # place instead of being re-encoded in every regex.
 _ASSIGNMENT_RE = re.compile(
     r"""(?ix)
-    (?:^|[\s"'{,(])                     # start of a token
+    (?:^|[\s"'{,(;])                    # start of a token
     (?:\d+\t)?                          # grep -n line prefix
     (?:[+\-]{1,2})?                     # diff marker: unified +/-, combined ++/--
     ([A-Za-z][A-Za-z0-9_.\-]{0,64})     # name
@@ -660,17 +691,30 @@ def _has_known_prefix(text: str) -> bool:
 
 _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 
+#: The separators that end one command and start the next. A newline is one of
+#: them — in POSIX shell it does the same job as ``;`` — and ``exec_command``
+#: hands the whole string to ``create_subprocess_shell``, so a two-line script
+#: is an ordinary thing for an agent to run. Leaving ``\n`` out classified
+#: ``cd /srv\nprintenv`` as not-a-dump while the identical ``cd /srv &&
+#: printenv`` was masked.
+_SEGMENT_SEPARATOR_RE = re.compile(r"[|;&\n\r]+")
+
+#: ``(printenv)`` and ``(cd /srv; printenv)`` keep the grouping character glued
+#: to the command by the time ``shlex`` is done with them.
+_SHELL_GROUPING_CHARS = "(){}"
+
 
 def is_env_dump_command(command: str | None) -> bool:
     """Return whether *command* prints the environment to stdout.
 
-    Checks the first token of every pipeline or sequence segment. Conservative:
-    anything it cannot parse is reported as not-a-dump, and the caller falls
-    back to the pass that has fewer false positives.
+    Checks the first token of every pipeline or sequence segment, with shell
+    grouping characters stripped off. Conservative: anything it cannot parse is
+    reported as not-a-dump, and the caller falls back to the pass that has
+    fewer false positives.
     """
     if not command or not isinstance(command, str):
         return False
-    for segment in re.split(r"[|;&]+", command):
+    for segment in _SEGMENT_SEPARATOR_RE.split(command):
         segment = segment.strip()
         if not segment:
             continue
@@ -678,6 +722,11 @@ def is_env_dump_command(command: str | None) -> bool:
             tokens = shlex.split(segment)
         except ValueError:
             tokens = segment.split()
+        tokens = [
+            stripped
+            for stripped in (token.strip(_SHELL_GROUPING_CHARS) for token in tokens)
+            if stripped
+        ]
         if tokens and tokens[0] in _ENV_DUMP_COMMANDS:
             return True
     return False

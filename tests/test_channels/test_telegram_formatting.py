@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+import re
 from typing import Any
 
 import pytest
@@ -32,6 +34,18 @@ AgentOS có **1 channel**:
     assert "`" not in rendered
 
 
+def test_render_telegram_html_preserves_bare_urls_with_underscores() -> None:
+    text = "Check https://example.com/api/_v1_ and https://example.com/?q=_test_"
+    rendered = render_telegram_html(text)
+    assert rendered == "Check https://example.com/api/_v1_ and https://example.com/?q=_test_"
+
+
+def test_render_telegram_html_preserves_bare_urls_while_formatting_surrounding_text() -> None:
+    text = "Visit https://example.com/_slug_ for _italic_ details"
+    rendered = render_telegram_html(text)
+    assert rendered == "Visit https://example.com/_slug_ for <i>italic</i> details"
+
+
 def test_telegram_markdown_escapes_html_and_preserves_code_blocks() -> None:
     markdown = """# Result <safe>
 
@@ -48,8 +62,7 @@ if x < 2:
     assert "<b>Result &lt;safe&gt;</b>" in rendered
     assert "Use <b>care &amp; caution</b> with <code>x &lt; 2</code>." in rendered
     assert (
-        '<pre><code class="language-python">'
-        "if x &lt; 2:\n    print(&quot;&amp;&quot;)</code></pre>"
+        '<pre><code class="language-python">if x &lt; 2:\n    print(&quot;&amp;&quot;)</code></pre>'
     ) in rendered
 
 
@@ -179,12 +192,7 @@ async def test_telegram_send_falls_back_to_plain_text_on_entity_parse_error() ->
 
 def test_two_column_table_with_short_row_pads_missing_cell() -> None:
     """A 2-column table row with only 1 cell should be padded, not dropped."""
-    markdown = (
-        "| Header A | Header B |\n"
-        "| --- | --- |\n"
-        "| Row 1 Only |\n"
-        "| x | y |\n"
-    )
+    markdown = "| Header A | Header B |\n| --- | --- |\n| Row 1 Only |\n| x | y |\n"
     rendered = render_telegram_html(markdown)
 
     # Both rows must appear — the old `break` dropped "| x | y |".
@@ -198,12 +206,7 @@ def test_two_column_table_with_short_row_pads_missing_cell() -> None:
 
 def test_three_column_table_with_short_row_pads_missing_cells() -> None:
     """A 3-column table row missing trailing cells should be padded."""
-    markdown = (
-        "| A | B | C |\n"
-        "| --- | --- | --- |\n"
-        "| only-a |\n"
-        "| x | y | z |\n"
-    )
+    markdown = "| A | B | C |\n| --- | --- | --- |\n| only-a |\n| x | y | z |\n"
     rendered = render_telegram_html(markdown)
 
     assert "<b>A · B · C</b>" in rendered
@@ -218,12 +221,7 @@ def test_three_column_table_with_short_row_pads_missing_cells() -> None:
 
 def test_table_row_with_extra_columns_is_truncated() -> None:
     """A row with more cells than headers should be truncated, not break."""
-    markdown = (
-        "| A | B |\n"
-        "| --- | --- |\n"
-        "| 1 | 2 | 3 | 4 |\n"
-        "| x | y |\n"
-    )
+    markdown = "| A | B |\n| --- | --- |\n| 1 | 2 | 3 | 4 |\n| x | y |\n"
     rendered = render_telegram_html(markdown)
 
     assert "<b>A — B</b>" in rendered
@@ -338,3 +336,324 @@ def test_a_url_inside_a_code_span_is_untouched() -> None:
     assert render_telegram_html("`https://x.test/a__b__c`") == (
         "<code>https://x.test/a__b__c</code>"
     )
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("This is _italic text_ in markdown.", "This is <i>italic text</i> in markdown."),
+        ("_lead_ and _tail_", "<i>lead</i> and <i>tail</i>"),
+        ("(_parenthesised_)", "(<i>parenthesised</i>)"),
+        ("_multi_word_run_", "<i>multi_word_run</i>"),
+        ("**bold** and _italic_ and *also*", "<b>bold</b> and <i>italic</i> and <i>also</i>"),
+    ],
+)
+def test_single_underscore_renders_italic(markdown: str, expected: str) -> None:
+    """`_text_` is the most common italic shape in LLM output; it reached
+    Telegram as raw underscores while `*text*` and `__text__` rendered."""
+    assert render_telegram_html(markdown) == expected
+
+
+@pytest.mark.parametrize(
+    "markdown",
+    [
+        "call snake_case_identifier here",
+        "use _private and _internal names",
+        "the value_ trailing_ ones",
+        "__init__ style dunder",
+        "a _ lone underscore _ pair",
+        "no _italic_here because it continues",
+        "sha_a1_b2 and sha_c3_d4",
+    ],
+)
+def test_single_underscore_leaves_identifiers_alone(markdown: str) -> None:
+    """Intraword underscores are not emphasis (CommonMark), so identifiers
+    with several underscores must not sprout <i> tags.
+
+    Every case now round-trips unchanged. The ``__init__`` one used to need a
+    ``.replace("__init__", "<b>init</b>")`` here, which was this test working
+    around the ``__bold__`` pass eating the dunder rather than asserting that
+    it should — the stated contract was always the ``<i>`` check above. #2076
+    made the identifier survive whole, so the concession is gone.
+    """
+    rendered = render_telegram_html(markdown)
+    assert "<i>" not in rendered
+    assert rendered == markdown
+
+
+def test_single_underscore_does_not_touch_a_parked_link_or_code_span() -> None:
+    rendered = render_telegram_html("[t](https://x.test/_a_b_) and `_code_` and _em_")
+    assert rendered == (
+        '<a href="https://x.test/_a_b_">t</a> and <code>_code_</code> and <i>em</i>'
+    )
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("Press ` ` to jump.", "Press <code> </code> to jump."),
+        ("run `  test  ` now", "run <code> test </code> now"),
+        ("run ` test ` now", "run <code>test</code> now"),
+        ("run `test ` now", "run <code>test </code> now"),
+        ("run ` test` now", "run <code> test</code> now"),
+        ("blank `   ` span", "blank <code>   </code> span"),
+    ],
+)
+def test_code_span_keeps_interior_whitespace(markdown: str, expected: str) -> None:
+    """CommonMark strips one leading and one trailing space only when both are
+    present and the span is not all spaces; `.strip()` collapsed `` ` ` `` to
+    an empty <code></code>."""
+    assert render_telegram_html(markdown) == expected
+
+
+# ---------------------------------------------------------------------------
+# Issue #2003: balanced parentheses in a link destination; fence info strings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://en.wikipedia.org/wiki/Foo_(bar)",
+        "https://docs.python.org/3/library/stdtypes.html#str.split_(sep)",
+        "https://docs.python.org/3/library/stdtypes.html#str.split_(sep)?a=1&b=2",
+        "https://example.com/a_(b)/c",
+    ],
+)
+def test_link_href_keeps_balanced_parentheses(url: str) -> None:
+    """Issue #2003: `_LINK_RE` cut the destination at the first `)`, so a
+    Wikipedia disambiguator or a `#method_(args)` anchor produced an href to a
+    page that does not exist plus a stray `)` (and anything after it) rendered
+    as text after the anchor."""
+    rendered = render_telegram_html(f"[test]({url})")
+
+    assert rendered == f'<a href="{html.escape(url, quote=True)}">test</a>'
+
+
+def test_link_with_parentheses_keeps_surrounding_text() -> None:
+    rendered = render_telegram_html("see [x](https://en.wikipedia.org/wiki/Foo_(bar)) now")
+
+    assert rendered == 'see <a href="https://en.wikipedia.org/wiki/Foo_(bar)">x</a> now'
+
+
+def test_link_with_deeper_nesting_falls_back_to_literal_text() -> None:
+    """One level of balanced parentheses is supported; deeper nesting renders
+    the construct as literal text rather than as a truncated link."""
+    rendered = render_telegram_html("[x](https://example.com/p_(q_(r)))")
+
+    assert "<a " not in rendered
+    assert "https://example.com/p_(q_(r)))" in rendered
+
+
+def test_table_label_link_keeps_balanced_parentheses() -> None:
+    """`_plain_inline` shares `_LINK_RE`, so the table path lost the same
+    characters."""
+    markdown = "| Name | Ref |\n| --- | --- |\n| a | [w](https://en.wikipedia.org/wiki/Foo_(bar)) |"
+    rendered = render_telegram_html(markdown)
+
+    assert 'href="https://en.wikipedia.org/wiki/Foo_(bar)"' in rendered
+    assert "Foo_(bar))" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("info", "expected_class"),
+    [
+        ("c#", "c#"),
+        ("f#", "f#"),
+        ("vb.net", "vb.net"),
+        (".env", ".env"),
+        ("text/x-python", "text/x-python"),
+        ("python {.numberLines startFrom=1}", "python"),
+        ("  rust  ", "rust"),
+    ],
+)
+def test_fence_with_unusual_info_string_is_recognised(info: str, expected_class: str) -> None:
+    """Issue #2005 (consolidated into #2003): `_FENCE_RE` rejected info strings
+    outside `[A-Za-z0-9_+-]`, so the opening fence rendered as literal text and
+    the *closing* fence opened a block that swallowed the rest of the message."""
+    rendered = render_telegram_html(f"```{info}\nx\n```\n\n# Heading after\n\nbody text")
+
+    assert rendered == (
+        f'<pre><code class="language-{expected_class}">x</code></pre>\n\n'
+        "<b>Heading after</b>\n\nbody text"
+    )
+
+
+def test_fence_language_is_escaped_for_the_class_attribute() -> None:
+    rendered = render_telegram_html('```a"b<c\nx\n```')
+
+    assert rendered == '<pre><code class="language-a&quot;b&lt;c">x</code></pre>'
+    assert '"language-a"' not in rendered
+
+
+def test_fence_language_is_capped_in_length() -> None:
+    rendered = render_telegram_html(f"```{'l' * 80}\nx\n```")
+
+    assert rendered == f'<pre><code class="language-{"l" * 32}">x</code></pre>'
+
+
+def test_longer_fence_can_wrap_a_shorter_one() -> None:
+    """A fence closes only on a run at least as long as the one that opened it
+    (CommonMark), so a ```` block may quote a ``` block verbatim."""
+    rendered = render_telegram_html("````md\n```\ninner\n```\n````\n\nafter")
+
+    expected = '<pre><code class="language-md">```\ninner\n```</code></pre>\n\nafter'
+    assert rendered == expected
+
+
+def test_closing_fence_with_info_string_does_not_close() -> None:
+    rendered = render_telegram_html("```\ncode\n```python\nstill code\n```\n\nafter")
+
+    assert rendered == "<pre>code\n```python\nstill code</pre>\n\nafter"
+
+
+def test_unterminated_fence_still_runs_to_the_end() -> None:
+    rendered = render_telegram_html("```c#\nx\ny")
+
+    assert rendered == '<pre><code class="language-c#">x\ny</code></pre>'
+
+
+def test_link_with_unbalanced_parenthesis_falls_back_to_literal_text() -> None:
+    """An unbalanced `(` used to yield a link truncated at it; now the whole
+    construct stays literal text, the same fallback as deeper nesting."""
+    rendered = render_telegram_html("[x](https://a.test/foo_(bar)")
+
+    assert "<a " not in rendered
+    assert "https://a.test/foo_(bar)" in rendered
+
+
+def test_fence_info_string_with_a_backtick_does_not_open_a_block() -> None:
+    """CommonMark: a backtick fence's info string may not contain a backtick."""
+    rendered = render_telegram_html("```py `x`\nstill text")
+
+    assert "<pre>" not in rendered
+    assert "<code>x</code>" in rendered
+
+
+# Issue #2022: a `~~~` fence is CommonMark too. Unrecognised, its body fell
+# through to the inline passes and a code block was rendered as prose.
+
+_FENCE_BODY = "**not bold** and [not a link](https://x.test) and <not html>"
+
+
+def test_tilde_fence_renders_the_same_block_as_a_backtick_fence() -> None:
+    tilde = render_telegram_html("~~~\n" + _FENCE_BODY + "\n~~~")
+    backtick = render_telegram_html("```\n" + _FENCE_BODY + "\n```")
+
+    assert tilde == backtick
+    assert tilde == "<pre>**not bold** and [not a link](https://x.test) and &lt;not html&gt;</pre>"
+
+
+def test_tilde_fence_carries_an_info_string() -> None:
+    rendered = render_telegram_html("~~~python\nx = 1\n~~~")
+
+    assert rendered == '<pre><code class="language-python">x = 1</code></pre>'
+
+
+def test_tilde_fence_info_string_may_contain_backticks() -> None:
+    """Unlike a backtick fence, a tilde fence's info string is unrestricted."""
+    rendered = render_telegram_html("~~~py `x`\ncode\n~~~")
+
+    assert rendered == '<pre><code class="language-py">code</code></pre>'
+
+
+def test_tilde_fence_does_not_close_on_backticks() -> None:
+    rendered = render_telegram_html("~~~python\nx\n```\ny\n~~~\n\nafter")
+
+    assert rendered == '<pre><code class="language-python">x\n```\ny</code></pre>\n\nafter'
+
+
+def test_backtick_fence_does_not_close_on_tildes() -> None:
+    rendered = render_telegram_html("```\nx\n~~~\ny\n```\n\nafter")
+
+    assert rendered == "<pre>x\n~~~\ny</pre>\n\nafter"
+
+
+def test_tilde_fence_can_wrap_a_backtick_block_verbatim() -> None:
+    rendered = render_telegram_html("~~~\n```\ninner\n```\n~~~")
+
+    assert rendered == "<pre>```\ninner\n```</pre>"
+
+
+def test_longer_tilde_fence_can_wrap_a_shorter_one() -> None:
+    rendered = render_telegram_html("~~~~\n~~~\ninner\n~~~\n~~~~\n\nafter")
+
+    assert rendered == "<pre>~~~\ninner\n~~~</pre>\n\nafter"
+
+
+def test_unterminated_tilde_fence_runs_to_the_end() -> None:
+    rendered = render_telegram_html("~~~\nx\ny")
+
+    assert rendered == "<pre>x\ny</pre>"
+
+
+def _entities_are_properly_nested(html_text: str) -> bool:
+    """Telegram rejects a message whose entities are not properly nested."""
+    stack: list[str] = []
+    for closing, name in re.findall(r"<(/?)([a-zA-Z-]+)[^>]*>", html_text):
+        if closing:
+            if not stack or stack.pop() != name:
+                return False
+        else:
+            stack.append(name)
+    return not stack
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("~~gone~~", "<s>gone</s>"),
+        ("a ~~b~~ c", "a <s>b</s> c"),
+    ],
+)
+def test_two_tildes_are_still_strikethrough(markdown: str, expected: str) -> None:
+    assert render_telegram_html(markdown) == expected
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("***both***", "<b><i>both</i></b>"),
+        ("___both___", "<b><i>both</i></b>"),
+        ("a***b***c", "a<b><i>b</i></b>c"),
+        ("***a b***", "<b><i>a b</i></b>"),
+    ],
+)
+def test_triple_marker_emphasis_nests_properly(markdown: str, expected: str) -> None:
+    """``***x***`` is one run, not a bold run beside an italic one.
+
+    Consumed by the ``**`` pass first, the third marker was left behind and the
+    ``*`` pass then paired it with the trailing one across the closing tag,
+    producing ``<b><i>x</b></i>``. Telegram's parser requires properly nested
+    entities, and this adapter sends ``parse_mode=HTML`` with no plain-text
+    retry, so the reply was refused rather than rendered.
+    """
+    rendered = render_telegram_html(markdown)
+
+    assert rendered == expected
+    assert _entities_are_properly_nested(rendered)
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        ("**bold**", "<b>bold</b>"),
+        ("*italic*", "<i>italic</i>"),
+        ("__bold__", "<b>bold</b>"),
+        ("_italic_", "<i>italic</i>"),
+        ("**a** *b*", "<b>a</b> <i>b</i>"),
+        ("**a *b* c**", "<b>a <i>b</i> c</b>"),
+        ("snake_case_name", "snake_case_name"),
+        ("`***c***`", "<code>***c***</code>"),
+    ],
+)
+def test_the_single_and_double_marker_runs_are_unchanged(markdown: str, expected: str) -> None:
+    """The new pass must not take over anything the existing passes handled."""
+    assert render_telegram_html(markdown) == expected
+
+
+def test_a_triple_marker_run_beside_a_bold_run() -> None:
+    rendered = render_telegram_html("***a*** and **b**")
+
+    assert rendered == "<b><i>a</i></b> and <b>b</b>"
+    assert _entities_are_properly_nested(rendered)

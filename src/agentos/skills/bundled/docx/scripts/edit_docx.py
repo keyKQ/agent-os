@@ -4,14 +4,15 @@ Operations:
     {"op": "replace_run", "para": <int>, "run": <int>, "text": "..."}
     {"op": "replace_text", "find": "...", "with": "..."}
 
-`replace_text` walks every paragraph -- body paragraphs and the cells of every
-table, nested tables included -- and matches against the joined run texts, so a
-target that spans runs is still found. The replacement is written into the
-run that owns the first character of its match, and every character the match
-did not touch stays in the run it came from — a run is where Word keeps
-character formatting, so moving text between runs would silently restyle it.
-The resulting paragraph text is still plain `str.replace` on the joined runs;
-only the run layout is preserved.
+`replace_text` walks every paragraph -- body paragraphs, the cells of every
+table (nested tables included), each section's headers and footers, and the
+paragraphs inside every text box -- and
+matches against the joined run texts, so a target that spans runs is still
+found. The replacement is written into the run that owns the first character
+of its match, and every character the match did not touch stays in the run it
+came from — a run is where Word keeps character formatting, so moving text
+between runs would silently restyle it. The resulting paragraph text is still
+plain `str.replace` on the joined runs; only the run layout is preserved.
 """
 
 from __future__ import annotations
@@ -24,13 +25,45 @@ from pathlib import Path
 from typing import Any
 
 from docx import Document
+from docx.oxml.ns import qn
+from docx.section import _BaseHeaderFooter
 from docx.table import Table, _Cell
 from docx.text.paragraph import Paragraph
 
 
-def _replace_run(para: Paragraph, run_idx: int, text: str) -> None:
-    if 0 <= run_idx < len(para.runs):
-        para.runs[run_idx].text = text
+def _write_stdout(text: str) -> None:
+    """Write *text* to stdout as UTF-8, surviving a non-UTF-8 stdout encoding.
+
+    ``print`` encodes through ``sys.stdout.encoding``, which on Windows is the
+    console code page (cp1252, cp936, cp932) and not UTF-8, so a character
+    outside that page raises ``UnicodeEncodeError`` before a byte is written —
+    the document decides whether the skill runs. The binary buffer is therefore
+    the primary path, matching the ``--out`` branch, which already passes
+    ``encoding="utf-8"``. A stream without a usable ``buffer`` — a wrapper, or a
+    captured stdout — still gets the text, escaped rather than lost.
+    """
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(text.encode("utf-8"))
+            buffer.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            # Buffer closed or not writable — fall through to the text layer.
+            pass
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    # Lossless: unencodable chars become \\uXXXX escapes, not "?".
+    sys.stdout.write(text.encode(encoding, errors="backslashreplace").decode(encoding))
+    sys.stdout.flush()
+
+
+def _replace_run(para: Paragraph, run_idx: int, text: str) -> bool:
+    """Overwrite one run's text; return whether the run existed."""
+    if not 0 <= run_idx < len(para.runs):
+        return False
+    para.runs[run_idx].text = text
+    return True
 
 
 def _replace_text_in_paragraph(para: Paragraph, find: str, replacement: str) -> bool:
@@ -95,14 +128,115 @@ def _iter_table_paragraphs(tables: Iterable[Table]) -> Iterator[Paragraph]:
             yield from _iter_table_paragraphs(cell.tables)
 
 
+def _iter_header_footer_paragraphs(doc: Document) -> Iterator[Paragraph]:
+    """Yield the paragraphs of every header and footer part the document defines.
+
+    A header or footer that ``is_linked_to_previous`` has no part of its own:
+    on the first section that means "none", on later sections it means the
+    previous section's part, which was already visited. Skipping those keeps
+    the walk to one visit per part -- and matters for a second reason:
+    python-docx materialises a header part the moment its paragraphs are
+    read, so touching a linked one would add empty headers to the package.
+    """
+    for section in doc.sections:
+        parts: tuple[_BaseHeaderFooter, ...] = (
+            section.header,
+            section.footer,
+            section.first_page_header,
+            section.first_page_footer,
+            section.even_page_header,
+            section.even_page_footer,
+        )
+        for part in parts:
+            if part.is_linked_to_previous:
+                continue
+            yield from part.paragraphs
+            yield from _iter_table_paragraphs(part.tables)
+
+
+_P = qn("w:p")
+_TBL = qn("w:tbl")
+_TXBX_CONTENT = qn("w:txbxContent")
+
+
+def _iter_textbox_paragraphs(para: Paragraph) -> Iterator[Paragraph]:
+    """Yield the paragraphs held by every text box anywhere inside *para*.
+
+    A text box is not a paragraph of the story it sits in: Word parks its
+    content in a ``<w:txbxContent>`` nested inside a run, so python-docx reports
+    the host paragraph with empty text and the box's own words are reached by no
+    paragraph walk at all. Pull quotes, callouts, letterhead banners and the
+    "CONFIDENTIAL" stamps that templates ship are text boxes almost by default.
+
+    ``iter`` sweeps every depth in one pass, so a box nested inside another box
+    -- or inside a table that is itself inside a box -- is found without
+    recursing here. Both OOXML spellings land on the same element: the modern
+    DrawingML shape (``<w:drawing>``) and the legacy VML one (``<w:pict>``) each
+    wrap a ``<w:txbxContent>``. A shape written as ``<mc:AlternateContent>``
+    carries both spellings of the same box, and both are visited on purpose --
+    Word may render either, so replacing only one leaves the other stale.
+    """
+    for content in para._p.iter(_TXBX_CONTENT):
+        for child in content.iterchildren():
+            if child.tag == _P:
+                yield Paragraph(child, para)
+            elif child.tag == _TBL:
+                yield from _iter_table_paragraphs([Table(child, para)])
+
+
 def _iter_all_paragraphs(doc: Document) -> Iterator[Paragraph]:
-    """Body paragraphs followed by every table-cell paragraph in the document.
+    """Body paragraphs, every table-cell paragraph, then headers and footers.
 
     ``doc.paragraphs`` is body-only in python-docx, yet contracts, reports and
-    invoices keep most of their placeholders inside tables.
+    invoices keep most of their placeholders inside tables, and letterheads
+    or confidentiality banners live in the section headers and footers.
+
+    Each of those may host text boxes, so every paragraph is followed by the
+    paragraphs of the boxes it contains.
     """
+    for para in _iter_story_paragraphs(doc):
+        yield para
+        yield from _iter_textbox_paragraphs(para)
+
+
+def _iter_story_paragraphs(doc: Document) -> Iterator[Paragraph]:
     yield from doc.paragraphs
     yield from _iter_table_paragraphs(doc.tables)
+    yield from _iter_header_footer_paragraphs(doc)
+
+
+#: Every op kind ``apply_ops`` knows. An op outside this set is a caller
+#: mistake, not a no-op: the ops file is written by the agent one step before
+#: the call, so ``replace-text`` for ``replace_text`` is a routine slip.
+OP_KINDS = ("replace_run", "replace_text")
+
+
+class OpsError(ValueError):
+    """An ops file that cannot be used. Reported as ``error:`` / exit 2, never
+    as a traceback: the caller passed bad input, the script did not break."""
+
+
+def load_ops(path: Path) -> list[dict[str, Any]]:
+    """Read and validate the ops file, or raise :class:`OpsError`.
+
+    Validation happens before the document is opened, so an unusable ops file
+    cannot leave a half-applied document behind, and ``--out`` is never touched.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OpsError(f"ops {path} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, list):
+        raise OpsError(f"ops {path} must be a JSON array of operations, got {type(raw).__name__}")
+    for index, op in enumerate(raw):
+        if not isinstance(op, dict):
+            raise OpsError(f"op {index} must be an object, got {type(op).__name__}")
+        kind = op.get("op")
+        if kind not in OP_KINDS:
+            raise OpsError(
+                f"op {index} has unknown kind {kind!r}; expected one of {', '.join(OP_KINDS)}"
+            )
+    return raw
 
 
 def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
@@ -112,12 +246,19 @@ def apply_ops(doc: Document, ops: list[dict[str, Any]]) -> int:
             continue
         kind = op.get("op")
         if kind == "replace_run":
+            # Bounds are checked explicitly rather than by catching IndexError:
+            # a negative index would otherwise wrap round to the end of the
+            # document and edit a paragraph the op never named.
             try:
-                para = doc.paragraphs[int(op["para"])]
-            except (KeyError, IndexError, ValueError):
+                para_idx = int(op["para"])
+                run_idx = int(op.get("run", 0))
+            except (KeyError, TypeError, ValueError):
                 continue
-            _replace_run(para, int(op.get("run", 0)), str(op.get("text", "")))
-            applied += 1
+            paragraphs = doc.paragraphs
+            if not 0 <= para_idx < len(paragraphs):
+                continue
+            if _replace_run(paragraphs[para_idx], run_idx, str(op.get("text", ""))):
+                applied += 1
         elif kind == "replace_text":
             find = str(op.get("find", ""))
             replacement = str(op.get("with", ""))
@@ -145,13 +286,19 @@ def main() -> int:
     if not args.ops.is_file():
         print(f"error: ops {args.ops} not found", file=sys.stderr)
         return 2
-    raw = json.loads(args.ops.read_text(encoding="utf-8"))
-    ops = raw if isinstance(raw, list) else []
+    try:
+        ops = load_ops(args.ops)
+    except OpsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     doc = Document(str(args.input))
+    # Deliberately still writes when `applied` is 0: a valid op that matches
+    # nothing is a different question from an unusable ops file, and a skipped
+    # op must not fail the run (see the sibling xlsx script's `value` rule).
     applied = apply_ops(doc, ops)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(args.out))
-    print(json.dumps({"applied": applied}, ensure_ascii=False))
+    _write_stdout(json.dumps({"applied": applied}, ensure_ascii=False) + "\n")
     return 0
 
 

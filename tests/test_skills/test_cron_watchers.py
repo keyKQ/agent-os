@@ -166,6 +166,27 @@ def test_rss_reads_atom_entries(state_dir, base_url):
     assert "Atom one" in result.stdout
 
 
+def test_rss_prioritizes_atom_alternate_link_over_self(state_dir, base_url):
+    atom_multi_link = """<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>tag:multi</id>
+    <title>Post with self and alternate</title>
+    <link rel="self" href="https://example.com/feed.atom"/>
+    <link rel="alternate" type="text/html" href="https://example.com/post-permalink"/>
+  </entry>
+</feed>"""
+    url = _feed(state_dir, base_url, "multi.xml", atom_multi_link)
+
+    result = _run(
+        "watch_rss.py", "--url", url, "--name", "m", "--first-run-reports", env_home=state_dir
+    )
+
+    assert result.returncode == 0
+    assert "https://example.com/post-permalink" in result.stdout
+    assert "https://example.com/feed.atom" not in result.stdout
+
+
 def test_rss_fails_loudly_on_a_broken_feed(state_dir, base_url):
     url = _feed(state_dir, base_url, "broken.xml", "not xml at all")
 
@@ -260,6 +281,112 @@ def test_json_fails_when_the_path_holds_no_list(state_dir, base_url):
 
     assert result.returncode == 1
     assert "Expected a list" in result.stderr
+
+
+def test_json_fails_loudly_when_no_item_carries_the_id_field(state_dir, base_url):
+    # Issue #2106: a typo'd --id-field used to drop every item with a bare
+    # ``continue`` -- exit 0, empty stdout, empty stderr -- which is exactly
+    # what a quiet feed looks like, even with --first-run-reports.
+    url = _events(
+        state_dir,
+        base_url,
+        [{"event_id": "a1", "title": "Deploy finished"}, {"event_id": "a2", "title": "Alert"}],
+    )
+    args = ("--url", url, "--name", "typo", "--items-path", "data.events", "--id-field", "evnet_id")
+
+    first = _run("watch_http_json.py", *args, "--first-run-reports", env_home=state_dir)
+    second = _run("watch_http_json.py", *args, env_home=state_dir)
+
+    for result in (first, second):
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert "evnet_id" in result.stderr
+        assert "2 item" in result.stderr
+
+
+def test_json_misconfigured_id_field_does_not_write_a_watermark(state_dir, base_url):
+    # Fixing the flag afterwards must behave like a first run: the watcher
+    # never "saw" anything, so it must not have adopted an empty feed.
+    url = _events(state_dir, base_url, [{"event_id": "a1", "title": "Deploy finished"}])
+    _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "typo",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "evnet_id",
+        env_home=state_dir,
+    )
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "typo",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        "--first-run-reports",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "- Deploy finished"
+
+
+def test_json_an_empty_feed_is_still_a_quiet_success(state_dir, base_url):
+    # Nothing fetched is not a configuration error; only "items without the
+    # field" is.
+    url = _events(state_dir, base_url, [])
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "e",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_json_items_that_merely_lack_the_field_are_still_skipped(state_dir, base_url):
+    # A feed where *some* items carry the id is a feed, not a typo.
+    url = _events(
+        state_dir,
+        base_url,
+        [{"event_id": "a1", "title": "Deploy finished"}, {"title": "no id on this one"}],
+    )
+
+    result = _run(
+        "watch_http_json.py",
+        "--url",
+        url,
+        "--name",
+        "p",
+        "--items-path",
+        "data.events",
+        "--id-field",
+        "event_id",
+        "--first-run-reports",
+        env_home=state_dir,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "- Deploy finished"
+    assert result.stderr == ""
 
 
 # ── URL scheme guard (Issue #1065) ──────────────────────────────────────────
@@ -367,6 +494,95 @@ def test_select_new_first_run_reports_respects_the_limit_too(state_dir):
 
     assert first == ids[2:]
     assert second == ids[:2]
+
+
+# ── an empty first run is still a run (Issue #1946) ─────────────────────────
+
+
+def test_select_new_reports_the_first_item_on_a_feed_that_started_empty(state_dir):
+    """A watcher adopted onto an empty feed -- a fresh repo, a drained queue --
+    used to read its own empty watermark back as "never ran", so the second run
+    counted as the first and silently adopted the first real item instead of
+    reporting it. The item was gone for good: by the third run the state was no
+    longer empty."""
+    watermark = _watermark_module()
+
+    assert watermark.select_new("empty", []) == []  # adopts an empty feed, silently
+    assert watermark.select_new("empty", ["item-1"]) == ["item-1"]
+    assert watermark.select_new("empty", ["item-1"]) == []
+
+
+def test_select_new_treats_a_written_watermark_as_having_run(state_dir):
+    watermark = _watermark_module()
+    watermark.select_new("empty", [])
+
+    assert watermark.watermark_path("empty").exists()
+    assert watermark.load_seen("empty") == []
+
+
+def test_select_new_adopts_silently_when_the_watermark_is_unreadable(state_dir):
+    """Corrupt state is not a record of what was reported, so it must not be
+    read as "ran before" -- that would dump the whole feed into the chat."""
+    watermark = _watermark_module()
+    path = watermark.watermark_path("broken")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    assert watermark.select_new("broken", ["a", "b"]) == []
+    assert watermark.select_new("broken", ["a", "b", "c"]) == ["c"]
+
+
+def test_select_new_deduplicates_ids_within_one_poll(state_dir):
+    """A feed that lists the same entry twice should report it once and spend
+    one slot of the remembered-ids budget, not two."""
+    watermark = _watermark_module()
+
+    assert watermark.select_new("dupes", ["a", "a", "b"], first_run_reports=True) == ["a", "b"]
+    assert watermark.load_seen("dupes") == ["a", "b"]
+    assert watermark.select_new("dupes", ["a", "b", "c", "c"]) == ["c"]
+    assert watermark.load_seen("dupes") == ["a", "b", "c"]
+
+
+def test_save_seen_collapses_duplicates_so_the_budget_is_not_wasted(state_dir):
+    """The trim keeps the newest MAX_REMEMBERED_IDS. A repeated id holding
+    several of those slots shortens the watcher's real memory, so an older id
+    falls off the end sooner and can be reported a second time."""
+    watermark = _watermark_module()
+
+    watermark.save_seen("budget", ["a", "b", "a", "c", "b"])
+
+    assert watermark.load_seen("budget") == ["a", "b", "c"]
+
+
+def test_duplicates_do_not_consume_the_limit_twice(state_dir):
+    """The cap counts distinct fresh ids: a duplicate must not push a real item
+    out of this run's report."""
+    watermark = _watermark_module()
+    watermark.select_new("cap", [])
+
+    assert watermark.select_new("cap", ["a", "a", "b"], limit=2) == ["a", "b"]
+
+
+def test_rss_reports_the_first_item_on_a_feed_that_started_empty(state_dir, base_url):
+    """The same swallowed-item bug, at the real entry point."""
+    empty = """<?xml version="1.0"?><rss><channel></channel></rss>"""
+    url = _feed(state_dir, base_url, "feed.xml", empty)
+    first = _run("watch_rss.py", "--url", url, "--name", "e", env_home=state_dir)
+
+    _feed(
+        state_dir,
+        base_url,
+        "feed.xml",
+        empty.replace(
+            "</channel>",
+            "<item><title>First real post</title><guid>1</guid></item></channel>",
+        ),
+    )
+    second = _run("watch_rss.py", "--url", url, "--name", "e", env_home=state_dir)
+
+    assert first.returncode == 0 and first.stdout == ""
+    assert second.returncode == 0
+    assert second.stdout.strip() == "- First real post"
 
 
 @pytest.mark.parametrize("limit", ["0", "-1", "ten"])

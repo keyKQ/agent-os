@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import mimetypes
 import os
@@ -16,6 +15,8 @@ from agentos.artifacts import (
     ArtifactBudgetError,
     ArtifactStore,
     artifact_payload,
+    ensure_file_within_budget,
+    sha256_file,
 )
 from agentos.tools.path_aliases import resolve_workspace_alias
 from agentos.tools.path_policy import reject_foreign_host_path
@@ -209,9 +210,42 @@ async def publish_artifact(
     if not target.is_file():
         raise ToolError(f"artifact path is not a file: {path}")
 
-    target_sha256 = hashlib.sha256(target.read_bytes()).hexdigest()
+    max_bytes = (
+        ctx.artifact_max_bytes if ctx.artifact_max_bytes is not None else DEFAULT_ARTIFACT_MAX_BYTES
+    )
+    try:
+        ensure_file_within_budget(target, max_bytes)
+    except ArtifactBudgetError as exc:
+        raise ToolError(str(exc)) from exc
+    target_sha256 = sha256_file(target)
+    artifact_name, artifact_mime = _publish_artifact_metadata(
+        target=target,
+        name=name,
+        mime=mime,
+    )
     for published in reversed(ctx.published_artifacts):
+        # A deliverable is identified by what it *is*, not by its bytes. On
+        # sha256 alone, two distinct files with identical content — a template
+        # and the copy made from it, three stub reports from one generator —
+        # collapsed into one: the second publish returned already_published
+        # carrying the *first* file's id and name, and was never registered,
+        # so nothing downstream could deliver it (#1793).
+        #
+        # ArtifactStore.find_existing_ref, one layer down, keys on
+        # (sha256, name, mime). The entry cached here carries no record of the
+        # file it came from, so the name is matched against either the name
+        # this call asks for or the source file's own basename: re-publishing
+        # the *same* file under a friendlier display name is one deliverable,
+        # which test_publish_artifact_tool_is_idempotent_for_existing_turn_artifact
+        # pins. Two different files can still both be published.
+        #
+        # A miss here is cheap: find_existing_ref below is authoritative and
+        # still answers already_published, so this check stays conservative.
         if published.get("sha256") != target_sha256:
+            continue
+        if published.get("name") not in {artifact_name, target.name}:
+            continue
+        if published.get("mime") != artifact_mime:
             continue
         llm_artifact = _llm_artifact_payload(
             published,
@@ -227,12 +261,6 @@ async def publish_artifact(
             },
             ensure_ascii=False,
         )
-
-    artifact_name, artifact_mime = _publish_artifact_metadata(
-        target=target,
-        name=name,
-        mime=mime,
-    )
 
     store = ArtifactStore(ctx.artifact_media_root)
     existing = store.find_existing_ref(
@@ -268,9 +296,7 @@ async def publish_artifact(
             name=artifact_name,
             mime=artifact_mime,
             source="publish_artifact",
-            max_bytes=ctx.artifact_max_bytes
-            if ctx.artifact_max_bytes is not None
-            else DEFAULT_ARTIFACT_MAX_BYTES,
+            max_bytes=max_bytes,
             disk_budget_bytes=ctx.artifact_disk_budget_bytes
             if ctx.artifact_disk_budget_bytes is not None
             else DEFAULT_ARTIFACT_DISK_BUDGET_BYTES,
@@ -316,7 +342,7 @@ async def publish_artifact(
 
 #: The marker a skill script prints, alone on its own line.
 INLINE_ARTIFACT_MARKER_RE = re.compile(
-    r"^publish_artifact[ \t]+path=(?P<path>\S+)[ \t]+mime=(?P<mime>\S+)[ \t]*$",
+    r"^publish_artifact[ \t]+path=(?P<path>\S+)[ \t]+mime=(?P<mime>\S+)[ \t]*(?=\r?$)",
     re.MULTILINE,
 )
 
@@ -329,13 +355,17 @@ INLINE_ARTIFACT_MIME_PREFIX = "application/vnd.agentos."
 _MAX_INLINE_ARTIFACTS_PER_CALL = 4
 
 
-async def publish_inline_artifacts(output: str) -> str:
+async def publish_inline_artifacts(output: str, cwd: str | None = None) -> str:
     """Publish inline artifacts announced in ``output`` and replace the markers.
 
     Best-effort by construction: a shell command must never fail, or have its
     output withheld, because a publish did not work out. Anything that goes
     wrong is reported in place of the marker and the command's own output is
     returned untouched otherwise.
+
+    ``cwd`` is the directory the command ran in. A relative marker path names a
+    file relative to it -- that is where the script wrote it -- not relative to
+    the workspace root that ``publish_artifact`` resolves against.
     """
     if not output or "publish_artifact" not in output:
         return output
@@ -361,8 +391,11 @@ async def publish_inline_artifacts(output: str) -> str:
         if published >= _MAX_INLINE_ARTIFACTS_PER_CALL:
             replacements[marker] = "[inline artifact skipped: too many in one command]"
             continue
+        path = match.group("path")
+        if cwd and not Path(path).is_absolute():
+            path = str(Path(cwd) / path)
         try:
-            await publish_artifact(path=match.group("path"), mime=mime)
+            await publish_artifact(path=path, mime=mime)
         except ToolError as exc:
             replacements[marker] = f"[inline artifact not published: {exc}]"
             continue

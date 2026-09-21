@@ -16,6 +16,8 @@ from agentos.artifacts import (
     DEFAULT_ARTIFACT_MAX_BYTES,
     ArtifactBudgetError,
     ArtifactStore,
+    _safe_filename,
+    _safe_mime,
     artifact_payload,
 )
 from agentos.tools.registry import tool
@@ -153,6 +155,77 @@ def _is_cjk(char: str) -> bool:
     )
 
 
+def _is_cjk_symbol(char: str) -> bool:
+    """Punctuation and symbol blocks that CJK text is written with.
+
+    Not ideographs, so the base font keeps them when it can render them; when
+    it cannot (Helvetica stops at U+00FF) they go to the CJK font rather than
+    being dropped, which used to silently delete every ``，。：！《》`` and
+    ``“ ” — …`` from a report on hosts without a local TTF.
+    """
+    codepoint = ord(char)
+    return (
+        0x2000 <= codepoint <= 0x206F  # General Punctuation
+        or 0x3000 <= codepoint <= 0x303F  # CJK Symbols and Punctuation
+        or 0xFE30 <= codepoint <= 0xFE4F  # CJK Compatibility Forms
+        or 0xFF00 <= codepoint <= 0xFFEF  # Halfwidth and Fullwidth Forms
+    )
+
+
+#: Stands in for a character no registered font can draw. ASCII, so every font
+#: in use here renders it.
+_PDF_UNRENDERABLE_PLACEHOLDER = "?"
+
+
+def _is_cjk_font_covered(char: str) -> bool:
+    """Non-CJK letters the CJK CID font draws, so Helvetica need not drop them.
+
+    ``STSong-Light`` carries the Adobe charset's basic Greek and Russian
+    Cyrillic alongside the ideographs. The exact coverage, measured by
+    rendering each block and reading the text back out of the PDF, is basic
+    Greek (no accented forms, no final sigma) and Russian Cyrillic (no
+    Ukrainian, Serbian or extended letters) -- 48 of 135 Greek code points and
+    66 of 256 Cyrillic. Only those are routed here; a character outside them
+    would be dropped by the font itself, silently, which is the behaviour this
+    routing exists to end.
+    """
+    codepoint = ord(char)
+    return (
+        0x0391 <= codepoint <= 0x03A1  # Greek capitals, ..-Rho
+        or 0x03A3 <= codepoint <= 0x03A9  # Sigma-Omega (U+03A2 is unassigned)
+        or 0x03B1 <= codepoint <= 0x03C1  # Greek smalls, alpha-rho
+        or 0x03C3 <= codepoint <= 0x03C9  # sigma-omega (final sigma is absent)
+        or codepoint == 0x0401  # Cyrillic Io
+        or 0x0410 <= codepoint <= 0x044F  # Cyrillic A-ya
+        or codepoint == 0x0451  # Cyrillic io
+    )
+
+
+def _is_kana(char: str) -> bool:
+    """Hiragana and katakana, restricted to what ``STSong-Light`` can map.
+
+    Japanese is not writable without kana, yet ``_is_cjk`` names only the
+    ideograph blocks -- so on a host whose base font stops before U+3040 every
+    kana fell through to the ``continue`` below and was deleted, leaving the
+    kanji and the punctuation standing. ``確認してください`` came out as
+    ``確認``: still a plausible sentence, with the verb ending gone.
+
+    The blocks are cut to the codepoints the registered CID font actually
+    carries (Adobe-GB1 via GB2312). The handful it does not -- the small
+    ``ゕゖ``, the combining marks U+3099/U+309A, the digraphs ``ゟヿ``,
+    ``゠・`` and the Ainu extensions at U+31F0 -- are deliberately left on the
+    existing path: routing them here would trade a silent drop for a wrong
+    glyph, which is the worse of the two.
+    """
+    codepoint = ord(char)
+    return (
+        0x3041 <= codepoint <= 0x3094  # hiragana letters
+        or 0x309B <= codepoint <= 0x309E  # spacing sound marks, iteration marks
+        or 0x30A1 <= codepoint <= 0x30FA  # katakana letters
+        or 0x30FC <= codepoint <= 0x30FE  # prolonged sound mark, iteration marks
+    )
+
+
 def _font_supports_char(font_name: str, char: str) -> bool:
     from reportlab.pdfbase import pdfmetrics  # type: ignore[import-untyped]
 
@@ -186,9 +259,26 @@ def _pdf_markup_text(value: Any, *, base_font: str, cjk_font: str | None) -> str
         run_font = None
 
     for char in text:
-        target_font = cjk_font if cjk_font is not None and _is_cjk(char) else None
+        target_font: str | None = None
+        if cjk_font is not None and (
+            _is_cjk(char)
+            or (
+                (_is_cjk_symbol(char) or _is_cjk_font_covered(char) or _is_kana(char))
+                and not _font_supports_char(base_font, char)
+            )
+        ):
+            target_font = cjk_font
         if target_font is None and not _font_supports_char(base_font, char):
-            continue
+            # Neither the base font nor the CJK font can draw this character
+            # -- Hebrew, Arabic and emoji have no glyph in either -- so it
+            # cannot survive into the PDF. Deleting it is the one outcome the
+            # reader cannot detect: the sentence closes over the gap and reads
+            # as if it was written that way. Leaving it in the run does not
+            # help either, since a Type 1 base font encodes it through WinAnsi
+            # and it comes out as an unrelated Latin letter, stating something
+            # the caller never wrote. A placeholder the base font can draw
+            # keeps the loss visible, so the reader can ask for the source.
+            char = _PDF_UNRENDERABLE_PLACEHOLDER
         if target_font != run_font:
             flush()
             run_font = target_font
@@ -213,8 +303,18 @@ def _published_response(
         raise ToolError("artifact session scope is not configured for this turn")
 
     target_sha256 = hashlib.sha256(payload).hexdigest()
+    # Published entries carry the store's sanitized name and mime, so compare
+    # against the same normalization ``find_existing_ref`` applies. Matching
+    # on the digest alone made two distinct files with identical bytes (an
+    # empty sheet, two reports with the same rows) collapse into one.
+    target_name = _safe_filename(name)
+    target_mime = _safe_mime(mime)
     for published in reversed(ctx.published_artifacts):
-        if published.get("sha256") != target_sha256:
+        if (
+            published.get("sha256") != target_sha256
+            or published.get("name") != target_name
+            or published.get("mime") != target_mime
+        ):
             continue
         llm_artifact = {k: v for k, v in published.items() if k != "download_url"}
         return json.dumps(
@@ -437,7 +537,9 @@ async def create_pptx(slides: list[dict[str, Any]], name: str | None = None) -> 
     description=(
         "Create a simple PDF report from structured text sections and publish it as a "
         "generated artifact. "
-        "Use this for channel PDF requests instead of returning PDF source text."
+        "Use this for channel PDF requests instead of returning PDF source text. "
+        "Latin, CJK, basic Greek and Russian Cyrillic render on any host; a character "
+        "no available font can draw (emoji, Hebrew, Arabic) is written as '?'."
     ),
     params={
         "name": {"type": "string", "description": "Output filename. .pdf is appended if missing."},

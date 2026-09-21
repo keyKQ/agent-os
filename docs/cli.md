@@ -31,7 +31,7 @@ available without `uv tool list` or `pip show`.
 | `agentos projects` | Group sessions into projects with shared knowledge injected into every member session. |
 | `agentos wallet` | Create, import, export and unlock wallets in the engine's vault; show balances. |
 | `agentos trade` | Quote and swap tokens on Base / Robinhood Chain through the AgentOS Aggregator (default) or Uniswap; orders, approvals, history, PnL. |
-| `agentos skills` | List, search, view, install, update, publish, and inspect skills. |
+| `agentos skills` | List, search, view, install, update, publish, inspect, and tap skills. |
 | `agentos memory` | Inspect and maintain memory. |
 | `agentos channels` | Configure and inspect messaging channels. |
 | `agentos providers` | Configure and inspect LLM providers. |
@@ -490,6 +490,20 @@ agentos configure x-search --no-x-search-enabled
 The `x_search` tool stays hidden from the agent until an xAI credential is
 reachable. See [`x-search.md`](x-search.md).
 
+Image generation:
+
+```sh
+agentos configure image --image-provider openai --primary openai/gpt-image-1 --api-key-env OPENAI_API_KEY
+agentos configure image --no-image-enabled
+```
+
+Memory embedding:
+
+```sh
+agentos configure memory --memory-provider local --onnx-dir ~/.agentos/models/embeddings/google-embeddinggemma-300m
+agentos configure memory --memory-provider openai --model text-embedding-3-small --api-key-env OPENAI_API_KEY
+```
+
 Channels:
 
 Built-in channel types are `discord`, `email`, `slack`, and `telegram`; `agentos
@@ -638,6 +652,16 @@ used to widen what the agent is allowed to do. Edit `~/.agentos/.env` by hand
 if you genuinely need one of them. Variables already
 set that way keep working; only writing through AgentOS is gated.
 
+What `agentos env list` knows about comes from three places: the setup specs
+of providers the runtime can actually drive (a provider catalogued for the
+setup UI with no client behind it -- Exa, Perplexity, and a number of LLM
+vendors -- contributes nothing, so its key is not offered as "needed"),
+built-in tools that read a variable directly (`web_fetch`'s
+`FIRECRAWL_API_KEY`), and `requires.env` in installed skill manifests. A skill
+entry declared with `required: false` unlocks a feature of the skill when set
+-- an extra engine, say -- and its absence does not hide the skill. Anything
+present in `.env` that none of those declare is listed as `custom`.
+
 If `agentos env list` reports a variable as coming from `process env`, the
 shell that started the gateway exported it and that value wins over the file.
 Editing the file will not change anything until the export is removed.
@@ -665,6 +689,11 @@ agentos skills install <skill-url> --source bankr
 agentos skills install <skill-url> --source aeon
 agentos skills update --all
 agentos skills uninstall <skill-name>
+agentos skills publish <path-to-skill>
+agentos skills publish <path-to-skill> --repo <owner/repo>
+agentos skills tap list
+agentos skills tap add <owner/repo>
+agentos skills tap remove <owner/repo>
 ```
 
 `agentos skills init <name>` initializes a new custom skill template.
@@ -673,6 +702,15 @@ agentos skills uninstall <skill-name>
 - `--target-dir` / `-p` specifies the target parent directory. If omitted, the tool resolves to the highest precedence existing layer directory in the workspace/personal layers list.
 - `--with-script` scaffolds an executable script `scripts/run.py` template and entrypoint command configuration.
 - `--force` / `-f` forces overwrite of generated files without purging the parent folder.
+
+`agentos skills publish <path-to-skill>` validates the skill directory and
+publishes it. `--repo` / `-r <owner/repo>` targets the repository the PR
+goes to; a failed publish prints `Failed:` and exits 1.
+
+`agentos skills tap` manages custom skill source repositories (taps) for
+teams that keep their own skill catalog: `tap list` shows the registered
+taps, `tap add <owner/repo>` registers one, `tap remove <owner/repo>`
+removes it. See [`features/skills.md`](features/skills.md#manage-skill-sources).
 
 The `skills list` table is unchanged: name, layer, eligible, description.
 `--json` carries more, and now reports the same facts the Web UI shows for the
@@ -729,6 +767,7 @@ Read:
 ```sh
 agentos sessions list
 agentos sessions list --search api-refactor    # match name, key, subject or model
+agentos sessions list --agent main --status done   # also --channel, --since
 agentos sessions show <session-key>
 agentos sessions rename <session-key> "api-refactor"
 agentos sessions rename <session-key> --clear  # drop the custom name
@@ -737,6 +776,10 @@ agentos sessions abort <session-key>
 agentos sessions export <session-key>
 agentos sessions delete <session-key>
 ```
+
+Every filter on `sessions list` runs client-side over the recent history rather
+than over the page `--limit` would show, so `--limit` bounds how many matches
+are printed, not how far back the filter looks.
 
 Sessions are auto-named. `rename` gives one a human-readable label that shows
 up in `sessions list`, in the chat toolbar, and in the Web UI session list, and
@@ -956,9 +999,12 @@ agentos memory list --source all
 agentos memory ingest /path/to/docs
 agentos memory curated get --target memory
 agentos memory curated add "Important project convention"
+agentos memory curated remove "Important project convention"
 agentos memory search "preference"
 agentos memory show <path>
+agentos memory embedding-download
 agentos memory raw-fallbacks list
+agentos memory raw-fallbacks show <path>
 ```
 
 Read: [`features/memory.md`](features/memory.md)
@@ -996,7 +1042,9 @@ agentos cron add --every 15m --script watch_rss.py --name hn \
 symlink out of that directory. Subdirectories are allowed, and `{job_id}`
 anywhere in the path is replaced with the created job's own id, so a job can own
 a directory named after itself in one `add`. `.sh`/`.bash` run under bash,
-anything else under python. `--script-arg` (repeatable) passes argv straight to
+anything else under python. `--workdir` sets the script's working directory; a
+relative value resolves against the script's own directory, which is also the
+default. `--script-arg` (repeatable) passes argv straight to
 the script — never through a shell. Non-empty stdout is delivered verbatim, empty stdout is a silent
 run, and a non-zero exit or `--timeout` delivers the error and fails the job.
 Secrets are masked in the output, and the gateway token is withheld from the
@@ -1108,6 +1156,28 @@ Read:
 - [`scheduling.md`](scheduling.md)
 - [`approvals-and-permissions.md`](approvals-and-permissions.md)
 
+## Sandbox Posture Controls
+
+```sh
+agentos sandbox status
+agentos sandbox status --json
+agentos sandbox bypass
+agentos sandbox full
+agentos sandbox on
+agentos sandbox reset
+```
+
+`agentos sandbox status` shows the current sandbox posture (`on`, `bypass`, `full`), whether runtime sandboxing and security grading are active, and default permissions.
+
+- `agentos sandbox on`: Restores the default sandboxed posture (`sandbox = true`, `security_grading = true`, `permissions.default_mode = "off"`).
+- `agentos sandbox bypass`: Disables runtime sandboxing and auto-grants approvals except for sensitive paths (`permissions.default_mode = "bypass"`).
+- `agentos sandbox full`: Disables runtime sandboxing and skips approval and sensitive-path gates (`permissions.default_mode = "full"`).
+- `agentos sandbox reset`: Resets sandbox posture to AgentOS defaults (`bypass`).
+
+Pass `--config <path>` to target an explicit configuration file. Changes require a gateway restart (`agentos gateway restart`) to apply to running processes.
+
+Read: [`tools-and-sandbox.md`](tools-and-sandbox.md)
+
 ## Cost, Diagnostics, and Replay
 
 ```sh
@@ -1207,6 +1277,27 @@ agentos mcp-server run --gateway ws://localhost:18792/ws
 ```
 
 Read: [`mcp-server.md`](mcp-server.md)
+
+## Install Inventory
+
+`agentos dist` emits `workspace-state.json` — a reproducible, versioned
+inventory of the install for support, release QA, or environment
+comparison:
+
+```sh
+agentos dist
+agentos dist --output workspace-state.json
+```
+
+With no flags the payload prints to stdout. `--output` (`-o`) writes it to
+the given file instead (creating parent directories) and prints the
+resolved path. The payload (`schema_version`, `agentos_version`,
+`python_requires`, `bundled_channels`, `bundled_tools`,
+`gateway_defaults`) is derived only from installed package metadata plus
+hard-coded constants — byte-identical per install, with no environment
+values, paths, or secrets.
+
+Read: [`operations.md`](operations.md#install-inventory)
 
 ---
 

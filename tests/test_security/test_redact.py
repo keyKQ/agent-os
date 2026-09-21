@@ -148,6 +148,257 @@ class TestNameSegments:
     def test_ordinary_names(self, name: str) -> None:
         assert not redact._is_credential_name(name)
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            # Qualifiers that can only mean key material (#1901), in each of
+            # the three casings ``_name_segments`` reduces.
+            "signing_key",
+            "SIGNING_KEY",
+            "signingKey",
+            "x-signing-key",
+            "encryption_key",
+            "ENCRYPTION_KEY",
+            "encryptionKey",
+            "account_key",
+            "AccountKey",
+            "account-key",
+        ],
+    )
+    def test_key_qualifier_names(self, name: str) -> None:
+        assert redact._is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["sort_key", "cache_key", "partition_key", "license_key", "consumer_key", "deploy_key"],
+    )
+    def test_bare_key_names_stay_ordinary(self, name: str) -> None:
+        """``key`` alone is a map entry; the pair list must not widen to every ``*_key``."""
+        assert not redact._is_credential_name(name)
+
+
+class TestKeyQualifierAssignments:
+    """SIGNING_KEY sits in the same env dump as SECRET_KEY; both must mask (#1901)."""
+
+    VALUE = "9f2b7c41ae55d0e3bb84aa11"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "SIGNING_KEY={v}",
+            "ENCRYPTION_KEY={v}",
+            '"signingKey": "{v}"',
+            "AccountKey={v}",
+        ],
+    )
+    def test_an_env_dump_masks_the_value(self, line: str) -> None:
+        out = redact.redact_terminal_output(line.format(v=self.VALUE) + "\n", "printenv")
+        assert self.VALUE not in out
+
+    @pytest.mark.parametrize("line", ["SIGNING_KEY={v}", "ENCRYPTION_KEY={v}"])
+    def test_a_dotenv_read_masks_the_value(self, line: str) -> None:
+        out = redact.redact_file_output(line.format(v=self.VALUE) + "\n", path=".env")
+        assert self.VALUE not in out
+
+    def test_an_azure_connection_string_masks_its_account_key(self) -> None:
+        """``;`` ends an unquoted value, so it also has to start the next assignment."""
+        line = (
+            "AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;"
+            f"AccountName=prodstore;AccountKey={self.VALUE}==;EndpointSuffix=core.windows.net\n"
+        )
+        out = redact.redact_terminal_output(line, "printenv")
+        assert self.VALUE not in out
+        assert "AccountName=prodstore" in out
+        assert "EndpointSuffix=core.windows.net" in out
+
+    def test_a_semicolon_separated_ordinary_assignment_is_untouched(self) -> None:
+        line = "OPTS=a=1;sort_key=name;partition_key=region\n"
+        assert redact.redact_terminal_output(line, "printenv") == line
+
+
+class TestAcronymPrefixes:
+    """An all-caps acronym followed by a Capitalised word is a real identifier.
+
+    `APISecret` has no lower-to-upper transition, so a splitter that only knows
+    that boundary left the whole name as one segment and matched nothing —
+    while `apiSecret`, `ApiSecret`, `API_SECRET` and `api-secret` all matched.
+    The same credential, four spellings, one of them reaching the model.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "APISecret",
+            "APIToken",
+            "AUTHToken",
+            "AUTHKey",
+            "ACCESSToken",
+            "CLIENTSecret",
+            "SESSIONToken",
+            "PRIVATEKey",
+            "SECRETKey",
+            "SERVICEKey",
+            "DBPassword",
+            "DBSecret",
+            "LDAPPassword",
+            "JWTSecret",
+            "SSHPassword",
+            "AWSAccessKeyId",
+        ],
+    )
+    def test_an_acronym_prefixed_credential_is_recognized(self, name: str) -> None:
+        assert redact._is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        ("name", "segments"),
+        [
+            ("APISecret", ["api", "secret"]),
+            ("APIKey", ["api", "key"]),
+            ("DBPassword", ["db", "password"]),
+            ("SECRETKey", ["secret", "key"]),
+            ("AWSAccessKeyId", ["aws", "access", "key", "id"]),
+            # Boundaries that already worked must keep working.
+            ("CAP_API_KEY", ["cap", "api", "key"]),
+            ("x-cap-api-key", ["x", "cap", "api", "key"]),
+            ("capApiKey", ["cap", "api", "key"]),
+            ("getURL", ["get", "url"]),
+            ("XMLHttpRequest", ["xml", "http", "request"]),
+            ("HTTPSProxy", ["https", "proxy"]),
+            ("sellToken", ["sell", "token"]),
+        ],
+    )
+    def test_segments(self, name: str, segments: list[str]) -> None:
+        assert redact._name_segments(name) == segments
+
+    @pytest.mark.parametrize(
+        "base",
+        ["api_secret", "client_secret", "db_password", "private_key", "access_token"],
+    )
+    def test_every_spelling_of_one_credential_agrees(self, base: str) -> None:
+        """The contract `_name_segments` documents, asserted rather than implied."""
+        words = base.split("_")
+        capitalized = "".join(word.capitalize() for word in words)
+        spellings = [
+            base,
+            base.upper(),
+            base.replace("_", "-"),
+            words[0] + "".join(word.capitalize() for word in words[1:]),
+            capitalized,
+            words[0].upper() + "".join(word.capitalize() for word in words[1:]),
+        ]
+        verdicts = {redact._is_credential_name(spelling) for spelling in spellings}
+
+        assert verdicts == {True}, f"{base}: {dict(zip(spellings, verdicts))}"
+
+    @pytest.mark.parametrize(
+        "name",
+        ["publicKey", "primaryKey", "cacheKey", "APIEndpoint", "DBHost", "HTTPHeader", "AWSRegion"],
+    )
+    def test_an_acronym_alone_is_not_a_credential(self, name: str) -> None:
+        """Splitting more aggressively must not make ordinary names match."""
+        assert not redact._is_credential_name(name)
+
+    def test_an_acronym_prefixed_secret_is_masked_in_a_dump(self) -> None:
+        value = "9f2b7c41ae55d0e3bb84aa11"
+        out = redact.redact_terminal_output(f"APISecret={value}\nPATH=/usr/bin\n", "printenv")
+
+        assert value not in out
+        assert "PATH=/usr/bin" in out
+
+
+class TestBotTokensAndPassphrases:
+    """Two vocabulary holes that let a real credential through.
+
+    Both are the same shape as #1901: the pair mechanism is right, the
+    vocabulary was missing a word.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "BOT_TOKEN",
+            "bot_token",
+            "botToken",
+            "BotToken",
+            "x-bot-token",
+            "SLACK_BOT_TOKEN",
+            "DISCORD_BOT_TOKEN",
+            "TELEGRAM_BOT_TOKEN",
+        ],
+    )
+    def test_a_bot_token_is_a_credential(self, name: str) -> None:
+        """``token`` qualified by what issues it. ``bot`` was not a qualifier.
+
+        A Discord bot token is three dot-separated base64url runs and a Telegram
+        one is ``<id>:<secret>``; neither matches a vendor prefix in
+        ``_PREFIX_RE``, so for those two the name pass was the only line of
+        defence and it was not there.
+        """
+        assert redact._is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["bot_name", "bot_id", "bot_count", "bot_status", "bot_version", "robot_arm",
+         "chatbot_config", "chatbot_model", "botHandler", "MAX_BOTS", "token_budget"],
+    )
+    def test_an_unqualified_bot_name_is_not_a_credential(self, name: str) -> None:
+        """The pair must be adjacent, so ``bot`` alone still means nothing."""
+        assert not redact._is_credential_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["passphrase", "PASSPHRASE", "Passphrase", "ssh_passphrase", "SSH_PASSPHRASE",
+         "gpg_passphrase", "key_passphrase", "keystore_passphrase"],
+    )
+    def test_a_passphrase_is_a_credential(self, name: str) -> None:
+        """``passphrase`` belongs beside ``password`` and ``passwd``.
+
+        It is the one credential no shape rule can reach: a passphrase is a
+        sentence, and ``_is_secret_literal_value`` requires a single opaque run
+        with no whitespace. The name is the only thing that can catch it.
+        """
+        assert redact._is_credential_name(name)
+
+    @pytest.mark.parametrize("name", ["phrase", "phrasebook", "phrase_count", "keyphrase_list"])
+    def test_phrase_without_pass_is_not_a_credential(self, name: str) -> None:
+        assert not redact._is_credential_name(name)
+
+    def test_a_discord_bot_token_is_masked_in_a_config_file(self) -> None:
+        """The end-to-end case: real shape, no vendor prefix, name-only defence.
+
+        Assembled from parts rather than written as a literal, because GitHub's
+        push protection flags a Discord-shaped token in a test file. That the
+        shape trips their scanner is the point of the case: nothing in
+        ``_PREFIX_RE`` matches it, so the name pass was the only defence.
+        """
+        token = f"{'A' * 24}.{'B' * 6}.{'C' * 28}"
+
+        out = redact.redact_file_output(f"DISCORD_BOT_TOKEN={token}\n", path=".env")
+
+        assert token not in out
+        assert not redact._PREFIX_RE.search(token)
+
+    def test_a_passphrase_is_masked_in_a_config_file(self) -> None:
+        passphrase = "kQ3mZ8vT1pR7wX5yB2nL9dF4hJ6gS0aC"
+
+        out = redact.redact_file_output(f"SSH_PASSPHRASE={passphrase}\n", path=".env")
+
+        assert passphrase not in out
+
+    def test_a_passphrase_that_is_a_sentence_is_still_left_alone(self) -> None:
+        """Pre-existing, and deliberately not changed here.
+
+        ``_is_secret_literal_value`` reads whitespace as "a sentence, a command,
+        or a path", so a prose passphrase is not treated as a secret literal —
+        and ``PASSWORD`` behaves identically. Widening that rule is a separate
+        decision with its own false-positive surface, so this pins the current
+        behaviour rather than silently changing it.
+        """
+        prose = "correct horse battery staple"
+
+        assert prose in redact.redact_file_output(f"PASSWORD={prose}\n", path=".env")
+        assert prose in redact.redact_file_output(f"SSH_PASSPHRASE={prose}\n", path=".env")
+
 
 class TestRedaction:
     def test_masks_a_vendor_key_but_keeps_it_recognisable(self) -> None:
@@ -211,10 +462,46 @@ class TestTerminalOutput:
             ("cat notes.txt", False),
             ("echo env", False),
             ("", False),
+            # A newline separates commands exactly like ``;`` does, and a
+            # two-line script is what an agent writes when it needs a cwd.
+            pytest.param("cd /srv/app\nprintenv", True, id="newline-separator"),
+            pytest.param("cd /srv\r\nprintenv", True, id="crlf-separator"),
+            pytest.param("cat x\nenv\ncat y", True, id="dump-on-an-inner-line"),
+            # Grouping keeps the command glued to a paren once shlex is done.
+            pytest.param("(printenv)", True, id="parenthesised"),
+            pytest.param("(cd /srv; printenv)", True, id="parenthesised-sequence"),
+            # The same shapes with no dump in them stay out.
+            pytest.param("git log --oneline\ngit status", False, id="multi-line-non-dump"),
+            pytest.param('grep "(env)" notes.txt', False, id="parens-in-a-pattern"),
+            pytest.param("echo 'set'\nls", False, id="quoted-keyword-on-a-line"),
+            pytest.param("node --env-file=.env app.js", False, id="env-inside-a-flag"),
         ],
     )
     def test_env_dump_detection(self, command: str, expected: bool) -> None:
         assert redact.is_env_dump_command(command) is expected
+
+    def test_a_multi_line_dump_is_masked_like_its_one_line_twin(self) -> None:
+        """``cd x`` + newline + ``printenv`` runs what ``cd x && printenv`` runs.
+
+        The secret here is deliberately opaque rather than vendor-prefixed:
+        ``_redact_value_shapes`` catches the prefixed shapes with no help from
+        the gate, so only an opaque value proves the assignment pass ran.
+        """
+        output = "DEPLOY_API_KEY=9f2b7c41ae55d0e3bb84\nPATH=/usr/bin\n"
+        chained = redact.redact_terminal_output(output, "cd /srv/app && printenv")
+        multi_line = redact.redact_terminal_output(output, "cd /srv/app\nprintenv")
+        assert "9f2b7c41ae55d0e3bb84" not in multi_line
+        assert multi_line == chained
+        assert "PATH=/usr/bin" in multi_line
+
+    def test_a_grouped_dump_is_masked(self) -> None:
+        out = redact.redact_terminal_output("DB_PASSWORD=hunter2hunter2hunter2\n", "(printenv)")
+        assert "hunter2hunter2hunter2" not in out
+
+    def test_a_multi_line_ordinary_command_keeps_its_assignments(self) -> None:
+        """The widened split must not drag ordinary output into the pass."""
+        out = redact.redact_terminal_output("MAX_TOKENS=4096\n", "cd /srv\ncat config.py")
+        assert out == "MAX_TOKENS=4096\n"
 
 
 def test_the_disable_switch_is_read_once_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
