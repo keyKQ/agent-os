@@ -74,7 +74,7 @@ reports `deliveredToken` and the app offers a one-click unwrap
 
 | Provider | Key | Notes |
 | --- | --- | --- |
-| `aggregator` (default) | none | AgentOS Aggregator at `https://agg.404defi.capital`, an HTTP API in front of 0x Swap v2. One `GET /v1/quote` returns the price *and* the unsigned calldata, including the ERC-20 approval when one is needed. 20 bps integrator fee, reported in the quote and already deducted from the output. Quotes expire in 30 s upstream; the engine stops trusting them at 20 s. |
+| `aggregator` (default) | none | AgentOS Aggregator at `https://agg.useagentos.dev`, an HTTP API in front of 0x Swap v2. One `GET /v1/quote` returns the price *and* the unsigned calldata, including the ERC-20 approval when one is needed. 20 bps integrator fee, reported in the quote and already deducted from the output. Quotes expire in 30 s upstream; the engine stops trusting them at 20 s. |
 | `uniswap` | Uniswap Trading API key | Universal Router; `x-agent-info` attribution on every call. Quotes fresh for 30 s. |
 
 The aggregator holds no key of its own and neither signs nor broadcasts:
@@ -110,7 +110,7 @@ CoinGecko / your RPC node); only quoting and calldata do.
 [trading]
 enabled = true
 provider = "aggregator"              # or "uniswap"
-aggregator_base_url = "https://agg.404defi.capital"
+aggregator_base_url = "https://agg.useagentos.dev"
 uniswap_api_key = ""                 # only for provider = "uniswap"; or set UNISWAP_API_KEY
 uniswap_api_key_env = "UNISWAP_API_KEY"
 approval_threshold_usd = 100.0       # agent orders above this wait for approval

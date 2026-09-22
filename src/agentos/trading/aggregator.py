@@ -1,7 +1,7 @@
 """AgentOS Aggregator — the default swap route.
 
 An HTTP API in front of 0x Swap API v2, served at
-``https://agg.404defi.capital``. Every endpoint is a plain ``GET`` and there
+``https://agg.useagentos.dev``. Every endpoint is a plain ``GET`` and there
 is no API key: a quote is one request that comes back with the price *and*
 the unsigned calldata, including the ERC-20 approval when one is needed.
 
@@ -43,7 +43,7 @@ from agentos.trading.providers import (
 )
 from agentos.trading.uniswap import DecisionOrigin
 
-AGGREGATOR_BASE = "https://agg.404defi.capital"
+AGGREGATOR_BASE = "https://agg.useagentos.dev"
 #: What the aggregator calls the gas coin. Our own native address is the zero
 #: address, which the API rejects outright ("the zero address is not a token").
 NATIVE_SENTINEL = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"

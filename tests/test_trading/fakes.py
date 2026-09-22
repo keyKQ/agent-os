@@ -724,7 +724,7 @@ def make_transport(
         host = request.url.host
         if host in chains:
             return chains[host].handle(request)
-        if host == "agg.404defi.capital":
+        if host == "agg.useagentos.dev":
             return (aggregator or FakeAggregator()).handle(request)
         if host == "trade-api.gateway.uniswap.org":
             return uniswap.handle(request)

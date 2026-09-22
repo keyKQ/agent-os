@@ -2057,7 +2057,7 @@ class TradingConfig(BaseSettings):
     provider: Literal["aggregator", "uniswap"] = "aggregator"
     # Where the aggregator is served. Only change this to point at another
     # deployment of the same API.
-    aggregator_base_url: str = "https://agg.404defi.capital"
+    aggregator_base_url: str = "https://agg.useagentos.dev"
     uniswap_api_key: str = ""
     uniswap_api_key_env: str = "UNISWAP_API_KEY"
     # Chain id (as a string, TOML keys are strings) -> JSON-RPC URL override.

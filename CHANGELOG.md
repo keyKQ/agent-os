@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- The AgentOS Aggregator moved to `https://agg.useagentos.dev`. The old host,
+  `agg.404defi.capital`, no longer resolves, so the default
+  `trading.aggregator_base_url` now points at the new domain. An install that
+  pinned the old URL in `config.toml` must set the new one:
+  `agentos config set trading.aggregator_base_url https://agg.useagentos.dev`.
+
 ### Fixed
 
 - Chat could get stuck above the bottom of the transcript, with no way back but

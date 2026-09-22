@@ -100,7 +100,7 @@ class TestAggregatorUrlPin:
     @pytest.mark.parametrize(
         "url",
         [
-            "https://agg.404defi.capital",
+            "https://agg.useagentos.dev",
             "https://agg.example.org:8443/v1",
             "http://127.0.0.1:8080",
             "http://localhost:3000",
@@ -115,10 +115,10 @@ class TestAggregatorUrlPin:
         "url",
         [
             "http://evil",
-            "http://agg.404defi.capital",
+            "http://agg.useagentos.dev",
             "http://127.0.0.1.evil.com",
-            "ftp://agg.404defi.capital",
-            "agg.404defi.capital",
+            "ftp://agg.useagentos.dev",
+            "agg.useagentos.dev",
             "",
         ],
     )
@@ -130,4 +130,4 @@ class TestAggregatorUrlPin:
         cfg = TradingConfig()
         with pytest.raises(ValueError):
             cfg.aggregator_base_url = "http://evil"
-        assert cfg.aggregator_base_url == "https://agg.404defi.capital"
+        assert cfg.aggregator_base_url == "https://agg.useagentos.dev"

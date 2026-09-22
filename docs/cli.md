@@ -883,7 +883,7 @@ keystore) — never from the command line.
 
 Swaps run on Base (8453) and Robinhood Chain (4663) through one of two
 providers. The **AgentOS Aggregator** (the default,
-`trading.provider = "aggregator"`, served at `https://agg.404defi.capital`)
+`trading.provider = "aggregator"`, served at `https://agg.useagentos.dev`)
 needs no key and no account: one GET returns the price *and* the unsigned
 calldata, including the ERC-20 approval when one is needed. It never signs
 and never broadcasts — your wallet does both — and it charges 20 bps on the
@@ -980,7 +980,7 @@ head older than a minute — the sign of an RPC that is behind.
 `[trading]` config keys (each also an environment variable with the
 `AGENTOS_TRADING_` prefix): `enabled`, `provider` (`aggregator` |
 `uniswap`), `aggregator_base_url` (default
-`https://agg.404defi.capital`), `uniswap_api_key`, `uniswap_api_key_env`
+`https://agg.useagentos.dev`), `uniswap_api_key`, `uniswap_api_key_env`
 (default `UNISWAP_API_KEY`), `rpc_urls` (chain id → JSON-RPC URL),
 `approval_threshold_usd`, `daily_cap_usd` (0 = agent swaps off),
 `approval_ttl_seconds`, `agent_max_price_impact_pct`,
