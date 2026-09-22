@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+
+
 - Desktop: the Settings → Pilot Router pane offers the experimental `jev`
   router strategy beside Pilot and LLM judge. Picking it reveals a TypeSafe
   API key field and a high-risk floor slider; the key is checked against
@@ -16,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+
+
 - Desktop: the release workflow (`desktop-release.yml`) can be run by hand
   for any tag, builds from an explicit git ref, and publishes to a chosen
   repository (default `use-agent-os/agent-os`) through the
@@ -23,26 +27,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   The bundled `app-update.yml` follows the publish target, and a build is
   only published after `codesign --verify`, `stapler validate` and `spctl
   --assess` pass and `latest-mac.yml` lists both architectures.
-
-### Fixed
-
-- CI: the Control UI build failed on `qrcode-generator`, whose npm tarball
-  carries no license file. Its MIT text is vendored at
-  `frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended to the
-  generated third-party ledger like `fancy-canvas` already was.
-
-- Release tooling: the version bump script now lives in the repository as
-  `scripts/pump_version.py` (it used to be a local-only skill file), and the
-  root `.gitignore` no longer swallows the desktop app icon and provider
-  logos.
-
-- Desktop: a `.postN` release could never be offered as an update.
-  electron-builder rewrote `2026.9.22.post1` to `2026.9.2-2.post1`, which
-  semver sorts before 2026.9.2, so electron-updater saw every `.post` build
-  as older. The packaged app is now versioned by a semver twin of the CalVer
-  (`2026.9.22.post1` → `2026.922.1`, month and day folded into the minor,
-  post number as the patch) while About, the menu, the engine installer and
-  the updater's own display keep showing the CalVer.
 
 - Desktop: one notice per release, for the engine and the app together.
   The app checks both on its own (after launch, when the window regains
@@ -66,10 +50,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+
+
+- CI: the Control UI build failed on `qrcode-generator`, whose npm tarball
+  carries no license file. Its MIT text is vendored at
+  `frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended to the
+  generated third-party ledger like `fancy-canvas` already was.
+
+- Release tooling: the version bump script now lives in the repository as
+  `scripts/pump_version.py` (it used to be a local-only skill file), and the
+  root `.gitignore` no longer swallows the desktop app icon and provider
+  logos.
+
+- Desktop: a `.postN` release could never be offered as an update.
+  electron-builder rewrote `2026.9.22.post1` to `2026.9.2-2.post1`, which
+  semver sorts before 2026.9.2, so electron-updater saw every `.post` build
+  as older. The packaged app is now versioned by a semver twin of the CalVer
+  (`2026.9.22.post1` → `2026.922.1`, month and day folded into the minor,
+  post number as the patch) while About, the menu, the engine installer and
+  the updater's own display keep showing the CalVer.
+
+
+
 - pptx `render_thumbs.sh` aborted with `range_args[@]: unbound variable` on
   the macOS system bash (3.2) whenever `--range` was not given: an empty
   array is unbound under `set -u` there. The expansion is now guarded, so the
   script renders every slide again on a stock macOS install.
+
+- Router task-type detection: a code-port request naming Go, C, Objective-C,
+  F#, Visual Basic, VBA or Node.js is no longer read as a translation and
+  capped to the cheapest tier. The guard already covered `golang`, `c++`,
+  `c#` and `.net`, so each of these families was in scope but one of its
+  members was missing — the same defect #1198 fixed for `c++`/`c#`/`.NET`.
+  `go`, `c` and `r` are matched only in target position, since they are
+  ordinary English words as well as language names. (#2968)
+
+- CLI: a copy-pasteable hint whose path holds `$` or a backtick is now escaped
+  for PowerShell inside its double quotes; `"C:\home\Jo$hn\config.toml"`
+  pasted into PowerShell used to expand `$hn` and open the wrong path (#2978)
+
+- Telegram: a Markdown table header or row label written as `*italic*` (or
+  `***bold italic***`) no longer leaks its asterisks into the rendered
+  `<b>…</b>`; the label path strips single-asterisk italics the way it already
+  stripped `_italic_` (#2964)
 
 ## [2026.9.22.post1] - 2026-09-22
 
@@ -202,6 +225,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
+- Memory notes containing ZWJ emoji sequences, ZWNJ-shaped Persian/Hindi text or a leading BOM are no longer refused on write or silently replaced with a `[BLOCKED: ...]` placeholder on load; `memory_tools` now takes its invisible-character verdict from `injection_guard` (which already exempts the joiners) instead of a private list that had drifted (#2966).
 - Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
   as a top-level message (not already inside a thread) made the agent's reply
   post unthreaded instead of anchoring under the prompt it answered.
