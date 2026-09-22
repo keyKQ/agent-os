@@ -123,6 +123,32 @@ describe('EngineUpdater.check', () => {
     expect(seen).toEqual(['checking', 'idle'])
   })
 
+  it('a silent check refreshes the versions without a phase change or an error', async () => {
+    const { updater, calls } = make({
+      'upgrade --check --json': {
+        stdout: ['{"current": "2026.8.23", "latest": "2026.9.11", "status": "outdated"}'],
+      },
+    })
+    const seen: string[] = []
+    updater.subscribe((s) => seen.push(s.phase))
+    const state = await updater.check({ silent: true })
+    expect(calls[0]).toEqual(['/opt/agentos', 'upgrade', '--check', '--json'])
+    expect(state).toMatchObject({ phase: 'idle', latest: '2026.9.11', availability: 'outdated' })
+    expect(seen).toEqual(['idle'])
+  })
+
+  it('a silent check stays quiet when the CLI is missing or the check fails', async () => {
+    const missing = make({}, { settings: { ...managed, cliPath: null } })
+    expect((await missing.updater.check({ silent: true })).phase).toBe('idle')
+    const failing = make({ 'upgrade --check --json': { code: 1, stderr: ['boom'] } })
+    const seen: string[] = []
+    failing.updater.subscribe((s) => seen.push(s.phase))
+    const state = await failing.updater.check({ silent: true })
+    expect(state.phase).toBe('idle')
+    expect(state.error).toBeNull()
+    expect(seen).toEqual([])
+  })
+
   it('reports an error when the CLI cannot be found', async () => {
     const { updater } = make({}, { settings: { ...managed, cliPath: null } })
     const state = await updater.check()

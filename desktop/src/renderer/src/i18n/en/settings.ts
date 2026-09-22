@@ -377,7 +377,7 @@ export const settings = {
   // About · app (this Electron shell)
   'settings.about.appCard': 'App',
   'settings.about.appCard.blurb':
-    'AgentOS for Mac itself. Downloads in the background; swaps in on relaunch.',
+    'AgentOS for Mac itself. Checks on its own; downloads and restarts only when you say so.',
   'settings.about.app.status': 'Status',
   'settings.about.app.unsupported': 'Updates are only available in a packaged, signed build.',
   'settings.about.app.available': 'is available.',
@@ -385,7 +385,12 @@ export const settings = {
   'settings.about.app.downloading': 'Downloading…',
   'settings.about.app.downloaded': 'Ready to install.',
   'settings.about.app.install': 'Restart to update',
-  'settings.about.app.installHint': 'The gateway stops, the app relaunches on the new version.',
+  'settings.about.app.installHint':
+    'The gateway stops, the app relaunches on the new version. Quitting without this keeps the current build.',
+  'settings.about.app.blocked.engine-updating':
+    'The engine is being updated. Restart once it has finished.',
+  'settings.about.app.blocked.installer-running':
+    'The engine installer is still running. Restart once it has finished.',
   'settings.about.github': 'AgentOS on GitHub',
   'settings.about.issues': 'Report an issue',
   'settings.about.releases': 'Release notes',

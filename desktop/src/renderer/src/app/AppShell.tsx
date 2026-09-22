@@ -4,6 +4,7 @@ import { useKeyboardShortcut } from '@/components/KeyboardShortcuts'
 import { PetOverlay } from '~/components/pet/PetOverlay'
 import { Sidebar } from '~/components/Sidebar'
 import { Toolbar } from '~/components/Toolbar'
+import { UpdateNotices } from '~/components/UpdateNotices'
 import { sessionPath } from '~/components/sidebar/SessionRow'
 import { t } from '~/i18n'
 import { desktopApi } from '~/lib/desktop-api'
@@ -49,6 +50,8 @@ export function AppShell() {
       <PetOverlay />
       {/* First run: installs the engine before anything else is usable. */}
       <SetupOverlay />
+      {/* One toast per release step: Update, Restart, Restart gateway. */}
+      <UpdateNotices />
     </div>
   )
 }

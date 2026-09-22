@@ -313,8 +313,37 @@ Two things go out of date, and Settings › About updates both:
   interrupted update instead of trusting the last "done". Exit 3 from the CLI
   (pip / editable install) surfaces the manual command verbatim.
 - **App** — this shell, through `electron-updater`
-  (`main/updates/app-updater.ts`). Downloads are explicit; the swap happens
-  on relaunch (`quitAndInstall`), after the managed gateway is stopped.
+  (`main/updates/app-updater.ts`). Two explicit steps: nothing downloads
+  without a click and nothing installs without a second one; the swap
+  happens on the relaunch that click triggers (`quitAndInstall`), after the
+  managed gateway is stopped. `autoInstallOnAppQuit` is off, so a plain ⌘Q
+  keeps the running build. Before the relaunch an install gate (`index.ts`)
+  refuses while the engine updater or the first-run installer is mid-write;
+  About and the toast say why (`AppUpdateState.blocked`).
+
+One release tag covers both, so the shell shows **one notice** for the
+release rather than one per part. `main/updates/auto-check.ts` runs a
+*silent* check of both updaters — 15 s after launch, when a window regains
+focus (at most once a minute) and every 5 minutes: the app through
+electron-updater, the engine through `agentos upgrade --check --json`
+(`EngineUpdater.check({ silent: true })` shows no phase and reports no
+failure). `releaseUpdate()` in `shared/updates.ts` folds the two states into
+the single next step, and two surfaces read it:
+
+- `components/UpdateNotices.tsx` fires one sonner toast per step under one
+  id: "AgentOS X is available" with **Update** (engine install, then app
+  download, i.e. `updateAll`), "ready to install" with **Restart**, and
+  "Engine X is installed / the gateway is still running Y" with **Restart
+  gateway** after a terminal ran `agentos upgrade`. An Update or gateway
+  restart that would cut a live session opens Settings › About instead,
+  where the warning and "Update anyway" live. A finished engine-only update
+  says so once and goes away.
+- `components/UpdatePill.tsx` is the standing toolbar pill: "Update",
+  "Updating engine…", "Downloading 37%", "Restart", "Restart gateway". It
+  stays until the release is fully applied and opens Settings › About.
+
+A miss or a failure shows nothing, and a late result never rewinds a
+download or install the user started meanwhile.
   `electron-builder.yml` publishes to the GitHub release of the same
   `v<CalVer>` tag as the Python wheel, so `package.json`'s version must equal
   `pyproject.toml`'s: `tests/test_release_consistency.py` asserts it and the
@@ -327,10 +356,46 @@ gateway RPC or field the previous release lacks; About warns when the
 connected gateway is older.
 
 Release builds are signed and notarized by
-`.github/workflows/desktop-release.yml` on every `v*` tag. It needs these
+`.github/workflows/desktop-release.yml` on every `v*` tag pushed to the
+repository that holds this directory, or by hand from the Actions tab ("Run
+workflow": the tag to publish to, optionally the git ref to build from and
+the `owner/name` whose release receives the assets; the default is
+`use-agent-os/agent-os`, where the Python releases live). It needs these
 repository secrets: `MAC_CSC_LINK` (base64 `.p12` of the "Developer ID
 Application" certificate), `MAC_CSC_KEY_PASSWORD`, `APPLE_ID`,
-`APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`. Locally, `npm run
+`APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, plus `DESKTOP_RELEASE_TOKEN`
+(a fine-grained PAT with *Contents: write* on the target) whenever the target
+is another repository. The publish target is also written into the bundled
+`app-update.yml`, so a build looks for its updates exactly where it was
+uploaded. The run refuses to publish until the bundle passes `codesign
+--verify`, `stapler validate` and `spctl --assess`, and `latest-mac.yml`
+lists both the arm64 and x64 zips; without the signing secrets it builds an
+ad-hoc signed app and keeps it as a workflow artifact only.
+
+The packaged app is versioned by a **semver twin** of the CalVer, because
+electron-builder and electron-updater only speak semver and `2026.9.22.post1`
+is not one (left alone it becomes `2026.9.2-2.post1`, which sorts *before*
+2026.9.2, so a `.post` release would never be offered). `calverToSemver` in
+`shared/updates.ts` folds month and day into the minor number and keeps the
+post number as the patch: `2026.9.22` → `2026.922.0`, `2026.9.22.post1` →
+`2026.922.1`, `2026.10.1` → `2026.1001.0`. `scripts/release-version.mjs`
+prints it for electron-builder's `extraMetadata.version`, with the CalVer
+riding along as `extraMetadata.calver`; artifacts, `latest-mac.yml` and
+`CFBundleShortVersionString` carry the twin, while `main/app-version.ts`
+(`appCalver()`) reads the CalVer back for About, the menu, the engine
+installer and the updater's own display. `package.json` keeps the plain
+CalVer, which the release-consistency test pins to `pyproject.toml`. To
+export the certificate for `MAC_CSC_LINK`:
+
+```sh
+security export -t identities -f pkcs12 -k ~/Library/Keychains/login.keychain-db \
+  -P "<p12 password>" -o /tmp/developer-id.p12   # prompts for keychain access
+base64 -i /tmp/developer-id.p12 | gh secret set MAC_CSC_LINK -R <owner/name>
+gh secret set MAC_CSC_KEY_PASSWORD -R <owner/name> --body "<p12 password>"
+rm /tmp/developer-id.p12
+```
+
+Locally, `npm run
 package:mac` signs with the Developer ID identity in the keychain when there
 is one (set the same `APPLE_*` variables to notarize) and falls back to an
 ad-hoc signature otherwise. Hardened Runtime is on with

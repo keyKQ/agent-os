@@ -48,4 +48,24 @@ export const shell = {
   'gateway.start': 'Start gateway',
   'gateway.stop': 'Stop gateway',
   'gateway.restart': 'Restart gateway',
+
+  // Release notice: one toast for the engine and the app together (the
+  // ambient checks land here; About has the full cards)
+  'updates.toast.available': 'is available.',
+  'updates.toast.both': 'The engine updates in place, then the app downloads and asks to restart.',
+  'updates.toast.update': 'Update',
+  'updates.toast.downloaded': 'is ready to install.',
+  'updates.toast.restart': 'Restart to update',
+  'updates.toast.blocked': 'Not now:',
+  'updates.toast.engine': 'Engine',
+  'updates.toast.engineInstalled': 'is installed.',
+  'updates.toast.gatewayRuns': 'The gateway is still running',
+  'updates.toast.restartGateway': 'Restart gateway',
+  'updates.toast.engineDone': 'Engine updated to',
+  // Toolbar pill: stays until the release is fully applied
+  'updates.pill.available': 'Update',
+  'updates.pill.engine': 'Updating engine…',
+  'updates.pill.app': 'Downloading',
+  'updates.pill.restart': 'Restart',
+  'updates.pill.gateway': 'Restart gateway',
 } as const

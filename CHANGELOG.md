@@ -16,6 +16,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Desktop: the release workflow (`desktop-release.yml`) can be run by hand
+  for any tag, builds from an explicit git ref, and publishes to a chosen
+  repository (default `use-agent-os/agent-os`) through the
+  `DESKTOP_RELEASE_TOKEN` secret when that is not the repository it runs in.
+  The bundled `app-update.yml` follows the publish target, and a build is
+  only published after `codesign --verify`, `stapler validate` and `spctl
+  --assess` pass and `latest-mac.yml` lists both architectures.
+
+### Fixed
+
+- Desktop: a `.postN` release could never be offered as an update.
+  electron-builder rewrote `2026.9.22.post1` to `2026.9.2-2.post1`, which
+  semver sorts before 2026.9.2, so electron-updater saw every `.post` build
+  as older. The packaged app is now versioned by a semver twin of the CalVer
+  (`2026.9.22.post1` → `2026.922.1`, month and day folded into the minor,
+  post number as the patch) while About, the menu, the engine installer and
+  the updater's own display keep showing the CalVer.
+
+- Desktop: one notice per release, for the engine and the app together.
+  The app checks both on its own (after launch, when the window regains
+  focus, and every 5 minutes) and announces a hit with a single toast and a
+  standing pill in the toolbar: "Update" installs the engine and downloads
+  the app, "Restart" relaunches on the downloaded build, and "Restart
+  gateway" appears when a terminal upgraded the engine under a running
+  gateway. Nothing downloads or installs without that click, and an Update
+  that would cut a live session opens Settings → About to ask first;
+  quitting the app no longer installs a downloaded build behind your back.
+  The restart is refused, with the reason shown, while the engine updater or
+  the first-run installer is still running. Silent checks never show an
+  error banner.
+
 - The AgentOS Aggregator moved to `https://agg.useagentos.dev`. The old host,
   `agg.404defi.capital`, no longer resolves, so the default
   `trading.aggregator_base_url` now points at the new domain. An install that

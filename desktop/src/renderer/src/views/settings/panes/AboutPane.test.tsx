@@ -181,6 +181,21 @@ describe('AboutPane · app', () => {
     expect(installApp).toHaveBeenCalledTimes(1)
   })
 
+  it('says why a refused restart has to wait', () => {
+    useUpdates.setState({
+      app: {
+        ...idleAppState('2026.9.9'),
+        phase: 'downloaded',
+        latest: '2026.9.12',
+        percent: 100,
+        blocked: 'engine-updating',
+      },
+    })
+    renderPane()
+    expect(screen.getByText(/engine is being updated/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Restart to update' })).toBeInTheDocument()
+  })
+
   it('offers Update all when both are outdated', () => {
     const updateAll = vi.fn(async () => {})
     useUpdates.setState({

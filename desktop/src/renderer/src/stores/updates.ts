@@ -19,6 +19,10 @@ interface UpdatesStore {
   installApp(): Promise<void>
   /** Both at once: check each, then upgrade the engine and fetch the app. */
   checkAll(): Promise<void>
+  /**
+   * The one "Update" a release needs: the engine first (no relaunch, the
+   * gateway restarts), then the app download, which waits for "Restart".
+   */
   updateAll(): Promise<void>
 }
 
@@ -51,8 +55,6 @@ export const useUpdates = create<UpdatesStore>((set, get) => ({
     await Promise.all([get().checkEngine(), get().checkApp()])
   },
   async updateAll() {
-    // Engine first: it does not need a relaunch, and the new app may require
-    // the new engine. The app download then waits for a "Restart" click.
     if (get().engine.availability === 'outdated') await get().applyEngine()
     if (get().app.phase === 'available') await get().downloadApp()
   },

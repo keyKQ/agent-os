@@ -1,6 +1,7 @@
 import { LayoutPanelLeft, PanelRight, Settings } from 'lucide-react'
 import { NotificationBell } from '~/components/NotificationBell'
 import { Button } from '~/components/ui/button'
+import { UpdatePill } from '~/components/UpdatePill'
 import { t } from '~/i18n'
 import { useUi } from '~/stores/ui'
 import { ThemeToggle } from '~/theme/ThemeToggle'
@@ -55,6 +56,7 @@ export function Toolbar() {
             aria-hidden
           />
         </Button>
+        <UpdatePill />
         <NotificationBell />
         <ThemeToggle />
         <Button

@@ -1,5 +1,6 @@
 import { app, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { DEFAULT_UI_SCALE, stepUiScale } from '@shared/settings'
+import { appCalver } from './app-version'
 import { requestOpenSettings } from './ipc/app'
 import type { SettingsStore } from './settings/store'
 
@@ -69,7 +70,7 @@ export function installAppMenu(settings: SettingsStore): void {
           click: () => void shell.openExternal(`${REPO_URL}/issues/new`),
         },
         { type: 'separator' },
-        { label: `AgentOS ${app.getVersion()}`, enabled: false },
+        { label: `AgentOS ${appCalver()}`, enabled: false },
       ],
     },
   ]

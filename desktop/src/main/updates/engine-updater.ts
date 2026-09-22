@@ -112,16 +112,32 @@ export class EngineUpdater {
     })
   }
 
-  async check(): Promise<EngineUpdateState> {
+  /**
+   * `agentos upgrade --check --json`. A *silent* check is the ambient one
+   * (launch, focus, the periodic tick, alongside the app's own): it shows no
+   * "checking" phase, reports no failure, and does not clear an error or an
+   * interruption the user has yet to see; it only refreshes what is
+   * installed and what is latest so the shell's update notice can fire.
+   */
+  async check(options: { silent?: boolean } = {}): Promise<EngineUpdateState> {
     if (this.busy()) return this.current()
+    const silent = options.silent === true
     const cli = this.locate(this.deps.getSettings().cliPath)
     if (!cli) {
+      if (silent) return this.current()
       return this.set({ ...this.state, phase: 'error', error: 'agentos CLI not found.' })
     }
-    this.set({ ...this.state, phase: 'checking', error: null, interrupted: false })
-    const run = await this.run(cli, ['upgrade', '--check', '--json'], CHECK_TIMEOUT_MS)
+    if (silent) this.silentCheckActive = true
+    else this.set({ ...this.state, phase: 'checking', error: null, interrupted: false })
+    let run: RunResult
+    try {
+      run = await this.run(cli, ['upgrade', '--check', '--json'], CHECK_TIMEOUT_MS)
+    } finally {
+      this.silentCheckActive = false
+    }
     const payload = lastJson(run.stdout)
     if (run.timedOut || run.code !== 0 || !payload) {
+      if (silent) return this.current()
       return this.set({
         ...this.state,
         phase: 'error',
@@ -130,10 +146,12 @@ export class EngineUpdater {
           : `Could not check for updates (exit ${run.code ?? 'null'}).${tail(run.stderr)}`,
       })
     }
+    // An apply that started during a silent round-trip owns the state now.
+    if (silent && this.busy()) return this.current()
     const availability = payload.status as Availability | undefined
     return this.set({
       ...this.state,
-      phase: this.state.result ? 'done' : 'idle',
+      phase: silent ? this.state.phase : this.state.result ? 'done' : 'idle',
       current: str(payload.current),
       latest: str(payload.latest),
       availability: availability ?? 'offline',
@@ -242,8 +260,11 @@ export class EngineUpdater {
     })
   }
 
+  private silentCheckActive = false
+
   private busy(): boolean {
     return (
+      this.silentCheckActive ||
       this.state.phase === 'checking' ||
       this.state.phase === 'installing' ||
       this.state.phase === 'restarting'

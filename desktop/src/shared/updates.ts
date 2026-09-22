@@ -80,10 +80,83 @@ export interface AppUpdateState {
   percent: number | null
   checkedAt: number | null
   error: string | null
+  /**
+   * Why the last "Restart to update" was refused, while `downloaded`. Cleared
+   * when the restart goes through or a new download starts.
+   */
+  blocked: AppInstallBlock | null
 }
 
+/** What a relaunch would interrupt; the renderer words each one. */
+export type AppInstallBlock = 'engine-updating' | 'installer-running'
+
 export function idleAppState(current: string): AppUpdateState {
-  return { phase: 'idle', current, latest: null, percent: null, checkedAt: null, error: null }
+  return {
+    phase: 'idle',
+    current,
+    latest: null,
+    percent: null,
+    checkedAt: null,
+    error: null,
+    blocked: null,
+  }
+}
+
+/** How often the app looks for a new build on its own, between focus checks. */
+export const APP_UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000
+
+/**
+ * One release covers the engine and the app, so the shell shows one notice.
+ * This folds both updaters into the single thing the person can do next:
+ *
+ * - `available`: a newer AgentOS exists for at least one of the two. "Update"
+ *   installs the engine (if it needs it) and downloads the app (if it does).
+ * - `working`: the engine installer or the app download is running.
+ * - `restart`: the app is downloaded; only the relaunch is left.
+ * - `gateway-restart`: a newer engine is installed on disk (a terminal ran
+ *   `agentos upgrade`) but the managed gateway still runs the old one.
+ * - `none`: nothing to do.
+ */
+export type ReleaseUpdate =
+  | { kind: 'none' }
+  | { kind: 'available'; version: string; engine: boolean; app: boolean }
+  | { kind: 'working'; version: string; step: 'engine' | 'app'; percent: number | null }
+  | { kind: 'restart'; version: string; blocked: AppInstallBlock | null }
+  | { kind: 'gateway-restart'; version: string; running: string }
+
+export function releaseUpdate(
+  engine: EngineUpdateState,
+  app: AppUpdateState,
+  gatewayVersion: string | null | undefined,
+): ReleaseUpdate {
+  if (app.phase === 'downloaded' && app.latest) {
+    return { kind: 'restart', version: app.latest, blocked: app.blocked }
+  }
+  if (engine.phase === 'installing' || engine.phase === 'restarting') {
+    return {
+      kind: 'working',
+      version: engine.latest ?? app.latest ?? '',
+      step: 'engine',
+      percent: null,
+    }
+  }
+  if (app.phase === 'downloading' && app.latest) {
+    return { kind: 'working', version: app.latest, step: 'app', percent: app.percent }
+  }
+  const engineOut = engine.availability === 'outdated' && !!engine.latest
+  const appOut = app.phase === 'available' && !!app.latest
+  if (engineOut || appOut) {
+    const candidates = [engineOut ? engine.latest : null, appOut ? app.latest : null].filter(
+      (v): v is string => !!v,
+    )
+    const version = candidates.sort(compareVersions).at(-1) ?? ''
+    return { kind: 'available', version, engine: engineOut, app: appOut }
+  }
+  const running = gatewayVersion?.split('+')[0]
+  if (engine.current && running && isNewer(engine.current, running)) {
+    return { kind: 'gateway-restart', version: engine.current, running }
+  }
+  return { kind: 'none' }
 }
 
 /**
@@ -129,6 +202,43 @@ function parseVersion(raw: string): { numbers: number[]; pre: string } {
 
 export function isNewer(candidate: string, than: string): boolean {
   return compareVersions(candidate, than) > 0
+}
+
+/**
+ * The packaged app carries a semver twin of its CalVer, because
+ * electron-builder and electron-updater only speak semver: `2026.9.22.post1`
+ * is not one, and left alone it is rewritten to `2026.9.2-2.post1`, which
+ * sorts *before* 2026.9.2. The twin folds month and day into the minor
+ * number and keeps the post number as the patch, so ordering survives:
+ *
+ *   2026.9.22        -> 2026.922.0
+ *   2026.9.22.post1  -> 2026.922.1
+ *   2026.9.23        -> 2026.923.0
+ *   2026.10.1        -> 2026.1001.0
+ *
+ * A release built before this scheme (`2026.9.20`) is smaller than any twin
+ * (minor 9 < 920), so every installed app upgrades into it. The CalVer
+ * itself stays in `package.json` (the release-consistency test pins it to
+ * `pyproject.toml`) and rides along as `calver` in the packaged metadata;
+ * `main/app-version.ts` reads that one for everything a human or the engine
+ * installer sees. Returns null for a string that is not a CalVer.
+ */
+export function calverToSemver(calver: string): string | null {
+  const match = /^v?(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\.post(\d+))?$/.exec(calver.trim())
+  if (!match) return null
+  const [, year, month, day, post] = match
+  return `${Number(year)}.${Number(month) * 100 + Number(day)}.${Number(post ?? 0)}`
+}
+
+/** The inverse of `calverToSemver`; a non-twin (an old plain release) is returned unchanged. */
+export function semverToCalver(semver: string): string {
+  const match = /^v?(\d{4})\.(\d{3,4})\.(\d+)$/.exec(semver.trim())
+  if (!match) return semver
+  const [, year, monthDay, post] = match
+  const month = Math.floor(Number(monthDay) / 100)
+  const day = Number(monthDay) % 100
+  if (month < 1 || month > 12 || day < 1 || day > 31) return semver
+  return `${year}.${month}.${day}${Number(post) > 0 ? `.post${Number(post)}` : ''}`
 }
 
 /** Whether the renderer can drive `gatewayVersion` at all. */

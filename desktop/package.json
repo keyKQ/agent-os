@@ -29,7 +29,7 @@
     "format": "prettier --write src",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "check": "npm run typecheck && eslint src && prettier --check src && vitest run",
-    "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml",
+    "package:mac": "npm run build && electron-builder --mac --config electron-builder.yml -c.extraMetadata.version=$(node scripts/release-version.mjs) -c.extraMetadata.calver=$(node scripts/release-version.mjs --calver)",
     "package:dir": "npm run build && electron-builder --dir --config electron-builder.yml"
   },
   "dependencies": {

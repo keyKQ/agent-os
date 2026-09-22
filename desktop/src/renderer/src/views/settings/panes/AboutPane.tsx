@@ -437,6 +437,9 @@ function AppCard() {
           {t('settings.about.app.installHint')}
         </Notice>
       ) : null}
+      {app.phase === 'downloaded' && app.blocked ? (
+        <Notice tone="warn">{t(`settings.about.app.blocked.${app.blocked}`)}</Notice>
+      ) : null}
       {app.phase === 'error' && app.error ? (
         <Notice tone="danger">
           <span style={{ whiteSpace: 'pre-wrap' }}>{app.error}</span>

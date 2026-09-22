@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type { AppInfo, ChooseFileOptions } from '@shared/app'
 import { IPC } from '@shared/ipc'
+import { appCalver } from '../app-version'
 import type { SettingsStore } from '../settings/store'
 
 /**
@@ -11,10 +12,10 @@ import type { SettingsStore } from '../settings/store'
  * the only doors out of it.
  */
 export function registerAppIpc(settings: SettingsStore): void {
-  ipcMain.handle(IPC.app.version, () => app.getVersion())
+  ipcMain.handle(IPC.app.version, () => appCalver())
 
   ipcMain.handle(IPC.app.info, (): AppInfo => ({
-    version: app.getVersion(),
+    version: appCalver(),
     electron: process.versions.electron ?? '',
     chrome: process.versions.chrome ?? '',
     node: process.versions.node ?? '',

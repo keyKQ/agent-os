@@ -12,7 +12,9 @@ import { bundledPetsDir, PetStore } from './pets/store'
 import { BootstrapController } from './bootstrap/controller'
 import { BootstrapRunner, bundledInstallScript } from './bootstrap/runner'
 import { SettingsStore } from './settings/store'
+import { appCalver } from './app-version'
 import { AppUpdateController, type UpdaterLike } from './updates/app-updater'
+import { startAutoCheck } from './updates/auto-check'
 import { defaultMarkerPath, EngineUpdater } from './updates/engine-updater'
 import { applyUiScale, applyVibrancy, createMainWindow } from './window'
 
@@ -41,11 +43,6 @@ if (!app.requestSingleInstanceLock()) {
       await gateway.stop()
     }
   }
-  const appUpdater = new AppUpdateController({
-    updater: loadAutoUpdater(),
-    version: app.getVersion(),
-    beforeInstall: stopGatewayForQuit,
-  })
   // First-run engine install: install.sh is bundled next to the asar; in
   // development the repo's copy two levels up is used.
   const agentosHome = path.dirname(defaultMarkerPath()).replace(/\/state\/desktop$/, '')
@@ -53,16 +50,28 @@ if (!app.requestSingleInstanceLock()) {
     scriptPath:
       bundledInstallScript(process.resourcesPath, path.resolve(__dirname, '../../..')) ??
       path.join(process.resourcesPath, 'install.sh'),
-    version: app.getVersion(),
+    version: appCalver(),
     logDir: path.join(agentosHome, 'logs'),
     cwd: app.getPath('home'),
+  })
+  const appUpdater = new AppUpdateController({
+    updater: loadAutoUpdater(),
+    version: appCalver(),
+    beforeInstall: stopGatewayForQuit,
+    // A relaunch kills whichever installer is mid-write; refuse until it is done.
+    installGate: () => {
+      const engine = engineUpdater.current().phase
+      if (engine === 'installing' || engine === 'restarting') return 'engine-updating'
+      if (bootstrapRunner.current().phase === 'running') return 'installer-running'
+      return null
+    },
   })
   const bootstrap = new BootstrapController({
     runner: bootstrapRunner,
     gateway,
     getSettings: () => settings.get().gateway,
     updateSettings: (patch) => settings.update(patch),
-    appVersion: app.getVersion(),
+    appVersion: appCalver(),
   })
   // Custom schemes must be declared before the app is ready.
   registerPetScheme()
@@ -114,6 +123,18 @@ if (!app.requestSingleInstanceLock()) {
     void bootstrap.launch()
     // A marker from a previous launch means an engine update never finished.
     engineUpdater.recover()
+    // Ambient checks for a new release, app and engine alike: after launch,
+    // on focus, every 5 minutes. Silent by contract; a hit surfaces as the
+    // shell's single "AgentOS X is available" notice.
+    const stopAutoCheck = startAutoCheck({
+      check: () =>
+        Promise.all([appUpdater.check({ silent: true }), engineUpdater.check({ silent: true })]),
+      onFocus: (listener) => {
+        app.on('browser-window-focus', listener)
+        return () => app.removeListener('browser-window-focus', listener)
+      },
+    })
+    app.once('will-quit', stopAutoCheck)
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0)

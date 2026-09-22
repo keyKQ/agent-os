@@ -1,19 +1,34 @@
 name: Desktop Release Assets
 
-# Builds, signs, notarizes and publishes the macOS desktop app for the same
-# `v<CalVer>` tag that releases the Python package. electron-builder uploads
-# the dmg/zip pairs plus `latest-mac.yml` to that GitHub release, which is
-# where the running app's electron-updater looks for the next version.
+# Builds, signs, notarizes and publishes the macOS desktop app for a
+# `v<CalVer>` release tag. electron-builder uploads the dmg/zip pairs (arm64
+# and x64) plus `latest-mac.yml` to that GitHub release, which is where the
+# running app's electron-updater looks for the next version.
+#
+# Two ways in:
+#   - push a `v*` tag to this repository;
+#   - "Run workflow" with the tag to release to (and, optionally, the git ref
+#     to build from and the repository whose release receives the assets).
+#
+# The desktop code lives in this repository while the Python releases (and
+# the `publish` block in desktop/electron-builder.yml) live under
+# use-agent-os/agent-os. Publishing to another repository needs a token that
+# can write its releases; the built app's `app-update.yml` is pointed at
+# whichever repository actually received the assets, so a build never looks
+# for updates where they were not uploaded.
 #
 # Required repository secrets (Settings › Secrets and variables › Actions):
-#   MAC_CSC_LINK            base64 of the "Developer ID Application" .p12
-#   MAC_CSC_KEY_PASSWORD    the .p12 password
-#   APPLE_ID                Apple ID used for notarization
+#   MAC_CSC_LINK                 base64 of the "Developer ID Application" .p12
+#   MAC_CSC_KEY_PASSWORD         the .p12 password
+#   APPLE_ID                     Apple ID used for notarization
 #   APPLE_APP_SPECIFIC_PASSWORD  app-specific password for that Apple ID
-#   APPLE_TEAM_ID           the 10-character team id
+#   APPLE_TEAM_ID                the 10-character team id
+# Optional:
+#   DESKTOP_RELEASE_TOKEN        fine-grained PAT with "Contents: write" on the
+#                                target repository, when it is not this one.
 # Without the signing secrets the build still runs (ad-hoc signed, not
-# notarized) but is not published: Gatekeeper and electron-updater would
-# both refuse it.
+# notarized) and is kept as a workflow artifact only: Gatekeeper and
+# electron-updater would both refuse it, so it is never published.
 
 on:
   push:
@@ -22,8 +37,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to build and upload to (e.g. v2026.9.12)
+        description: Release tag to publish to (e.g. v2026.9.22.post1)
         required: true
+      ref:
+        description: Git ref to build from (defaults to the tag)
+        required: false
+        default: ""
+      repo:
+        description: Repository whose release receives the assets (owner/name)
+        required: false
+        default: use-agent-os/agent-os
 
 permissions:
   contents: write
@@ -34,12 +57,14 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
+  BUILD_REF: ${{ github.event_name == 'push' && github.ref_name || (github.event.inputs.ref != '' && github.event.inputs.ref || github.event.inputs.tag) }}
+  TARGET_REPO: ${{ github.event_name == 'push' && 'use-agent-os/agent-os' || github.event.inputs.repo }}
 
 jobs:
   build-desktop:
     name: Build macOS app
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Validate tag
         run: |
@@ -47,12 +72,16 @@ jobs:
             echo "Release tag must look like v2026.9.12: ${RELEASE_TAG}" >&2
             exit 1
           fi
+          if [[ ! "${TARGET_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "Target repository must be owner/name: ${TARGET_REPO}" >&2
+            exit 1
+          fi
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -90,28 +119,127 @@ jobs:
         id: signing
         env:
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [[ -n "${MAC_CSC_LINK}" && -n "${APPLE_ID}" ]]; then
+          missing=()
+          for name in MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if [[ ${#missing[@]} -eq 0 ]]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Signing/notarization secrets are missing: building an unpublished, ad-hoc signed app."
+            echo "::warning::Signing/notarization secrets are missing (${missing[*]}): building an unpublished, ad-hoc signed app."
+          fi
+
+      # electron-builder publishes with GH_TOKEN. The job's own token only
+      # writes this repository's releases; another repository needs the PAT.
+      - name: Pick the token that can write ${{ env.TARGET_REPO }}
+        id: token
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          PAT: ${{ secrets.DESKTOP_RELEASE_TOKEN }}
+        run: |
+          if [[ -n "${PAT}" ]]; then
+            echo "source=DESKTOP_RELEASE_TOKEN" >> "$GITHUB_OUTPUT"
+          elif [[ "${TARGET_REPO}" == "${GITHUB_REPOSITORY}" ]]; then
+            echo "source=GITHUB_TOKEN" >> "$GITHUB_OUTPUT"
+          else
+            echo "Publishing to ${TARGET_REPO} from ${GITHUB_REPOSITORY} needs the DESKTOP_RELEASE_TOKEN secret" >&2
+            echo "(a fine-grained PAT with Contents: write on ${TARGET_REPO}), or pass repo=${GITHUB_REPOSITORY}." >&2
+            exit 1
+          fi
+
+      # electron-builder creates a missing release itself, but only against a
+      # tag that already exists there. Make sure the tag and its release do,
+      # so a dispatch against this repository works before the tag is pushed.
+      - name: Ensure the release exists on ${{ env.TARGET_REPO }}
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.source == 'DESKTOP_RELEASE_TOKEN' && secrets.DESKTOP_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${RELEASE_TAG}" --repo "${TARGET_REPO}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} exists on ${TARGET_REPO}."
+            exit 0
+          fi
+          if [[ "${TARGET_REPO}" == "${GITHUB_REPOSITORY}" ]]; then
+            gh release create "${RELEASE_TAG}" --repo "${TARGET_REPO}" --target "${GITHUB_SHA}" \
+              --title "AgentOS ${RELEASE_TAG#v}" --notes "AgentOS for Mac ${RELEASE_TAG#v}." --latest=false
+          else
+            echo "No release ${RELEASE_TAG} on ${TARGET_REPO}; the Python release has to exist first." >&2
+            exit 1
           fi
 
       - name: Build, sign, notarize and publish
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.token.outputs.source == 'DESKTOP_RELEASE_TOKEN' && secrets.DESKTOP_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          owner="${TARGET_REPO%%/*}"
+          repo="${TARGET_REPO##*/}"
+          # electron-builder and electron-updater only speak semver, and the
+          # CalVer in package.json (2026.9.22.post1) is not one; the packaged
+          # app carries its semver twin as `version` and the CalVer as
+          # `calver` (scripts/release-version.mjs, shared/updates.ts).
+          semver="$(node scripts/release-version.mjs)"
+          calver="$(node scripts/release-version.mjs --calver)"
+          echo "Packaging ${calver} as ${semver}"
           npm run build
-          npx electron-builder --mac --config electron-builder.yml --publish always
+          # The publish overrides also land in the bundled app-update.yml, so
+          # the shipped app checks the repository that holds its updates.
+          npx electron-builder --mac --config electron-builder.yml --publish always \
+            -c.publish.owner="${owner}" -c.publish.repo="${repo}" \
+            -c.extraMetadata.version="${semver}" -c.extraMetadata.calver="${calver}"
+
+      - name: Verify the published bundle
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          for app in release/mac-arm64/AgentOS.app release/mac/AgentOS.app; do
+            [[ -d "$app" ]] || continue
+            echo "== $app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign -dvv "$app" 2>&1 | grep -E "Authority=Developer ID Application" >/dev/null \
+              || { echo "$app is not signed with a Developer ID identity" >&2; exit 1; }
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=2 "$app"
+            grep -q "${TARGET_REPO%%/*}" "$app/Contents/Resources/app-update.yml"
+          done
+          echo "== latest-mac.yml"
+          cat release/latest-mac.yml
+          # Artifacts are named after the semver twin. electron-builder names
+          # the x64 zip without an arch suffix and the arm64 one with it; the
+          # updater needs both listed.
+          semver="$(node scripts/release-version.mjs)"
+          grep -q "^version: ${semver}$" release/latest-mac.yml \
+            || { echo "latest-mac.yml is not for ${semver}" >&2; exit 1; }
+          grep -q "url: AgentOS-${semver}-arm64-mac.zip" release/latest-mac.yml \
+            || { echo "latest-mac.yml does not list the arm64 zip" >&2; exit 1; }
+          grep -q "url: AgentOS-${semver}-mac.zip" release/latest-mac.yml \
+            || { echo "latest-mac.yml does not list the x64 zip" >&2; exit 1; }
+          for app in release/mac-arm64/AgentOS.app release/mac/AgentOS.app; do
+            [[ -d "$app" ]] || continue
+            [[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist")" == "${semver}" ]] \
+              || { echo "$app is not versioned ${semver}" >&2; exit 1; }
+            # Plain Node cannot read inside an asar; extract the manifest into
+            # a scratch directory (extract-file writes to the cwd).
+            scratch="$(mktemp -d)"
+            asar="$(pwd)/node_modules/.bin/asar"
+            (cd "$scratch" && "$asar" extract-file "$OLDPWD/$app/Contents/Resources/app.asar" package.json)
+            [[ "$(node -p "require('$scratch/package.json').calver")" == "${RELEASE_TAG#v}" ]] \
+              || { echo "$app does not carry calver ${RELEASE_TAG#v}" >&2; exit 1; }
+            rm -rf "$scratch"
+          done
 
       - name: Build without publishing (no signing secrets)
         if: steps.signing.outputs.enabled != 'true'
@@ -123,11 +251,27 @@ jobs:
           npx electron-builder --mac --config electron-builder.yml --publish never
 
       - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agentos-desktop-${{ env.RELEASE_TAG }}
           path: |
             desktop/release/*.dmg
             desktop/release/*.zip
+            desktop/release/*.blockmap
             desktop/release/latest-mac.yml
           if-no-files-found: error
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## AgentOS for Mac ${RELEASE_TAG}"
+            echo
+            echo "- built from \`${BUILD_REF}\`"
+            if [[ "${{ steps.signing.outputs.enabled }}" == "true" ]]; then
+              echo "- signed, notarized and published to https://github.com/${TARGET_REPO}/releases/tag/${RELEASE_TAG}"
+            else
+              echo "- **not published**: signing secrets missing; the ad-hoc build is attached as a workflow artifact"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
