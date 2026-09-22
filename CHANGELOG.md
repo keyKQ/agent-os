@@ -8,8 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-
-
 - Desktop: the Settings → Pilot Router pane offers the experimental `jev`
   router strategy beside Pilot and LLM judge. Picking it reveals a TypeSafe
   API key field and a high-risk floor slider; the key is checked against
@@ -17,8 +15,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Leaving the key blank keeps the stored key or `TYPESAFE_API_KEY`.
 
 ### Changed
-
-
 
 - Desktop: the release workflow (`desktop-release.yml`) can be run by hand
   for any tag, builds from an explicit git ref, and publishes to a chosen
@@ -50,8 +46,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-
-
 - CI: the Control UI build failed on `qrcode-generator`, whose npm tarball
   carries no license file. Its MIT text is vendored at
   `frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended to the
@@ -69,8 +63,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   (`2026.9.22.post1` → `2026.922.1`, month and day folded into the minor,
   post number as the patch) while About, the menu, the engine installer and
   the updater's own display keep showing the CalVer.
-
-
 
 - pptx `render_thumbs.sh` aborted with `range_args[@]: unbound variable` on
   the macOS system bash (3.2) whenever `--range` was not given: an empty
