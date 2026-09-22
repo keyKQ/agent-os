@@ -5,6 +5,8 @@ import {
   askRisk,
   batchFacts,
   bookConcession,
+  BOOK_MIN,
+  CHAT_MIN,
   composeSendPrompt,
   groupAsks,
   parseRecipientLines,
@@ -425,11 +427,32 @@ describe('missions', () => {
 
 describe('bookConcession', () => {
   it('keeps the preference while the chat has its floor, then shrinks, then collapses', () => {
-    expect(bookConcession(1200, 360, true)).toEqual({ book: 360, collapsed: false })
-    expect(bookConcession(900, 360, true)).toEqual({ book: 300, collapsed: false })
-    expect(bookConcession(850, 360, true)).toEqual({ book: 48, collapsed: true })
-    expect(bookConcession(1200, 360, false)).toEqual({ book: 48, collapsed: true })
-    expect(bookConcession(1600, 999, true)).toEqual({ book: 520, collapsed: false })
+    expect(bookConcession(1200, 360, true)).toEqual({ book: 360, collapsed: false, cramped: false })
+    expect(bookConcession(900, 360, true)).toEqual({ book: 300, collapsed: false, cramped: false })
+    expect(bookConcession(850, 360, true)).toEqual({ book: 48, collapsed: true, cramped: true })
+    expect(bookConcession(1200, 360, false)).toEqual({
+      book: 48,
+      collapsed: true,
+      cramped: false,
+    })
+    expect(bookConcession(1600, 999, true)).toEqual({ book: 520, collapsed: false, cramped: false })
+  })
+
+  it('reports a frame with no room for a split, open or not', () => {
+    // The spine's open button used to run its handler, set the preference, and
+    // leave the panel exactly where it was, because the chain overruled it on
+    // the very next render. `cramped` is what lets the spine say so instead —
+    // and it must be true whether or not the preference is currently open,
+    // since pressing open at this width is what does nothing.
+    const tooNarrow = CHAT_MIN + BOOK_MIN - 1
+    expect(bookConcession(tooNarrow, 360, true).cramped).toBe(true)
+    expect(bookConcession(tooNarrow, 360, false).cramped).toBe(true)
+    // One pixel more and the split is possible again.
+    expect(bookConcession(CHAT_MIN + BOOK_MIN, 360, true)).toEqual({
+      book: BOOK_MIN,
+      collapsed: false,
+      cramped: false,
+    })
   })
 })
 

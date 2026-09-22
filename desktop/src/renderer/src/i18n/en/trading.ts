@@ -734,6 +734,7 @@ export const trading = {
 
   'trading.book.title': 'Book',
   'trading.book.open': 'Open the book',
+  'trading.book.openDesk': 'Open the Desk — no room for the book beside the chat',
   'trading.book.collapse': 'Collapse the book',
   'trading.book.resize': 'Resize the book',
   'trading.book.tab.portfolio': 'Portfolio',

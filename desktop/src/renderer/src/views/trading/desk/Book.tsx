@@ -5,6 +5,7 @@ import {
   ChevronsRight,
   History as HistoryIcon,
   ListChecks,
+  Maximize2,
   TrendingDown,
   TrendingUp,
   Wrench,
@@ -67,9 +68,11 @@ export function Book({
   providerReady,
   unlocked,
   collapsed,
+  cramped = false,
   width,
   onResize,
   onToggle,
+  onOpenDesk,
   onOpenSettings,
   highlightOrder,
   entering = false,
@@ -81,9 +84,16 @@ export function Book({
   providerReady: boolean
   unlocked: boolean
   collapsed: boolean
+  /**
+   * The frame has no room for a split, so `onToggle` cannot open this panel
+   * here however many times it is pressed. The spine offers the Desk instead.
+   */
+  cramped?: boolean
   width: number
   onResize: (width: number) => void
   onToggle: () => void
+  /** Full-width instruments — the only place the BOOK fits on a narrow frame. */
+  onOpenDesk?: () => void
   onOpenSettings: () => void
   highlightOrder: string | null
   /** The desk is powering on: the hero value counts up once. */
@@ -195,26 +205,43 @@ export function Book({
   }
 
   if (collapsed) {
+    // On a cramped frame every button on this rail did nothing. The open button
+    // flipped a preference the concession chain overruled on the next render,
+    // and `setBookTab` — which opens the panel as well as selecting a tab — was
+    // overruled the same way. Both now offer the Desk, the only place the BOOK's
+    // content fits at this width.
+    const openHere = cramped && onOpenDesk ? onOpenDesk : onToggle
+    const openLabel = cramped && onOpenDesk ? t('trading.book.openDesk') : t('trading.book.open')
     return (
       <aside className="trd-book trd-book--spine" aria-label={t('trading.book.title')}>
         <button
           type="button"
           className="trd-book__spinebtn app-no-drag"
-          onClick={onToggle}
-          aria-label={t('trading.book.open')}
-          title={t('trading.book.open')}
+          onClick={openHere}
+          aria-label={openLabel}
+          title={openLabel}
           data-testid="book-open"
         >
-          <ChevronsLeft className="size-4" strokeWidth={1.75} aria-hidden />
+          {cramped && onOpenDesk ? (
+            <Maximize2 className="size-4" strokeWidth={1.75} aria-hidden />
+          ) : (
+            <ChevronsLeft className="size-4" strokeWidth={1.75} aria-hidden />
+          )}
         </button>
         {TABS.map(({ id, icon: Icon }) => (
           <button
             key={id}
             type="button"
             className="trd-book__spinebtn app-no-drag"
-            onClick={() => setTab(id)}
+            onClick={() => {
+              // `setBookTab` opens the panel itself; on a cramped frame that
+              // open is overruled, so the tab has to name the Desk instead.
+              setTab(id)
+              if (cramped && onOpenDesk) onOpenDesk()
+            }}
             aria-label={t(`trading.book.tab.${id}`)}
             title={t(`trading.book.tab.${id}`)}
+            data-testid={`book-spine-${id}`}
           >
             <Icon className="size-4" strokeWidth={1.75} aria-hidden />
             {id === 'orders' && pendingCount > 0 ? (

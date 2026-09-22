@@ -313,9 +313,11 @@ export function useDeskFrame(input: {
         providerReady={providerReady}
         unlocked={Boolean(vault.data?.unlocked)}
         collapsed={concession.collapsed}
+        cramped={concession.cramped}
         width={concession.book}
         onResize={setBookWidth}
         onToggle={toggleBook}
+        onOpenDesk={() => setDeskMode(true)}
         onOpenSettings={() => openSettings('trading')}
         highlightOrder={null}
         entering={entering}

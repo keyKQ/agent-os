@@ -149,6 +149,55 @@ describe('Book · the desk beside the chat', () => {
   })
 })
 
+describe('Book · the spine', () => {
+  // The spine is what is left of the BOOK on a narrow frame, and on a frame too
+  // narrow to split, every button on it did nothing: `onToggle` flipped a
+  // preference the concession chain overruled on the next render, and
+  // `setBookTab` — which opens the panel as well as selecting a tab — was
+  // overruled the same way. They looked like dead controls.
+  it('opens the panel in place when the frame can still hold a split', () => {
+    const onToggle = vi.fn()
+    const onOpenDesk = vi.fn()
+    render({ collapsed: true, cramped: false, onToggle, onOpenDesk })
+
+    fireEvent.click(screen.getByTestId('book-open'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    expect(onOpenDesk).not.toHaveBeenCalled()
+
+    // A spine tab opens the panel through `setBookTab` alone. Adding a toggle
+    // here cancels that open — the two land in one render and flip `bookOpen`
+    // straight back to false.
+    fireEvent.click(screen.getByTestId('book-spine-orders'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    expect(onOpenDesk).not.toHaveBeenCalled()
+  })
+
+  it('offers the Desk instead when the frame has no room for a split', () => {
+    const onToggle = vi.fn()
+    const onOpenDesk = vi.fn()
+    render({ collapsed: true, cramped: true, onToggle, onOpenDesk })
+
+    const open = screen.getByTestId('book-open')
+    // It must also SAY so — the old button promised an in-place open it could
+    // not deliver, which is why it read as broken rather than as unavailable.
+    expect(open).toHaveAccessibleName(/Desk/i)
+    fireEvent.click(open)
+    expect(onOpenDesk).toHaveBeenCalledTimes(1)
+    expect(onToggle).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('book-spine-tools'))
+    expect(onOpenDesk).toHaveBeenCalledTimes(2)
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the in-place toggle when no Desk handler is wired', () => {
+    const onToggle = vi.fn()
+    render({ collapsed: true, cramped: true, onToggle })
+    fireEvent.click(screen.getByTestId('book-open'))
+    expect(onToggle).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('Book · rejecting from the Orders tab', () => {
   it("hands the desk's own order to the chat's reject path instead of a bare status flip", async () => {
     rpcCall.mockImplementation(async (method: string) => {

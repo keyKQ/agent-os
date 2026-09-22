@@ -1101,17 +1101,24 @@ export const BOOK_SPINE = 48
  * Who yields when the frame narrows: the BOOK shrinks to its floor, then
  * collapses to the spine; the chat never drops below its floor. The stored
  * preference is never rewritten — widening restores it.
+ *
+ * `cramped` reports the case the caller cannot infer from `collapsed`: the
+ * frame has no room for a split AT ALL, so flipping `open` changes nothing.
+ * Without it the spine rendered an open button that ran its handler, set the
+ * preference, and left the panel exactly where it was — a control that looked
+ * broken because there was no way for it to say "not at this width".
  */
 export function bookConcession(
   frameWidth: number,
   preferred: number,
   open: boolean,
-): { book: number; collapsed: boolean } {
-  if (!open) return { book: BOOK_SPINE, collapsed: true }
+): { book: number; collapsed: boolean; cramped: boolean } {
+  const cramped = frameWidth - BOOK_MIN < CHAT_MIN
+  if (!open) return { book: BOOK_SPINE, collapsed: true, cramped }
   const pref = Math.min(BOOK_MAX, Math.max(BOOK_MIN, preferred))
-  if (frameWidth - pref >= CHAT_MIN) return { book: pref, collapsed: false }
-  if (frameWidth - BOOK_MIN >= CHAT_MIN) return { book: BOOK_MIN, collapsed: false }
-  return { book: BOOK_SPINE, collapsed: true }
+  if (frameWidth - pref >= CHAT_MIN) return { book: pref, collapsed: false, cramped }
+  if (!cramped) return { book: BOOK_MIN, collapsed: false, cramped }
+  return { book: BOOK_SPINE, collapsed: true, cramped }
 }
 
 /* ── Composer placeholder ────────────────────────────────────────────────── */

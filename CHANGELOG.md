@@ -41,6 +41,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   labels, each step addresses its seat by test id, the breakpoints are the row's
   measured widths, and glyphs never shrink — so a squeezed seat degrades to a
   readable icon with its tooltip and accessible name intact.
+- Trading desk: on a window too narrow to fit chat and the Book side by side,
+  every button on the Book's collapsed spine did nothing. The chat has a floor
+  it never yields, so the concession chain re-collapsed the panel on the very
+  next render — the open button ran its handler, wrote the preference, and left
+  the rail exactly as it was, with no way to say "not at this width". The spine
+  now knows when the frame cannot hold a split and offers the full Desk instead,
+  which is where the Book's content fits at that size, and says so in its label.
 
 ### Added
 
