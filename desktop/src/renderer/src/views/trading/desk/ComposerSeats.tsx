@@ -106,6 +106,11 @@ export function ComposerSeats({
         className="trd-seat app-no-drag"
         onClick={onOpenWallets}
         title={t('trading.seat.wallet.title')}
+        /* The shrink chain drops `.trd-seat__text` on a narrow pane, which would
+           otherwise take this button's whole accessible name with it. */
+        aria-label={`${t('trading.seat.wallet.title')}: ${
+          wallet ? walletLabel(wallet) : t('trading.seat.noWallet')
+        }`}
         data-testid="wallet-seat"
       >
         <WalletIcon className="size-3" strokeWidth={2} aria-hidden />
@@ -122,9 +127,10 @@ export function ComposerSeats({
             onClick={onStartMission}
             data-testid="mission-start"
             tabIndex={typing ? -1 : 0}
+            aria-label={t('trading.mission.start')}
           >
             <Rocket className="size-3" strokeWidth={2} aria-hidden />
-            {t('trading.mission.start')}
+            <span className="trd-quick__chip-text">{t('trading.mission.start')}</span>
           </button>
         ) : null}
         {QUICK.map(({ kind, icon: Icon, key }) => (
@@ -135,9 +141,10 @@ export function ComposerSeats({
             onClick={() => onQuick(kind)}
             data-testid={`quick-${kind}`}
             tabIndex={typing ? -1 : 0}
+            aria-label={t(key)}
           >
             <Icon className="size-3" strokeWidth={2} aria-hidden />
-            {t(key)}
+            <span className="trd-quick__chip-text">{t(key)}</span>
           </button>
         ))}
         {onSend ? (
@@ -147,9 +154,10 @@ export function ComposerSeats({
             onClick={onSend}
             data-testid="quick-send"
             tabIndex={typing ? -1 : 0}
+            aria-label={t('trading.quick.send')}
           >
             <SendHorizontal className="size-3" strokeWidth={2} aria-hidden />
-            {t('trading.quick.send')}
+            <span className="trd-quick__chip-text">{t('trading.quick.send')}</span>
           </button>
         ) : null}
         {onOpenTools ? (
@@ -160,9 +168,10 @@ export function ComposerSeats({
             title={t('trading.tools.title')}
             data-testid="quick-tools"
             tabIndex={typing ? -1 : 0}
+            aria-label={t('trading.tools.chip')}
           >
             <Wrench className="size-3" strokeWidth={2} aria-hidden />
-            {t('trading.tools.chip')}
+            <span className="trd-quick__chip-text">{t('trading.tools.chip')}</span>
           </button>
         ) : null}
       </div>

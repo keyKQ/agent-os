@@ -1774,3 +1774,12 @@
 .chat-ask-card .chat-plan-body {
   font-family: var(--font-mono);
 }
+
+/* Jump-to-latest pill: the unified skin puts product-facing labels on Inter
+   and drops the terminal tracking. */
+.chat-surface .chat-jump-to-latest {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  text-transform: none;
+}

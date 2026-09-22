@@ -386,19 +386,57 @@
   background: color-mix(in srgb, var(--primary) 12%, transparent);
   border-color: color-mix(in srgb, var(--primary) 40%, var(--border));
 }
-/* Shrink chain: labels first, the permission text second; glyphs never. */
-@container (max-width: 560px) {
-  .trd-quick__chip {
-    padding: 0 6px;
-  }
-  .trd-quick__chip > :not(svg) {
+/* Shrink chain.
+
+   The row's natural width is ~800px: permission 230 + provider 165 + wallet 84
+   + the four quick chips 287, plus gaps. Below that, flex had to take the
+   difference out of something — and since `.trd-quick` does not shrink, it came
+   entirely out of the three seats, which have `min-width: 0`. With the desk
+   panel open (a ~545px row) that left "Asks above $100.00 · $1,000.00/day"
+   rendered as "A." and the wallet seat as a bare squashed circle: two controls
+   that told the reader nothing and looked broken.
+
+   These breakpoints are the real measurements, not round numbers — each is the
+   width at which the row stops fitting once the step above it has been taken:
+     798  everything shown
+     599  without the permission text
+     546  also without the wallet name
+     430  also without the route name
+   so a label is dropped one step BEFORE flex would have crushed it. Information goes in order of how well the
+   glyph alone carries it — the padlock and the wallet read on their own, the
+   route name and the action verbs do not. Glyphs never shrink and never go. */
+@container (max-width: 800px) {
+  /* Addressed by test id, not position: `.trd-seat:first-child` also matches
+     the provider button, which is the only child of its own anchor wrapper —
+     so the "permission only" step silently took the route name with it. */
+  .trd-seat[data-testid='permission-seat'] .trd-seat__text {
     display: none;
   }
 }
-@container (max-width: 440px) {
-  .trd-seat:first-child .trd-seat__text {
+@container (max-width: 600px) {
+  .trd-seat[data-testid='wallet-seat'] .trd-seat__text {
     display: none;
   }
+}
+@container (max-width: 545px) {
+  .trd-seat[data-testid='provider-seat'] .trd-seat__text {
+    display: none;
+  }
+}
+@container (max-width: 430px) {
+  .trd-quick__chip {
+    padding: 0 6px;
+  }
+  .trd-quick__chip-text {
+    display: none;
+  }
+}
+/* The last line of defence. If a label still overruns — a long wallet name, a
+   translation that runs wide — the text ellipsises and the glyph survives at
+   full size, instead of the whole chip collapsing into a smear. */
+.trd-seat > *:not(.trd-seat__text),
+.trd-quick__chip > *:not(.trd-quick__chip-text) {
+  flex-shrink: 0;
 }
 
 /* ── Mission strip + controls ────────────────────────────────────────────── */

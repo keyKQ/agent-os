@@ -45,7 +45,13 @@
   overscroll-behavior: contain;
   scroll-behavior: auto;
   scrollbar-gutter: stable;
-  padding: 16px max(24px, calc((100% - var(--chat-col)) / 2)) 12px;
+  /* The side minimum is the hover-timestamp gutter, not a taste decision: rows
+     sit flush with the column edge and `.msg::after` hangs the time OUTSIDE
+     them (8px out on the user side, 4px on the assistant side, ~30px of
+     tabular digits). At the old 24px the thread's `overflow-x: hidden` sliced
+     the stamp in half — "13:59" read as "13:" — whenever the desk panel
+     narrowed the column enough for the minimum to win. */
+  padding: 16px max(44px, calc((100% - var(--chat-col)) / 2)) 12px;
 }
 .chat-thread[data-history-ready='false'] {
   visibility: hidden;
@@ -511,6 +517,36 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
+}
+/* Assistant rows have no bubble, and their meta line is the 16 px row directly
+   below the body — that shared footer is what the rule above is written for.
+   User rows are different in both respects: `.msg.user` IS the bubble (it
+   carries the padding and the background, `.msg-body` sits inside it), and
+   their timestamp hangs off the side via `::after`, not underneath. So
+   `top: calc(100% + 4px)` measured from the BODY landed the glyphs in the
+   bubble's own bottom padding, sitting on the last line of the message and its
+   rounded corner. Park them in the outer gutter instead, beyond the bubble's
+   leading edge — the same side the web console uses, and the side the
+   timestamp leaves free. */
+.msg.user .msg-body > .msg-actions {
+  top: auto;
+  right: 100%;
+  /* 14px clears the bubble's own side padding; 8px is the gutter gap. */
+  bottom: 0;
+  margin-right: 22px;
+}
+/* Transparent bridge across that gutter. The toolbar is positioned outside the
+   `.msg` box that carries `:hover`, so without this the gap is a dead strip the
+   pointer cannot cross — hover drops and the glyphs vanish before they can be
+   clicked. `pointer-events` is inherited, so the bridge stays inert while the
+   toolbar is hidden. */
+.msg.user .msg-body > .msg-actions::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 24px; /* >= the 22px margin */
 }
 .msg:hover .msg-actions,
 .msg:focus-within .msg-actions {
@@ -1771,4 +1807,81 @@
 .chat-noprovider > span {
   flex: 1;
   text-align: left;
+}
+
+/* ── Jump to latest ──────────────────────────────────────────────────────────
+   Tail-following pauses the moment the reader scrolls up; without an explicit
+   way back, a long transcript could only be returned to the bottom by dragging.
+   The dock is zero-height and sits at the thread/composer seam, so the pill
+   hovers over the last bubble instead of taking a row from the conversation.
+   Desktop vocabulary: a frosted control pill, one lime signal on the glyph. */
+.chat-jump-dock {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  height: 0;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.chat-jump-to-latest {
+  position: absolute;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--elevated) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+  color: var(--foreground);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 26%);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    border-color 160ms ease;
+}
+
+.chat-jump-to-latest svg {
+  color: var(--primary);
+}
+
+.chat-jump-to-latest:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.chat-jump-to-latest:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.chat-jump-dock[data-visible='false'] {
+  visibility: hidden;
+}
+
+.chat-jump-dock[data-visible='false'] .chat-jump-to-latest {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.chat-jump-dock[data-visible='true'] .chat-jump-to-latest {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-jump-to-latest {
+    transition: none;
+  }
+
+  .chat-jump-dock[data-visible='false'] .chat-jump-to-latest {
+    transform: none;
+  }
 }

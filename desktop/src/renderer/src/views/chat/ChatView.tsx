@@ -3,7 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { Download, RotateCcw, SquarePen, Terminal, X } from 'lucide-react'
+import { ArrowDown, Download, RotateCcw, SquarePen, Terminal, X } from 'lucide-react'
 import { useRpc } from '@/app/providers'
 import { formatCombo, useKeyboardShortcut } from '@/components/KeyboardShortcuts'
 import { ModalShell } from '@/components/ModalShell'
@@ -225,6 +225,8 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
     setRouterFxEnabled,
     history,
     runState,
+    pinnedToTail,
+    scrollToTail,
     isCompactInFlightForCurrentSession,
     setStreamIdlePausedForApproval,
     setPendingDelegates,
@@ -739,6 +741,21 @@ function ConnectedChat({ desk }: { desk: DeskProps | null }) {
           className={docked ? 'shrink-0' : 'flex flex-1 flex-col justify-center pt-24'}
         >
           <motion.div layout="position" transition={snap ? { duration: 0 } : spring}>
+            {/* Zero-height dock at the top of the composer block: the pill floats
+                over the tail of the transcript, clear of the desk toolbar, and
+                never takes layout space from either. */}
+            <div className="chat-jump-dock" data-visible={pinnedToTail ? 'false' : 'true'}>
+              <button
+                type="button"
+                className="chat-jump-to-latest"
+                tabIndex={pinnedToTail ? -1 : 0}
+                onClick={scrollToTail}
+                title={tw('chat.jumpToLatest')}
+              >
+                <ArrowDown className="size-3.5" strokeWidth={2} aria-hidden />
+                <span>{tw('chat.jumpToLatest')}</span>
+              </button>
+            </div>
             {instruments.dockAbove}
             <PendingQueue
               queue={pending.queue}

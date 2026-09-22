@@ -7,6 +7,7 @@ export const chat = defineNamespace('chat', {
   newChatTitle: 'New chat ({shortcut})',
   sessionControls: 'Chat session controls',
   opening: 'Opening conversation…',
+  jumpToLatest: 'Jump to latest',
   toolOutputEyebrow: 'Tool output',
   toolOutputClose: 'Close tool output',
   toolOutputFull: 'Full result',

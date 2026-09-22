@@ -6,7 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Chat could get stuck above the bottom of the transcript, with no way back but
+  dragging the scrollbar. Three causes, all fixed in web chat and the desktop
+  app (they share the transcript controller):
+  - Tail following was driven only by the seams that append rows, so anything
+    that changed the transcript's *height* without appending — a tool or
+    thinking `<details>` collapsing at the end of a turn, an image decoding, a
+    chart mounting a frame late, a window resize rewrapping every row — left the
+    reader stranded. A mutation/resize watch now re-pins whenever content grows
+    while following is active, and stays out of the way when it is not.
+  - Tail following is controller state that outlives a session switch, so a
+    reader who had scrolled up in one conversation carried the paused tail into
+    the next one — which then opened mid-transcript, at an offset belonging to a
+    different conversation. Every session switch now re-arms following.
+- Desktop chat: the copy/edit glyphs on a sent message sat on top of the
+  message itself. `.msg.user` IS the bubble — it carries the padding and the
+  background, with `.msg-body` inside it — so the shared "park the actions just
+  below the body" rule landed them in the bubble's own bottom padding, over the
+  last line of text and the rounded corner. They now sit in the outer gutter
+  beside the bubble, with a hover bridge so the pointer can reach them.
+- Desktop chat: the hover timestamp is drawn outside the message row, but the
+  transcript's minimum side padding was narrower than that overhang, so the
+  thread's horizontal clip sliced the stamp in half ("13:59" showed as "13:")
+  once the trading desk panel narrowed the chat column.
+- Trading desk: the instrument seats above the composer collapsed into stubs on
+  a narrow window — "Asks above $100.00 · $1,000.00/day" rendered as "A." and
+  the wallet seat as a bare circle. The quick-action chips do not shrink, so the
+  whole shortfall came out of the three seats; and the shrink chain that was
+  meant to prevent it never fired, because its selector looked for an element
+  around the chip labels (they were bare text nodes) and its first step matched
+  the route button as well as the permission button. The chips now wrap their
+  labels, each step addresses its seat by test id, the breakpoints are the row's
+  measured widths, and glyphs never shrink — so a squeezed seat degrades to a
+  readable icon with its tooltip and accessible name intact.
+
 ### Added
+
+- A "Jump to latest" pill in chat: once you scroll away from the newest message
+  it appears at the bottom of the transcript, and clicking it both returns you
+  to the tail and resumes following the stream.
 
 - Bundled `token-burner` skill and a Burn tool on the desktop trading desk:
   inventory the junk, dust and scam airdrops a wallet holds, revoke the
