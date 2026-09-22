@@ -29,7 +29,9 @@ mac:
     - target: zip
       arch: [arm64, x64]
   # Signing: electron-builder finds the "Developer ID Application" identity in
-  # the keychain (or CSC_LINK / CSC_KEY_PASSWORD in CI). With no identity it
+  # the keychain; in CI, .github/workflows/desktop-release.yml builds that
+  # keychain itself and passes it through CSC_KEYCHAIN (electron-builder's
+  # own CSC_LINK import fails on the macOS 26 runners). With no identity it
   # warns and skips, and scripts/adhoc-sign.mjs below ad-hoc signs the bundle
   # so a local build is still an app macOS will deliver notifications for.
   hardenedRuntime: true

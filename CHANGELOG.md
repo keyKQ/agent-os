@@ -26,6 +26,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- CI: the Control UI build failed on `qrcode-generator`, whose npm tarball
+  carries no license file. Its MIT text is vendored at
+  `frontend/vendor-licenses/qrcode-generator-LICENSE.txt` and appended to the
+  generated third-party ledger like `fancy-canvas` already was.
+
+- Release tooling: the version bump script now lives in the repository as
+  `scripts/pump_version.py` (it used to be a local-only skill file), and the
+  root `.gitignore` no longer swallows the desktop app icon and provider
+  logos.
+
 - Desktop: a `.postN` release could never be offered as an update.
   electron-builder rewrote `2026.9.22.post1` to `2026.9.2-2.post1`, which
   semver sorts before 2026.9.2, so electron-updater saw every `.post` build
