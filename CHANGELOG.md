@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Desktop: the Settings → Routing pane now offers the experimental `jev`
+  router strategy beside Pilot and LLM judge, so a strategy set from the CLI
+  or the web console renders instead of failing the mode lookup. The pane has
+  no key or threshold inputs; saving in jev mode keeps the values set with
+  `agentos configure router`.
+
 ### Changed
 
 - The AgentOS Aggregator moved to `https://agg.useagentos.dev`. The old host,
@@ -15,6 +23,218 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `agentos config set trading.aggregator_base_url https://agg.useagentos.dev`.
 
 ### Fixed
+
+- pptx `render_thumbs.sh` aborted with `range_args[@]: unbound variable` on
+  the macOS system bash (3.2) whenever `--range` was not given: an empty
+  array is unbound under `set -u` there. The expansion is now guarded, so the
+  script renders every slide again on a stock macOS install.
+
+## [2026.9.22.post1] - 2026-09-22
+
+### Added
+- Pilot Router: new opt-in, experimental `jev` strategy (typesafe.ai Jev
+  System One) — one `/v1/systemone` call with a `route` choice (R0–R3,
+  criteria derived from the tier descriptions) and a `high_risk` noul that
+  floors destructive/production requests at c3; the calibrated confidence
+  passes through the engine's confidence gate; selectable from the CLI and
+  Web UI setup wizards (`agentos configure router`, `agentos onboard`);
+  degrades to `jev_unavailable` on a missing key, HTTP error or timeout.
+  Sends the current turn text to typesafe.ai; requires `TYPESAFE_API_KEY`
+  (`[agentos_router.jev]`)
+
+### Fixed
+- Pilot Router `jev` strategy: sharpened the R2/R3 criteria so whole-system
+  architecture design and end-to-end incident-triage process design land on
+  R3 while single-service log diagnosis stays R2. On the labeled router
+  corpus (121 cases, vi/zh/en) classifier accuracy rises from 0.760 to 0.901
+  and R3 recall from 0.56 to 0.91.
+
+- `scripts/router_eval.py`: the strategy-engaged probe compared
+  `routing_source` against the raw strategy id, so `--strategy pilot-v1`
+  (tag `pilot_v1`) always aborted with "strategy did not engage". It now
+  resolves the expected tag through the strategy registry.
+
+- `weather` skill: a planner contract whose `DESTINATION:` field is present
+  but blank no longer silently forwards an unrelated field (e.g. `DATES:
+  next weekend`) to wttr.in as the city name. `_extract_location` now
+  treats a blank destination the same as no text at all and falls back to
+  `"London"`, instead of falling through to the contract's first line.
+
+- `session_search`: transcripts are now indexed with FTS5's `trigram`
+  tokenizer, query terms are joined with `OR` and ranked by `bm25`, and terms
+  shorter than three characters are answered by a scan. A query could not
+  match inside a run of CJK characters (`迁移计划` never found
+  `数据库迁移计划`) and every term had to be present (`migration plan for
+  postgres` found nothing in a transcript that lacked only `for`). An existing
+  index is rebuilt once, at the first open after upgrading (#2897)
+
+- `http-fetch` skill: `--max-bytes` now bounds what is *read*, not just what is
+  printed. The whole body used to be downloaded and held in memory before the
+  cap was applied, and a slow or endless stream (SSE, a log tail) was waited on
+  until the skill runner's timeout killed the process with no output; the read
+  now stops one byte past the cap and closes the connection (#2895)
+
+- Gateway channel dispatch: the batch-fallback reply sent after a streaming
+  turn no longer leaves a stale markdown image reference (e.g.
+  `![chart](chart.png)`) in the text for an artifact the stream relay
+  already delivered as a native file. `_deliver_runtime_channel_reply`
+  stripped that artifact out of the list *before* stripping its inline
+  reference from the re-fetched transcript text, so
+  `_strip_delivered_artifact_image_references` never saw its name and left
+  the dead reference sitting right after the real attachment.
+
+- `exec_command`: an inline artifact marker naming a file the finished
+  process still holds, or one the agent cannot read, no longer fails the whole
+  command and withholds its output. `publish_inline_artifacts` reports an
+  `OSError` from the publish in place of the marker, as it already did for a
+  `ToolError` (#2892)
+
+- CLI: commands no longer print structlog debug events to stderr — `agentos
+  context` put ~190 `tool_filtered` lines on the terminal on top of its tables.
+  The CLI filters at `INFO` (`AGENTOS_LOG_LEVEL` overrides); the gateway keeps
+  its own configured `log_level` for the console and `debug.log` (#2896)
+
+- Tools: the reasons `edit_file`, `grep_search`, `projects_create` and
+  `projects_update` refuse a call now reach the model instead of "The tool
+  received an invalid argument" — the closest-match hint and ambiguous line
+  numbers, the regex diagnostic, and the project-name rule; and `web_fetch`
+  reports an unresolvable hostname in its result's `error` field like every
+  other unreachable URL (#2888, #2889, #2890, #2891)
+
+- Tools: `read_spreadsheet` sized a row from whatever column a `.xlsx` cell
+  reference claimed, so a crafted or corrupt `r="..."` far past the format's
+  16,384-column ceiling drove a very large allocation. Such a cell is now
+  dropped (#2867).
+
+- `poolsdotfun-token-launcher` and `senior-unilp-manager` skills: a boolean flag
+  before the subcommand (`--json pools`) consumed the subcommand as its value,
+  so the command ran without one. Flags that take no argument no longer
+  swallow the positional (#2863, #2864).
+
+- `video-merger` skill: merging to an output path whose parent directory did
+  not exist failed with `No such file or directory` after the concat and
+  encode work had already been done. The parent directory is now created
+  before ffmpeg writes (#2858).
+
+- Channels: `split_text_for_limit` recognises a `~~~` fence without breaking a
+  closed backtick one -- a stray `~~~` inside an already-closed ``` ``` ```
+  body (a pasted example, a divider, a conflict marker) no longer pairs with
+  an unrelated one further down and rebalances the wrong block (#2954).
+- MSTeams: `send_streaming` chunks at the 40 KB activity payload limit and
+  rolls over into a fresh activity like the Telegram and Discord adapters,
+  remembering every activity id it creates, instead of failing with HTTP 413
+  (#2876).
+- Gateway: an attachment a channel turn (Telegram, Discord, Slack, ...) staged
+  under the session *key* was unreachable through the download route
+  `chat.history` links to, which only looked under the session *id*; both
+  directories are consulted now (#2944).
+- Artifacts: `strip_artifact_markers_from_text` stopped at the first `]`, so a
+  name with its own brackets (`Q3 Report [Draft].pdf`) left the marker's tail
+  in the reply; it now matches the marker's own closing bracket without
+  swallowing the text around it (#2942).
+- Gateway: `logs.tail` kept only the newest `limit` lines of everything unread
+  and then advanced the cursor to end-of-file, so a burst larger than `limit`
+  between two polls lost its older lines for good despite `has_more: true`.
+  The cursor now resumes through the burst while the first poll still opens
+  on the live tail (#2938).
+- Engine: a silent-reply sentinel the model wrapped in Markdown (`**NO_REPLY**`,
+  `` `HEARTBEAT_OK` ``) is treated as the bare sentinel instead of being
+  delivered as a message (#2945).
+- Scheduler: a cron script that closes the `{"wakeAgent": false}` gate keeps
+  its output on the run record instead of a fixed "silent" string (#2922), and
+  the gate is still honoured when the output before it pushes stdout past the
+  16k clip -- the clip previously cut the gate off and the run was treated as
+  news (#2921).
+- CLI: `agentos cost --csv` and `cost savings --csv` print through plain
+  stdout instead of Rich, so a long row redirected to a file is no longer
+  wrapped at 80 columns into two records (#2946). `agentos memory …` and
+  `agentos cron …` print stored text, job names and run output verbatim
+  instead of interpreting `[word]` as Rich markup and `:name:` as an emoji
+  (#2820), and the interactive chat's tool status line shows tool arguments
+  literally, where a `[/]` in a shell command or URL previously raised
+  `MarkupError` and killed the REPL (#2823).
+- `pptx` skill: `render_thumbs.sh` prints only the slide images the current
+  run wrote, and documents pdftoppm's page-number padding, instead of globbing
+  whatever an earlier run left in the directory (#2817).
+
+## [2026.9.22] - 2026-09-22
+
+### Fixed
+- Slack: clicking Approve/Deny on a tool-call approval prompt that was posted
+  as a top-level message (not already inside a thread) made the agent's reply
+  post unthreaded instead of anchoring under the prompt it answered.
+  `_handle_slack_interactive` built the synthesized reply event from
+  `orig_message.get("thread_ts")` alone, never `orig_message.get("ts")`, so
+  `parse_event` recorded `ts=None` and, with no `thread_ts` on a top-level
+  prompt, `_reply_thread_ts` had nothing to fall back to. With
+  `reply_in_thread` enabled and several approvals pending at once in the same
+  channel, the reply's thread anchor was silently lost, making it impossible
+  to tell which approval a bare reply belonged to. The synthesized event now
+  also carries `ts`, so the reply threads under the prompt's own message when
+  the prompt itself started no thread.
+
+- Skills (`poolsdotfun-token-launcher`): `pools_write.py approve --amount 0`
+  now revokes the allowance instead of granting an unlimited one. `--amount`
+  was read for truthiness, and `parse_units("0", 18)` is `0`, so the standard
+  ERC20 revoke collapsed into `2**256 - 1` and was announced as `new
+  allowance: unlimited`. The flag's presence is now what selects the default.
+  The printed "to execute" command also carries `--amount` (and
+  `--signer-env` / `--rpc`), so pasting it back reproduces the same
+  `PLAN_HASH` instead of being refused by `--confirm`.
+
+- `pptx` skill: `extract_text.py` read `slide.notes_slide` on slides without
+  notes, which makes python-pptx create and attach an empty notes part during a
+  read-only extraction; it now checks `has_notes_slide` first. Continuation
+  cells of merged table cells (`is_spanned`) are skipped so a merged header is
+  emitted once (#2666).
+
+- Slack channel: `send_file` passed a composite `<channel_id>|<thread_ts>`
+  target straight through as `channel_id`, so a thread upload failed with
+  `channel_not_found`. It now splits the target the way `send` does, threads
+  the upload, falls back to `slack_channel_id` when the channel part is
+  omitted, and checks file existence and size against a 1 GB `MAX_FILE_BYTES`
+  ceiling before any network call, like the other adapters (#2662).
+
+- MSTeams channel: the conversation-reference cache was written only from
+  `stop()`, so a crash, OOM kill or redeploy lost every conversation learned
+  since the previous clean stop -- and the last-activity order the
+  `reply_to=None` fallback relies on -- and proactive sends to those users
+  failed until they messaged again. The cache is now saved on every inbound
+  turn, atomically (temp file + rename), and a failed save is logged rather
+  than dropping the turn (#2658).
+
+- Email channel: attachments sent through `send_file`, or through `send` with
+  an `Attachment` whose `mime_type` was unset, were all labelled
+  `application/octet-stream`, so images and PDFs arrived as opaque downloads
+  instead of previewing inline. The type is now inferred from the filename with
+  `mimetypes.guess_type`, and `application/octet-stream` is only the fallback
+  for an unknown extension (#2656).
+
+- CLI/TUI: terminal markdown table renderer `_split_table_row` parsed cells by
+  splitting on raw pipe characters, which split code spans containing pipes
+  (``` `a | b` ```) and escaped pipes (`\|`) into extraneous columns and silently
+  dropped subsequent column content when normalized against header width; it
+  now parses rows with state-aware scanning that preserves backtick code spans
+  and escaped pipes (#3257).
+
+- Channels: a slash command separated from its argument by a tab or a newline
+  was matched as a command -- `match` and `channel_dispatch`'s intercept gate
+  both split on any whitespace -- but `dispatch` extracted the argument with a
+  literal `" "`, so the argument was dropped or cut short with no fallback to
+  the model. `/rename` then read the empty argument as "clear the custom name"
+  and `/plan off` read it as "turn plan mode on", both the opposite of what was
+  asked; `/use` pinned an empty model id. The argument is now split the same way
+  the command word is found (#3254).
+
+- `robinhood-chain-stocks` skill: a node-level JSON-RPC failure -- a public
+  endpoint's rate limit, an internal error, a response body that is not a usable
+  result -- was counted as "the contract answered", so `uiMultiplier()` failing
+  for that reason reported `isStockToken: false` about a genuine Robinhood Stock
+  Token, withheld its price as "contract failed the Stock Token check", and told
+  the agent the address was an impersonator. SKILL.md reserves `false` for a
+  confirmed revert and `null` for "unverified, not disproven"; `null` was
+  unreachable from any JSON-RPC-level fault. `RpcError` now records whether the
+  contract answered, and only an execution revert counts (#3253).
 
 - Chat could get stuck above the bottom of the transcript, with no way back but
   dragging the scrollbar. Three causes, all fixed in web chat and the desktop
@@ -347,6 +567,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   per grid column it spans. Each `<w:tc>` is now visited exactly once, nested
   table text is included, and a corrupt file raises `ValueError` so the CLI
   exits 2 with a clean message instead of an unhandled traceback. (#2154)
+- `web_fetch` tool: error HTTP statuses (4xx/5xx) served as non-HTML content
+  (a JSON or plain-text API response) were returned as `extractor: "raw"`
+  success without the `error` hint and cached for 15 minutes, because the
+  non-HTML early return ran before the error-status handling that HTML
+  responses already used. The error-status check now runs first, so error
+  bodies take the same path regardless of content type and transient
+  statuses are not cached. (#3231)
 
 ## [2026.9.20] - 2026-09-20
 
@@ -365,6 +592,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   in `_seasonal_hint`, causing locations like Juneau to falsely trigger seasonal
   date-window warnings; it now matches month names with word boundaries
   (#2510).
+- MCP stdio transport: an MCP server configured with `npx`, `npm`, `uvx` or
+  `pipx` — which is nearly every published config — now starts on Windows.
+  `create_subprocess_exec` reaches `CreateProcessW`, which appends `.exe` to
+  an extensionless name and never walks `PATHEXT`, so the `.cmd` wrappers
+  those commands ship as failed with `WinError 2` before any MCP traffic. The
+  command is resolved with `shutil.which` against the `PATH` the child will
+  get, and a command that resolves to nothing now fails with an error naming
+  the server and the command instead of a bare `WinError 2`. POSIX is
+  unchanged: `exec` already searches `PATH`.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
@@ -447,6 +683,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- musebook skill: `save_identity` writes the identity file (the muse's private
+  key) through a `0600` temp file in the same directory, flushed and renamed
+  over the target, inside a `0700` state directory; a truncated or corrupt
+  identity file is an error instead of being silently overwritten without its
+  secret; and `--secret` is validated before it is persisted (#2674)
 - WebUI chat: "Move to project" and "Rename session" on a brand-new chat
   (Cmd+Shift+O / `/new`, before the first message) failed with "Session not
   found". The WebUI mints the session key client-side and the row only

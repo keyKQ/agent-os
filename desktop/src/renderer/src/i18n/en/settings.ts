@@ -134,10 +134,13 @@ export const settings = {
   'settings.router.modeRow': 'Mode',
   'settings.router.mode.pilot': 'Pilot',
   'settings.router.mode.judge': 'LLM judge',
+  'settings.router.mode.jev': 'Jev',
   'settings.router.mode.off': 'Off',
   'settings.router.mode.pilot.help':
     'A small local classifier picks the tier. No extra model call, English-optimised.',
   'settings.router.mode.judge.help': 'A cheap model reads each message and picks the tier.',
+  'settings.router.mode.jev.help':
+    'Experimental. Sends each turn to typesafe.ai and needs TYPESAFE_API_KEY; set the key and high-risk floor with `agentos configure router`.',
   'settings.router.mode.off.help': 'Everything goes to the default model.',
   'settings.router.defaultTier': 'Default tier',
   'settings.router.defaultTier.help': 'Where a message lands when the router is unsure or off.',

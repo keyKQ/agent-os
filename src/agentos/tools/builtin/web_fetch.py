@@ -23,7 +23,11 @@ from agentos.sandbox.integration import sandboxed
 from agentos.tools.registry import tool
 from agentos.tools.ssrf import validate_http_url_for_fetch
 from agentos.tools.ssrf_client import ssrf_guarded_client
-from agentos.tools.types import SSRFBlockedError, current_tool_context
+from agentos.tools.types import (
+    SSRFBlockedError,
+    UnsupportedURLSchemeError,
+    current_tool_context,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -75,6 +79,23 @@ _HTML_COMMENT_RE = re.compile(rb"<!--.*?-->", re.DOTALL)
 _META_TAG_RE = re.compile(rb"<meta[\s/]([^>]*)>", re.IGNORECASE)
 _TAG_ATTR_RE = re.compile(rb"""([^\s=/>]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]*)))?""")
 _CONTENT_CHARSET_RE = re.compile(rb"charset\s*=\s*[\"']?\s*([^\s;\"']+)", re.IGNORECASE)
+
+
+def _unreachable_result(url: str, extract_mode: str, error: str) -> dict[str, Any]:
+    """The result for a URL that could not be fetched at all (status 0)."""
+    return {
+        "url": url,
+        "final_url": url,
+        "status": 0,
+        "content_type": "",
+        "title": "",
+        "extract_mode": extract_mode,
+        "extractor": "none",
+        "truncated": False,
+        "length": 0,
+        "text": "",
+        "error": error,
+    }
 
 
 def _check_ssrf(url: str) -> None:
@@ -364,7 +385,18 @@ async def web_fetch(
     max_chars: int | None = None,
 ) -> str:
     # --- SSRF guard ---
-    _check_ssrf(url)
+    try:
+        _check_ssrf(url)
+    except (SSRFBlockedError, UnsupportedURLSchemeError):
+        raise
+    except ValueError as exc:
+        # "Cannot resolve hostname: <host>" (or a URL with no host at all) is a
+        # fetch that cannot happen, not a policy refusal: report it the way
+        # every other unreachable URL is reported, in the result's ``error``
+        # field, instead of letting it escape as a bare ValueError that the
+        # failure envelope reduces to "invalid argument" (#2891). The message
+        # is ``ssrf.py``'s own and names only the hostname the caller passed.
+        return json.dumps(_unreachable_result(url, extract_mode, str(exc)), ensure_ascii=False)
     from agentos.tools.builtin.web import _sensitive_body_block, _sensitive_url_marker
 
     marker = _sensitive_url_marker(url)
@@ -473,20 +505,9 @@ async def web_fetch(
             if attempt_idx == 0:
                 await asyncio.sleep(_RETRY_DELAY_SECONDS)
                 continue
-            result: dict[str, Any] = {
-                "url": url,
-                "final_url": url,
-                "status": 0,
-                "content_type": "",
-                "title": "",
-                "extract_mode": extract_mode,
-                "extractor": "none",
-                "truncated": False,
-                "length": 0,
-                "text": "",
-                "error": last_error,
-            }
-            return json.dumps(result, ensure_ascii=False)
+            return json.dumps(
+                _unreachable_result(url, extract_mode, last_error), ensure_ascii=False
+            )
 
         is_transient = status in _TRANSIENT_STATUSES
         is_empty_success = 200 <= status < 300 and not raw_html.strip()
@@ -495,25 +516,10 @@ async def web_fetch(
             continue
         break
 
-    # --- Non-HTML: return as-is ---
-    is_html = "html" in content_type.lower()
-    if not is_html:
-        result = {
-            "url": url,
-            "final_url": final_url,
-            "status": status,
-            "content_type": content_type,
-            "title": "",
-            "extract_mode": extract_mode,
-            "extractor": "raw",
-            "truncated": body_truncated,
-            "length": len(raw_html),
-            "text": _wrap_content(final_url, raw_html),
-        }
-        _cache[cache_key] = result
-        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
-
     # --- Error HTTP status: return empty ---
+    # Checked before the non-HTML early return: an error response is an error
+    # regardless of content type, so a 4xx/5xx JSON/text body must take this
+    # path instead of being returned and cached as raw success (#3231).
     if status >= 400:
         hint = (
             "rate-limited or blocked upstream; try a different URL from search results, "
@@ -537,6 +543,24 @@ async def web_fetch(
         if status not in _TRANSIENT_STATUSES:
             _cache[cache_key] = result
         return json.dumps(result, ensure_ascii=False)
+
+    # --- Non-HTML: return as-is ---
+    is_html = "html" in content_type.lower()
+    if not is_html:
+        result = {
+            "url": url,
+            "final_url": final_url,
+            "status": status,
+            "content_type": content_type,
+            "title": "",
+            "extract_mode": extract_mode,
+            "extractor": "raw",
+            "truncated": body_truncated,
+            "length": len(raw_html),
+            "text": _wrap_content(final_url, raw_html),
+        }
+        _cache[cache_key] = result
+        return json.dumps(_apply_max_chars(result, effective_max_chars), ensure_ascii=False)
 
     # --- Extraction pipeline ---
     # Try local extractors first (zero-cost, handles ~90% of mainstream pages),

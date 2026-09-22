@@ -135,9 +135,15 @@ function tierOptionLabel(o: ModelOption): string {
   return ctx > 0 ? `${o.id}  ·  ${Math.round(ctx / 1000)}k` : o.id
 }
 
-const MODE_KEY: Record<RouterMode, 'pilot' | 'judge' | 'off'> = {
+// jev (experimental cloud classifier) is selectable so a strategy set from the
+// CLI or the web console renders here instead of blowing up the lookup. The
+// pane has no key/threshold inputs: saving in jev mode passes no key (null =
+// keep the saved one or TYPESAFE_API_KEY) and no threshold, so the values
+// configured elsewhere survive a save from this form.
+const MODE_KEY: Record<RouterMode, 'pilot' | 'judge' | 'jev' | 'off'> = {
   'pilot-v1': 'pilot',
   llm_judge: 'judge',
+  jev: 'jev',
   disabled: 'off',
 }
 
@@ -252,6 +258,7 @@ function RouterForm({
             options={[
               { value: 'pilot-v1', label: t('settings.router.mode.pilot') },
               { value: 'llm_judge', label: t('settings.router.mode.judge') },
+              { value: 'jev', label: t('settings.router.mode.jev') },
               { value: 'disabled', label: t('settings.router.mode.off') },
             ]}
             onChange={(mode) => setDraft((d) => ({ ...d, mode }))}
