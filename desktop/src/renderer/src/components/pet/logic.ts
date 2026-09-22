@@ -71,3 +71,32 @@ export function parseStoredAnchor(raw: unknown, size: Size, win: Size): PetAncho
   }
   return null
 }
+
+/**
+ * What the mascot must never take a click away from.
+ *
+ * The pet is a 192×208 sprite floating at the top of the stacking order, and
+ * its artwork fills that box almost edge to edge — so nothing can be won back
+ * by clipping the hit area to the drawn pixels. Anything it happens to stand
+ * over simply stopped responding: the composer's route button, the "Inspect
+ * tx" and "View transaction" buttons on a ledger card. It is decoration; the
+ * app's controls outrank it everywhere.
+ */
+export const PET_YIELDS_TO =
+  'button, a[href], input, select, textarea, summary, label, [role="button"],' +
+  ' [role="tab"], [role="menuitem"], [role="menuitemradio"], [role="checkbox"],' +
+  ' [role="switch"], [role="link"], [role="option"], [contenteditable="true"],' +
+  ' [tabindex]:not([tabindex="-1"])'
+
+/** True when this point of the window belongs to a control, not to the pet. */
+export function petYieldsAt(target: Element | null): boolean {
+  if (!target) return false
+  const control = target.closest(PET_YIELDS_TO)
+  // The pet is itself a <button>; it must not read itself as a reason to yield.
+  return control !== null && !control.classList.contains('pet')
+}
+
+/** Is this point inside the pet's box? */
+export function pointInRect(rect: DOMRect, x: number, y: number): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}

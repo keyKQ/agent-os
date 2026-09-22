@@ -17,7 +17,9 @@ import {
   anchorFromPixels,
   defaultAnchor,
   parseStoredAnchor,
+  petYieldsAt,
   pixelsFromAnchor,
+  pointInRect,
   type PetAnchor,
   type Size,
 } from './logic'
@@ -139,8 +141,14 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
   const [anchor, setAnchor] = useState<PetAnchor>(
     () => loadAnchor(size, win) ?? defaultAnchor(size, win),
   )
-  const drag = useRef<{ dx: number; dy: number; moved: boolean } | null>(null)
+  const ref = useRef<HTMLButtonElement>(null)
   const url = petSheetUrl(slug)
+  // The pointer effect binds once; these keep it reading current values
+  // without re-binding a window listener on every animation frame of a drag.
+  const anchorRef = useRef(anchor)
+  const sizeRef = useRef(size)
+  const winRef = useRef(win)
+  const pokeRef = useRef(poke)
 
   // Measure the sheet once per pet: the grid says which rows exist, the
   // alpha says how many frames each row really has.
@@ -161,6 +169,77 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
     }
   }, [url])
 
+  // Keep the window listener's view of the live values current. Ref writes
+  // belong in an effect, not in render (react-hooks/refs).
+  useEffect(() => {
+    anchorRef.current = anchor
+    sizeRef.current = size
+    winRef.current = win
+    pokeRef.current = poke
+  })
+
+  // Pointer handling lives on the window, not on the sprite, and the sprite
+  // itself is `pointer-events: none` (pet.css). A mascot that takes pointer
+  // events is a mascot that silently disables whatever it stands on — the
+  // audit found it eating the composer's route button and a ledger card's
+  // "Inspect tx"/"View transaction". Now the press is only ever the pet's when
+  // no control claims that point AND nothing is stacked above the pet there.
+  useEffect(() => {
+    let live: { dx: number; dy: number; moved: boolean } | null = null
+    let latest = anchorRef.current
+
+    const onMove = (e: PointerEvent) => {
+      if (!live) return
+      live.moved = true
+      latest = anchorFromPixels(
+        { x: e.clientX - live.dx, y: e.clientY - live.dy },
+        sizeRef.current,
+        winRef.current,
+      )
+      setAnchor(latest)
+    }
+    const onUp = () => {
+      const d = live
+      live = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      if (!d) return
+      if (d.moved) saveAnchor(latest)
+      else pokeRef.current()
+    }
+    const onDown = (e: PointerEvent) => {
+      // Read the node here, not when the listener binds: the sprite only
+      // mounts once the sheet has decoded, which is after this effect runs.
+      const el = ref.current
+      if (!el || e.button !== 0 || live) return
+      // A real control under the pointer always wins. `e.target` is already the
+      // element BELOW the pet, because the pet does not take pointer events.
+      if (petYieldsAt(e.target as Element | null)) return
+      const rect = el.getBoundingClientRect()
+      if (!pointInRect(rect, e.clientX, e.clientY)) return
+      // Topmost test: a sheet or menu drawn over the pet must keep the press.
+      el.style.pointerEvents = 'auto'
+      const top = document.elementFromPoint(e.clientX, e.clientY)
+      el.style.pointerEvents = ''
+      if (top !== el) return
+      e.preventDefault()
+      e.stopPropagation()
+      live = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, moved: false }
+      latest = anchorRef.current
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      window.addEventListener('pointercancel', onUp)
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [])
+
   if (!sheet) return null
   const pos = pixelsFromAnchor(anchor, size, win)
   const row = petStateRow(state, sheet.rows)
@@ -178,34 +257,11 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
     top: pos.y,
   }
 
-  function onPointerDown(e: React.PointerEvent<HTMLButtonElement>) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    drag.current = { dx: e.clientX - rect.left, dy: e.clientY - rect.top, moved: false }
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-  function onPointerMove(e: React.PointerEvent<HTMLButtonElement>) {
-    if (!drag.current) return
-    drag.current.moved = true
-    setAnchor(
-      anchorFromPixels(
-        { x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy },
-        size,
-        win,
-      ),
-    )
-  }
-  function onPointerUp(e: React.PointerEvent<HTMLButtonElement>) {
-    const d = drag.current
-    drag.current = null
-    e.currentTarget.releasePointerCapture(e.pointerId)
-    if (d?.moved) saveAnchor(anchor)
-    else if (d) poke()
-  }
-
   return (
     <button
       // A new row restarts the walk from its first frame, as Hermes does.
       key={row}
+      ref={ref}
       type="button"
       className="pet app-no-drag"
       data-state={state}
@@ -214,12 +270,9 @@ function PetSprite({ slug, scale }: { slug: string; scale: number }) {
       aria-label={`Pet: ${state}`}
       title={slug}
       style={style}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={() => {
-        drag.current = null
-      }}
+      // Keyboard and assistive tech still reach it as an ordinary button; the
+      // pointer path is the window listener above, which cannot swallow a click.
+      onClick={() => poke()}
     />
   )
 }

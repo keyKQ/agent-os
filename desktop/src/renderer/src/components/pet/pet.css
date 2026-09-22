@@ -10,6 +10,10 @@
   background-repeat: no-repeat;
   image-rendering: auto;
   cursor: grab;
+  /* Decoration must never disable a control it happens to stand on. The
+     press is claimed by a window listener in PetOverlay, which only takes it
+     when no control owns that point — see PET_YIELDS_TO. */
+  pointer-events: none;
   touch-action: none;
   filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
   animation: pet-walk var(--pet-loop) steps(var(--pet-frames)) infinite;

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { anchorFromPixels, defaultAnchor, parseStoredAnchor, pixelsFromAnchor } from './logic'
+import {
+  anchorFromPixels,
+  defaultAnchor,
+  parseStoredAnchor,
+  petYieldsAt,
+  pixelsFromAnchor,
+  pointInRect,
+} from './logic'
 
 const pet = { w: 64, h: 69 }
 const win = { w: 1000, h: 700 }
@@ -40,5 +47,47 @@ describe('pet anchor', () => {
     expect(parseStoredAnchor({ x: 936, y: 631 }, pet, win)).toEqual({ fx: 1, fy: 1 })
     expect(parseStoredAnchor(null, pet, win)).toBeNull()
     expect(parseStoredAnchor({ x: 'a' }, pet, win)).toBeNull()
+  })
+})
+
+describe('the pet never takes a click from a control', () => {
+  // The sprite is 192×208 and its artwork fills that box almost edge to edge,
+  // so nothing is won back by clipping the hit area to the drawn pixels. The
+  // pet is `pointer-events: none` and a window listener decides each press;
+  // these are the two questions that listener asks.
+  function at(html: string): Element {
+    document.body.innerHTML = html
+    return document.body.firstElementChild as Element
+  }
+
+  it('yields to anything the user can operate', () => {
+    expect(petYieldsAt(at('<button>Swap</button>'))).toBe(true)
+    expect(petYieldsAt(at('<a href="#x">tx</a>'))).toBe(true)
+    expect(petYieldsAt(at('<input />'))).toBe(true)
+    expect(petYieldsAt(at('<div role="tab">Orders</div>'))).toBe(true)
+    expect(petYieldsAt(at('<div tabindex="0">focusable</div>'))).toBe(true)
+    // Nested: the press lands on the glyph inside the button.
+    document.body.innerHTML = '<button data-testid="b"><svg></svg></button>'
+    expect(petYieldsAt(document.querySelector('svg'))).toBe(true)
+  })
+
+  it('does not yield to plain content, or to itself', () => {
+    expect(petYieldsAt(at('<p>a transcript line</p>'))).toBe(false)
+    expect(petYieldsAt(at('<div class="chat-thread"></div>'))).toBe(false)
+    expect(petYieldsAt(null)).toBe(false)
+    // The pet IS a <button>. Reading itself as a control would make it
+    // permanently ungrabbable.
+    expect(petYieldsAt(at('<button class="pet app-no-drag"></button>'))).toBe(false)
+    // …including a press that starts on something inside the pet.
+    expect(petYieldsAt(at('<div tabindex="-1">inert</div>'))).toBe(false)
+  })
+
+  it('knows its own box, edges included', () => {
+    const r = { left: 100, top: 50, right: 292, bottom: 258 } as DOMRect
+    expect(pointInRect(r, 200, 150)).toBe(true)
+    expect(pointInRect(r, 100, 50)).toBe(true)
+    expect(pointInRect(r, 292, 258)).toBe(true)
+    expect(pointInRect(r, 99, 150)).toBe(false)
+    expect(pointInRect(r, 200, 259)).toBe(false)
   })
 })

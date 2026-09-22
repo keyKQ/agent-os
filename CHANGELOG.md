@@ -48,6 +48,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   the rail exactly as it was, with no way to say "not at this width". The spine
   now knows when the frame cannot hold a split and offers the full Desk instead,
   which is where the Book's content fits at that size, and says so in its label.
+- The mascot silently disabled whatever it stood on. It is a 192×208 sprite at
+  the top of the stacking order, and its artwork fills that box almost edge to
+  edge, so clipping the hit area to the drawn pixels would have won nothing
+  back: a sweep of the running app found it eating the composer's route button
+  and a ledger card's "Inspect tx" and "View transaction". It no longer takes
+  pointer events at all — a window listener claims a press only when no control
+  owns that point and nothing is stacked above the pet there — so dragging and
+  poking still work and every control under it responds again.
+- Trading desk: on a window narrow enough to turn the wallets rail into a
+  horizontal strip, the agent-budget tile was its last child and got pushed 230px
+  past the right edge, reachable only by scrolling the wallets out of the way
+  first. Worse, the sliver that did show was ellipsised mid-figure — "$1,000.00
+  left of $1,00" reads as a different, smaller cap. The tile is now pinned to
+  the right of the strip and sized to its content; it drops the approval
+  threshold (which the composer's permission seat also states) rather than
+  truncate a money figure, and its caption no longer collides with the wallet
+  name.
 
 ### Added
 

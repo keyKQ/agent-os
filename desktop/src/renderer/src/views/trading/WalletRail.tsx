@@ -185,8 +185,13 @@ export function Budget({
       <div className="trd-budget__text">
         <b>{formatUsd(usage.leftUsd)}</b> {t('trading.rail.limits.left')}{' '}
         <b>{formatUsd(limits.dailyCapUsd)}</b>
-        {' · '}
-        {t('trading.rail.limits.threshold')} <b>{formatUsd(limits.thresholdUsd)}</b>
+        {/* The approval threshold is the half this tile can afford to drop when
+            the rail turns into a strip: the composer's permission seat states
+            it too. The remainder of the cap does not appear anywhere else. */}
+        <span className="trd-budget__threshold">
+          {' · '}
+          {t('trading.rail.limits.threshold')} <b>{formatUsd(limits.thresholdUsd)}</b>
+        </span>
       </div>
     </div>
   )

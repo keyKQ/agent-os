@@ -344,6 +344,10 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* `space-between` only holds the two apart while there is slack. Once the
+     tile is sized to its content — which it is as soon as the rail turns into
+     a strip — the caption and the wallet name met and read as one word. */
+  gap: 10px;
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -2827,20 +2831,34 @@ button:disabled > .trd-hero__spin {
     padding: 0 8px;
     font-size: 12px;
   }
+  /* The rail scrolls sideways here, and the budget is its last child — so it
+     was pushed clean off the end: 230 px past the right edge, reachable only
+     by scrolling the wallets away first. Pin it to the scrollport instead. A
+     guardrail readout is the last thing that should need hunting for. */
   .trd-budget {
+    position: sticky;
+    right: 0;
+    z-index: 1;
     flex-shrink: 0;
-    width: 232px;
     margin: 0 0 0 auto;
     padding: 5px 10px;
+    /* Opaque: wallet cards scroll UNDER it now. */
+    background: var(--surface);
+    box-shadow: -8px 0 12px -8px rgb(0 0 0 / 35%);
   }
   .trd-budget__meter {
     margin: 4px 0 3px;
   }
+  /* No ellipsis. The old fixed 232px cut the sentence mid-figure — "$1,000.00
+     left of $1,00" reads as a different, smaller cap, which is the one way a
+     money readout must never fail. Drop the threshold clause instead; the
+     tile then fits whole at every width the rail reaches. */
   .trd-budget__text {
     font-size: 10.5px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+  .trd-budget__threshold {
+    display: none;
   }
   /* A compact hero: the strip already took a band of height. */
   .trd-hero {
