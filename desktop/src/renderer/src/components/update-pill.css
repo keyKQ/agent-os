@@ -47,6 +47,13 @@
 .update-pill[data-kind='gateway-restart']:hover {
   background: color-mix(in srgb, var(--warn) 22%, transparent);
 }
+.update-pill[data-kind='failed'] {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+.update-pill[data-kind='failed']:hover {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+}
 .update-pill[data-busy='true'] > svg {
   animation: update-pill-spin 1s linear infinite;
 }

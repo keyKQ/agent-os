@@ -62,10 +62,14 @@ export const shell = {
   'updates.toast.gatewayRuns': 'The gateway is still running',
   'updates.toast.restartGateway': 'Restart gateway',
   'updates.toast.engineDone': 'Engine updated to',
+  'updates.toast.failed': 'Could not update to',
+  'updates.toast.retry': 'Try again',
+  'updates.toast.relaunchHint': 'Quit and reopen AgentOS, then try again.',
   // Toolbar pill: stays until the release is fully applied
   'updates.pill.available': 'Update',
   'updates.pill.engine': 'Updating engine…',
   'updates.pill.app': 'Downloading',
   'updates.pill.restart': 'Restart',
   'updates.pill.gateway': 'Restart gateway',
+  'updates.pill.failed': 'Update failed',
 } as const

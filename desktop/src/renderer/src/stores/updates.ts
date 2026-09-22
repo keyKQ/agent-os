@@ -24,6 +24,8 @@ interface UpdatesStore {
    * gateway restarts), then the app download, which waits for "Restart".
    */
   updateAll(): Promise<void>
+  /** After a failed download or restart: check again, then download again. */
+  retryApp(): Promise<void>
 }
 
 /** Renderer mirror of main's EngineUpdater + AppUpdateController. */
@@ -56,6 +58,10 @@ export const useUpdates = create<UpdatesStore>((set, get) => ({
   },
   async updateAll() {
     if (get().engine.availability === 'outdated') await get().applyEngine()
+    if (get().app.phase === 'available') await get().downloadApp()
+  },
+  async retryApp() {
+    await get().checkApp()
     if (get().app.phase === 'available') await get().downloadApp()
   },
 }))

@@ -339,8 +339,13 @@ the single next step, and two surfaces read it:
   where the warning and "Update anyway" live. A finished engine-only update
   says so once and goes away.
 - `components/UpdatePill.tsx` is the standing toolbar pill: "Update",
-  "Updating engine…", "Downloading 37%", "Restart", "Restart gateway". It
-  stays until the release is fully applied and opens Settings › About.
+  "Updating engine…", "Downloading 37%", "Restart", "Restart gateway",
+  "Update failed". It stays until the release is fully applied and opens
+  Settings › About. A failed download or restart keeps the toast up with
+  **Try again** (check, then download; the cached zip makes it quick) and,
+  when Squirrel refused the relaunch ("The command is disabled"), tells the
+  person to quit and reopen the app first: Squirrel does not accept a second
+  relaunch in the same process.
 
 A miss or a failure shows nothing, and a late result never rewinds a
 download or install the user started meanwhile.

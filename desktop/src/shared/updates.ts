@@ -115,6 +115,8 @@ export const APP_UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000
  * - `restart`: the app is downloaded; only the relaunch is left.
  * - `gateway-restart`: a newer engine is installed on disk (a terminal ran
  *   `agentos upgrade`) but the managed gateway still runs the old one.
+ * - `failed`: the app download or its restart failed while a newer build is
+ *   known; "Try again" re-checks and re-downloads (the cache makes that fast).
  * - `none`: nothing to do.
  */
 export type ReleaseUpdate =
@@ -123,6 +125,7 @@ export type ReleaseUpdate =
   | { kind: 'working'; version: string; step: 'engine' | 'app'; percent: number | null }
   | { kind: 'restart'; version: string; blocked: AppInstallBlock | null }
   | { kind: 'gateway-restart'; version: string; running: string }
+  | { kind: 'failed'; version: string; error: string }
 
 export function releaseUpdate(
   engine: EngineUpdateState,
@@ -142,6 +145,9 @@ export function releaseUpdate(
   }
   if (app.phase === 'downloading' && app.latest) {
     return { kind: 'working', version: app.latest, step: 'app', percent: app.percent }
+  }
+  if (app.phase === 'error' && app.latest && isNewer(app.latest, app.current)) {
+    return { kind: 'failed', version: app.latest, error: app.error ?? '' }
   }
   const engineOut = engine.availability === 'outdated' && !!engine.latest
   const appOut = app.phase === 'available' && !!app.latest

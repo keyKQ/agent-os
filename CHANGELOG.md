@@ -44,8 +44,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   that would cut a live session opens Settings → About to ask first;
   quitting the app no longer installs a downloaded build behind your back.
   The restart is refused, with the reason shown, while the engine updater or
-  the first-run installer is still running. Silent checks never show an
-  error banner.
+  the first-run installer is still running. A download or restart that fails
+  stays visible as "Update failed" with Try again. Silent checks never show
+  an error banner.
 
 - The AgentOS Aggregator moved to `https://agg.useagentos.dev`. The old host,
   `agg.404defi.capital`, no longer resolves, so the default

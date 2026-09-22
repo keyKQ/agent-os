@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReleaseUpdate } from '@shared/updates'
 
-const toastFn = Object.assign(vi.fn(), { success: vi.fn(), dismiss: vi.fn() })
+const toastFn = Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() })
 vi.mock('sonner', () => ({ toast: toastFn }))
 
 const { announceRelease } = await import('./UpdateNotices')
@@ -27,12 +27,13 @@ const working: ReleaseUpdate = {
 }
 const restart: ReleaseUpdate = { kind: 'restart', version: '2026.9.23', blocked: null }
 
-const act = { update: vi.fn(), restart: vi.fn(), restartGateway: vi.fn() }
+const act = { update: vi.fn(), restart: vi.fn(), restartGateway: vi.fn(), retry: vi.fn() }
 type Opts = { action: { onClick(): void }; description?: string; id: string }
 
 beforeEach(() => {
   toastFn.mockClear()
   toastFn.success.mockClear()
+  toastFn.error.mockClear()
   toastFn.dismiss.mockClear()
   act.update.mockClear()
   act.restart.mockClear()
@@ -69,6 +70,28 @@ describe('announceRelease', () => {
     announceRelease(restart, { ...restart, blocked: 'engine-updating' }, act)
     expect(toastFn.success).toHaveBeenCalledTimes(2)
     expect((toastFn.success.mock.calls[1] as [string])[0]).toMatch(/engine is being updated/)
+  })
+
+  it('offers Try again after a failed download, and a relaunch hint when Squirrel refused', () => {
+    const failed: ReleaseUpdate = {
+      kind: 'failed',
+      version: '2026.9.23',
+      error: 'net::ERR_NETWORK_CHANGED',
+    }
+    announceRelease(available, failed, act)
+    expect(toastFn.error).toHaveBeenCalledTimes(1)
+    const [text, opts] = toastFn.error.mock.calls[0] as [string, Opts]
+    expect(text).toBe('Could not update to AgentOS 2026.9.23.')
+    expect(opts.description).toBe('net::ERR_NETWORK_CHANGED')
+    opts.action.onClick()
+    expect(act.retry).toHaveBeenCalledTimes(1)
+
+    announceRelease(
+      failed,
+      { ...failed, error: 'The command is disabled and cannot be executed' },
+      act,
+    )
+    expect((toastFn.error.mock.calls[1] as [string])[0]).toMatch(/Quit and reopen AgentOS/)
   })
 
   it('says an engine-only update finished, and offers the gateway restart after a terminal upgrade', () => {

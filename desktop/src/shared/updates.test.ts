@@ -85,6 +85,20 @@ describe('releaseUpdate', () => {
     ).toEqual({ kind: 'restart', version: '2026.9.23', blocked: 'engine-updating' })
   })
 
+  it('keeps a failed download or restart visible, with its error', () => {
+    expect(
+      releaseUpdate(
+        engine({}),
+        app({ phase: 'error', latest: '2026.9.23', error: 'net::ERR_NETWORK_CHANGED' }),
+        null,
+      ),
+    ).toEqual({ kind: 'failed', version: '2026.9.23', error: 'net::ERR_NETWORK_CHANGED' })
+    // A check that failed before any newer build was known is About's business only.
+    expect(releaseUpdate(engine({}), app({ phase: 'error', error: '403' }), null)).toEqual({
+      kind: 'none',
+    })
+  })
+
   it('notices an engine upgraded from a terminal that the gateway is not running yet', () => {
     expect(
       releaseUpdate(

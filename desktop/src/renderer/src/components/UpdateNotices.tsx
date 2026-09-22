@@ -17,6 +17,8 @@ export interface NoticeActions {
   restart(): void
   /** Restart the managed gateway onto the engine already on disk. */
   restartGateway(): void
+  /** After a failed download or restart: check and download again. */
+  retry(): void
 }
 
 /**
@@ -65,6 +67,20 @@ export function announceRelease(
         action: { label: t('updates.toast.restartGateway'), onClick: act.restartGateway },
       })
       return
+    case 'failed': {
+      // Squirrel refuses a second relaunch in the same process once one was
+      // attempted; a fresh launch takes the cached download without fuss.
+      const relaunch = /command is disabled/i.test(next.error)
+        ? ` ${t('updates.toast.relaunchHint')}`
+        : ''
+      toast.error(`${t('updates.toast.failed')} AgentOS ${next.version}.${relaunch}`, {
+        id: RELEASE_TOAST,
+        duration: Infinity,
+        description: next.error || null,
+        action: { label: t('updates.toast.retry'), onClick: act.retry },
+      })
+      return
+    }
     case 'working':
       // The pill carries the progress; the card would only repeat it.
       toast.dismiss(RELEASE_TOAST)
@@ -88,6 +104,7 @@ function sameStep(a: ReleaseUpdate, b: ReleaseUpdate): boolean {
   if (a.kind === 'none' || b.kind === 'none') return true
   if (a.version !== b.version) return false
   if (a.kind === 'restart' && b.kind === 'restart') return a.blocked === b.blocked
+  if (a.kind === 'failed' && b.kind === 'failed') return a.error === b.error
   return true
 }
 
@@ -126,6 +143,7 @@ export function UpdateNotices() {
         if (liveRef.current) openSettings('about')
         else void useGateway.getState().restart()
       },
+      retry: () => void useUpdates.getState().retryApp(),
     }
     announceRelease(prev.current, release, act)
     prev.current = release
@@ -142,6 +160,8 @@ function releaseKey(r: ReleaseUpdate): string {
       return ''
     case 'restart':
       return `${r.version}:${r.blocked ?? ''}`
+    case 'failed':
+      return `${r.version}:${r.error}`
     default:
       return r.version
   }

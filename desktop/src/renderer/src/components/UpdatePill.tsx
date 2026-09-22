@@ -1,5 +1,5 @@
 import './update-pill.css'
-import { ArrowDownToLine, LoaderCircle, RotateCw } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, LoaderCircle, RotateCw } from 'lucide-react'
 import { releaseUpdate } from '@shared/updates'
 import { t } from '~/i18n'
 import { useGatewayStatus } from '~/lib/use-gateway-status'
@@ -27,7 +27,9 @@ export function UpdatePill() {
       ? RotateCw
       : release.kind === 'working'
         ? LoaderCircle
-        : ArrowDownToLine
+        : release.kind === 'failed'
+          ? AlertTriangle
+          : ArrowDownToLine
   const label =
     release.kind === 'available'
       ? t('updates.pill.available')
@@ -37,7 +39,9 @@ export function UpdatePill() {
           : t('updates.pill.app')
         : release.kind === 'restart'
           ? t('updates.pill.restart')
-          : t('updates.pill.gateway')
+          : release.kind === 'failed'
+            ? t('updates.pill.failed')
+            : t('updates.pill.gateway')
   const title = `${label} · AgentOS ${release.version}`.trim()
   return (
     <button

@@ -50,6 +50,16 @@ describe('UpdatePill', () => {
     expect(openSettings).toHaveBeenCalledWith('about')
   })
 
+  it('stays up as "Update failed" after a broken download', () => {
+    useUpdates.setState({
+      app: { ...base, phase: 'error', latest: '2026.9.23', error: 'net::ERR_CONNECTION_RESET' },
+    })
+    renderPill()
+    expect(
+      screen.getByRole('button', { name: /Update failed · AgentOS 2026.9.23/ }),
+    ).toHaveAttribute('data-kind', 'failed')
+  })
+
   it('walks engine install → app download → Restart', () => {
     useUpdates.setState({
       engine: { ...IDLE_ENGINE, phase: 'installing', latest: '2026.9.23' },
