@@ -140,7 +140,14 @@ export const settings = {
     'A small local classifier picks the tier. No extra model call, English-optimised.',
   'settings.router.mode.judge.help': 'A cheap model reads each message and picks the tier.',
   'settings.router.mode.jev.help':
-    'Experimental. Sends each turn to typesafe.ai and needs TYPESAFE_API_KEY; set the key and high-risk floor with `agentos configure router`.',
+    'Experimental. Sends the text of each turn to typesafe.ai, which picks the tier and flags risky requests.',
+  'settings.router.jevKey': 'TypeSafe API key',
+  'settings.router.jevKey.help':
+    'Checked against typesafe.ai when you save. Leave blank to keep the stored key or TYPESAFE_API_KEY from ~/.agentos/.env.',
+  'settings.router.jevKey.placeholder': 'Blank keeps the saved key',
+  'settings.router.jevRisk': 'High-risk floor',
+  'settings.router.jevRisk.help':
+    'Requests this likely to be destructive are floored at c3, whatever the router says.',
   'settings.router.mode.off.help': 'Everything goes to the default model.',
   'settings.router.defaultTier': 'Default tier',
   'settings.router.defaultTier.help': 'Where a message lands when the router is unsure or off.',

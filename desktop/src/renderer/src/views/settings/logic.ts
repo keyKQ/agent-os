@@ -349,6 +349,10 @@ export interface RouterDraft {
   defaultTier: string
   judgeModel: string
   safetyNet: string
+  // jev only. The public config never carries the key, so the field starts
+  // blank: blank on save = keep the stored key or TYPESAFE_API_KEY.
+  jevApiKey: string
+  jevHighRisk: string
   translateCeiling: string // 'off' | tier
   tiers: TierRow[]
 }
@@ -384,6 +388,9 @@ export function routerDraft(config: SetupConfig, catalog: Catalog, provider: str
       router.pilot?.safety_net_threshold != null
         ? String(router.pilot.safety_net_threshold)
         : '0.5',
+    jevApiKey: '',
+    jevHighRisk:
+      router.jev?.high_risk_threshold != null ? String(router.jev.high_risk_threshold) : '0.7',
     translateCeiling:
       router.translate_ceiling_enabled === false ? 'off' : router.translate_ceiling_tier || 'c0',
     tiers,

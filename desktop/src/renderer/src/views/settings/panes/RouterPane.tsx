@@ -135,11 +135,6 @@ function tierOptionLabel(o: ModelOption): string {
   return ctx > 0 ? `${o.id}  ·  ${Math.round(ctx / 1000)}k` : o.id
 }
 
-// jev (experimental cloud classifier) is selectable so a strategy set from the
-// CLI or the web console renders here instead of blowing up the lookup. The
-// pane has no key/threshold inputs: saving in jev mode passes no key (null =
-// keep the saved one or TYPESAFE_API_KEY) and no threshold, so the values
-// configured elsewhere survive a save from this form.
 const MODE_KEY: Record<RouterMode, 'pilot' | 'judge' | 'jev' | 'off'> = {
   'pilot-v1': 'pilot',
   llm_judge: 'judge',
@@ -168,7 +163,13 @@ function RouterForm({
   const saved = routerDraft(config, catalog, provider)
   const [draft, setDraft] = useState<RouterDraft>(saved)
   const dirty = routerDirty(saved, draft)
-  const ids = { safety: useId(), judge: useId(), translate: useId() }
+  const ids = {
+    safety: useId(),
+    judge: useId(),
+    translate: useId(),
+    jevKey: useId(),
+    jevRisk: useId(),
+  }
 
   const judgeProfile = catalog.routerProfiles?.judge?.profiles?.[provider]
   const judgeModels = judgeProfile?.models ?? []
@@ -204,7 +205,8 @@ function RouterForm({
     }))
 
   const safetyOk = draft.mode !== 'pilot-v1' || safetyNetValid(draft.safetyNet)
-  const canSave = dirty && safetyOk && !saving && !disabled
+  const jevOk = draft.mode !== 'jev' || safetyNetValid(draft.jevHighRisk)
+  const canSave = dirty && safetyOk && jevOk && !saving && !disabled
 
   function submit() {
     const warnings = classifyRouterModels(
@@ -227,6 +229,9 @@ function RouterForm({
       defaultTier: draft.defaultTier,
       judgeModel: resolveJudgeModelParam(draft.judgeModel, judgeLoaded, judgeIsLocal),
       pilotThresholdRaw: draft.safetyNet,
+      // Blank key → null → the gateway keeps the stored key / env fallback.
+      jevApiKeyRaw: draft.jevApiKey,
+      jevHighRiskThresholdRaw: draft.jevHighRisk,
       translateCeilingEnabled: draft.translateCeiling !== 'off',
       translateCeilingTier: draft.translateCeiling === 'off' ? 'c0' : draft.translateCeiling,
       tiers: draft.tiers.map((row) => ({
@@ -300,6 +305,47 @@ function RouterForm({
               <output htmlFor={ids.safety}>{Number(draft.safetyNet).toFixed(2)}</output>
             </span>
           </Row>
+        ) : null}
+        {draft.mode === 'jev' ? (
+          <>
+            <Row
+              label={t('settings.router.jevKey')}
+              help={t('settings.router.jevKey.help')}
+              htmlFor={ids.jevKey}
+            >
+              <input
+                id={ids.jevKey}
+                className="mac-input"
+                data-mono="true"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={t('settings.router.jevKey.placeholder')}
+                value={draft.jevApiKey}
+                disabled={disabled}
+                onChange={(e) => setDraft((d) => ({ ...d, jevApiKey: e.target.value }))}
+              />
+            </Row>
+            <Row
+              label={t('settings.router.jevRisk')}
+              help={t('settings.router.jevRisk.help')}
+              htmlFor={ids.jevRisk}
+            >
+              <span className="stg-slider">
+                <input
+                  id={ids.jevRisk}
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={safetyNetValid(draft.jevHighRisk) ? Number(draft.jevHighRisk) : 0.7}
+                  disabled={disabled}
+                  onChange={(e) => setDraft((d) => ({ ...d, jevHighRisk: e.target.value }))}
+                />
+                <output htmlFor={ids.jevRisk}>{Number(draft.jevHighRisk).toFixed(2)}</output>
+              </span>
+            </Row>
+          </>
         ) : null}
         {draft.mode === 'llm_judge' ? (
           <Row

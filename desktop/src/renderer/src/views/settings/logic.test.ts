@@ -308,6 +308,22 @@ describe('router form', () => {
     expect(routerDraft({}, CATALOG, 'nope').tiers).toEqual([])
   })
 
+  it('seeds the jev fields: key always blank, floor from the saved config', () => {
+    const d = routerDraft({}, CATALOG, 'opencap')
+    expect(d.jevApiKey).toBe('')
+    expect(d.jevHighRisk).toBe('0.7')
+    const saved = routerDraft(
+      { agentos_router: { strategy: 'jev', jev: { high_risk_threshold: 0.85 } } },
+      CATALOG,
+      'opencap',
+    )
+    expect(saved.mode).toBe('jev')
+    expect(saved.jevHighRisk).toBe('0.85')
+    // Typing a key is what makes the form dirty; a reseed leaves it blank so
+    // a save without touching it preserves the stored key.
+    expect(routerDirty(saved, { ...saved, jevApiKey: 'ts-1' })).toBe(true)
+  })
+
   it('validates the safety net as a 0..1 number', () => {
     expect(safetyNetValid('0.5')).toBe(true)
     expect(safetyNetValid('1')).toBe(true)

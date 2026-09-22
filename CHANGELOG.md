@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- Desktop: the Settings → Routing pane now offers the experimental `jev`
-  router strategy beside Pilot and LLM judge, so a strategy set from the CLI
-  or the web console renders instead of failing the mode lookup. The pane has
-  no key or threshold inputs; saving in jev mode keeps the values set with
-  `agentos configure router`.
+- Desktop: the Settings → Pilot Router pane offers the experimental `jev`
+  router strategy beside Pilot and LLM judge. Picking it reveals a TypeSafe
+  API key field and a high-risk floor slider; the key is checked against
+  typesafe.ai on save and a bad key is refused with the server's message.
+  Leaving the key blank keeps the stored key or `TYPESAFE_API_KEY`.
 
 ### Changed
 
