@@ -311,7 +311,7 @@ def test_agentos_command_prefers_the_sibling_console_script(
     python = tmp_path / "bin" / "python"
     python.parent.mkdir()
     python.write_text("", encoding="utf-8")
-    script = tmp_path / "bin" / "agentos"
+    script = tmp_path / "bin" / ("agentos.exe" if os.name == "nt" else "agentos")
     script.write_text("#!/bin/sh\n", encoding="utf-8")
     script.chmod(0o755)
     monkeypatch.setattr(rpc_updates.sys, "executable", str(python))

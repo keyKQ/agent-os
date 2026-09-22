@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import pytest
@@ -229,7 +230,8 @@ def test_export_keystore_to_file_is_private(client: _FakeClient, tmp_path, monke
     assert result.exit_code == 0, result.output
     assert client.calls[0][1]["format"] == "keystore"
     assert out.read_text(encoding="utf-8") == '{"version": 3}'
-    assert oct(out.stat().st_mode & 0o777) == "0o600"
+    if os.name != "nt":  # Windows has no POSIX modes to check
+        assert oct(out.stat().st_mode & 0o777) == "0o600"
     payload = json.loads(result.stdout)
     assert payload == {"written": str(out), "format": "keystore"}
     assert "version" not in result.stdout

@@ -22,6 +22,12 @@ def _mode(path: Path) -> int:
     return stat.S_IMODE(os.stat(path).st_mode)
 
 
+def _assert_private(path: Path, mode: int) -> None:
+    """POSIX permission bits; Windows keeps its ACLs and reports 0o666/0o777."""
+    if os.name != "nt":
+        assert _mode(path) == mode
+
+
 class TestSetupAndUnlock:
     def test_status_before_setup(self, vault: Vault) -> None:
         status = vault.status()
@@ -37,9 +43,9 @@ class TestSetupAndUnlock:
         vault.setup(PASSWORD, "auto")
         assert vault.initialized and vault.unlocked
         assert vault.unlock_mode == "auto"
-        assert _mode(vault_root) == 0o700
-        assert _mode(vault.index_path) == 0o600
-        assert _mode(vault.unlock_path) == 0o600
+        _assert_private(vault_root, 0o700)
+        _assert_private(vault.index_path, 0o600)
+        _assert_private(vault.unlock_path, 0o600)
         assert vault.unlock_path.read_text() == PASSWORD
         with pytest.raises(VaultAlreadyInitializedError):
             vault.setup(PASSWORD, "auto")
@@ -88,7 +94,7 @@ class TestWallets:
         first = vault.create("Main")
         assert first.address.startswith("0x") and len(first.address) == 42
         assert vault.primary_address() == first.address
-        assert _mode(vault.keystore_path(first.address)) == 0o600
+        _assert_private(vault.keystore_path(first.address), 0o600)
 
         exported = vault.export(first.address, PASSWORD, "privateKey")
         assert exported.startswith("0x") and len(exported) == 66

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -202,6 +203,11 @@ def test_sandboxed_code_sees_registered_names(monkeypatch: pytest.MonkeyPatch) -
     assert "UNRELATED_SECRET" not in safe_env
 
 
+def _path(*parts: str) -> str:
+    """A PATH in the platform's own separator (``:`` on POSIX, ``;`` on Windows)."""
+    return os.pathsep.join(parts)
+
+
 class TestOwnCliFirst:
     """Which ``agentos`` an agent reaches when it runs one.
 
@@ -217,17 +223,23 @@ class TestOwnCliFirst:
         monkeypatch.setattr(env_passthrough, "own_cli_dir", lambda: "/opt/agentos/bin")
 
     def test_the_running_build_wins_over_an_older_one_in_path(self) -> None:
-        result = env_passthrough.build_subprocess_env({"PATH": "/home/u/.local/bin:/usr/bin"})
-        assert result["PATH"] == "/opt/agentos/bin:/home/u/.local/bin:/usr/bin"
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/home/u/.local/bin", "/usr/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/home/u/.local/bin", "/usr/bin")
 
     def test_a_later_copy_of_our_own_bin_is_not_left_behind(self) -> None:
         """Otherwise PATH grows a duplicate on every nested tool call."""
-        result = env_passthrough.build_subprocess_env({"PATH": "/usr/bin:/opt/agentos/bin"})
-        assert result["PATH"] == "/opt/agentos/bin:/usr/bin"
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/usr/bin", "/opt/agentos/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/usr/bin")
 
     def test_an_already_correct_path_is_untouched(self) -> None:
-        result = env_passthrough.build_subprocess_env({"PATH": "/opt/agentos/bin:/usr/bin"})
-        assert result["PATH"] == "/opt/agentos/bin:/usr/bin"
+        result = env_passthrough.build_subprocess_env(
+            {"PATH": _path("/opt/agentos/bin", "/usr/bin")}
+        )
+        assert result["PATH"] == _path("/opt/agentos/bin", "/usr/bin")
 
     def test_an_absent_path_is_not_invented(self) -> None:
         """One directory is not a PATH: it would take ``sh`` off the child's."""
@@ -242,13 +254,16 @@ class TestOwnCliFirst:
         assert env_passthrough.build_subprocess_env({"PATH": "/usr/bin"})["PATH"] == "/usr/bin"
 
 
+_CONSOLE_SCRIPT = "agentos.exe" if os.name == "nt" else "agentos"
+
+
 class TestOwnCliDir:
     def test_it_finds_the_console_script_next_to_a_venv_interpreter(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         bin_dir = tmp_path / "venv" / "bin"
         bin_dir.mkdir(parents=True)
-        (bin_dir / "agentos").write_text("#!/bin/sh\n")
+        (bin_dir / _CONSOLE_SCRIPT).write_text("#!/bin/sh\n")
         monkeypatch.setattr(sys, "executable", str(bin_dir / "python"))
         assert env_passthrough.own_cli_dir() == str(bin_dir)
 
@@ -258,6 +273,7 @@ class TestOwnCliDir:
         monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
         assert env_passthrough.own_cli_dir() is None
 
+    @pytest.mark.skipif(os.name == "nt", reason="venv symlinks are a POSIX layout")
     def test_a_venv_symlink_is_not_followed_out_of_its_own_bin(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

@@ -158,7 +158,9 @@ def create_snapshot(*, version: str, keep: int = DEFAULT_KEEP) -> SnapshotResult
             result.skipped.append(str(source))
             continue
         result.entries.append(
-            SnapshotEntry(kind=kind, source=str(source), relative=str(relative), size=size)
+            # POSIX form on every platform: the manifest is data, not a local path,
+            # and ``snapshot / relative`` reads it back fine on Windows.
+            SnapshotEntry(kind=kind, source=str(source), relative=relative.as_posix(), size=size)
         )
 
     manifest = {
