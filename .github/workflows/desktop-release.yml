@@ -1,9 +1,11 @@
 name: Desktop Release Assets
 
 # Builds, signs, notarizes and publishes the macOS desktop app for a
-# `v<CalVer>` release tag. electron-builder uploads the dmg/zip pairs (arm64
-# and x64) plus `latest-mac.yml` to that GitHub release, which is where the
-# running app's electron-updater looks for the next version.
+# `v<CalVer>` release tag: the dmg/zip pairs (arm64 and x64) plus
+# `latest-mac.yml` go on that GitHub release, which is marked Latest, and the
+# running app's electron-updater reads the Latest release for the next
+# version. The upload is done with gh rather than by electron-builder, which
+# would name the release after the app's semver twin instead.
 #
 # Two ways in:
 #   - push a `v*` tag to this repository;
@@ -153,9 +155,9 @@ jobs:
             exit 1
           fi
 
-      # electron-builder creates a missing release itself, but only against a
-      # tag that already exists there. Make sure the tag and its release do,
-      # so a dispatch against this repository works before the tag is pushed.
+      # The assets are uploaded onto the CalVer release. On another repository
+      # the Python release must already exist; on this one it is created from
+      # the built commit so a dispatch works before the tag is pushed.
       - name: Ensure the release exists on ${{ env.TARGET_REPO }}
         if: steps.signing.outputs.enabled == 'true'
         env:
@@ -205,11 +207,10 @@ jobs:
           security find-identity -v -p codesigning "$keychain" | grep -q "Developer ID Application"
           echo "CSC_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
 
-      - name: Build, sign, notarize and publish
+      - name: Build, sign and notarize
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         env:
-          GH_TOKEN: ${{ steps.token.outputs.source == 'DESKTOP_RELEASE_TOKEN' && secrets.DESKTOP_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -224,13 +225,17 @@ jobs:
           calver="$(node scripts/release-version.mjs --calver)"
           echo "Packaging ${calver} as ${semver}"
           npm run build
-          # The publish overrides also land in the bundled app-update.yml, so
-          # the shipped app checks the repository that holds its updates.
-          npx electron-builder --mac --config electron-builder.yml --publish always \
+          # `--publish never`: electron-builder would name the release after
+          # the semver twin (v2026.922.1) and create it itself; the assets
+          # belong on the CalVer tag next to the Python wheel, so the upload
+          # step below does it with gh. The publish overrides still land in
+          # the bundled app-update.yml and in latest-mac.yml, so the shipped
+          # app checks the repository that holds its updates.
+          npx electron-builder --mac --config electron-builder.yml --publish never \
             -c.publish.owner="${owner}" -c.publish.repo="${repo}" \
             -c.extraMetadata.version="${semver}" -c.extraMetadata.calver="${calver}"
 
-      - name: Verify the published bundle
+      - name: Verify the signed bundle
         if: steps.signing.outputs.enabled == 'true'
         working-directory: desktop
         run: |
@@ -243,7 +248,7 @@ jobs:
               || { echo "$app is not signed with a Developer ID identity" >&2; exit 1; }
             xcrun stapler validate "$app"
             spctl --assess --type execute --verbose=2 "$app"
-            grep -q "${TARGET_REPO%%/*}" "$app/Contents/Resources/app-update.yml"
+            grep -q "owner: ${TARGET_REPO%%/*}" "$app/Contents/Resources/app-update.yml"
           done
           echo "== latest-mac.yml"
           cat release/latest-mac.yml
@@ -270,6 +275,29 @@ jobs:
               || { echo "$app does not carry calver ${RELEASE_TAG#v}" >&2; exit 1; }
             rm -rf "$scratch"
           done
+
+      # electron-updater asks GitHub for the release marked *Latest* and reads
+      # latest-mac.yml from its assets, whatever the tag is called; so the
+      # assets go on the CalVer release and that release is marked Latest
+      # unless a newer CalVer is already published.
+      - name: Publish the assets to ${{ env.TARGET_REPO }}
+        if: steps.signing.outputs.enabled == 'true'
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.source == 'DESKTOP_RELEASE_TOKEN' && secrets.DESKTOP_RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${RELEASE_TAG}" --repo "${TARGET_REPO}" --clobber \
+            release/*.dmg release/*.zip release/*.blockmap release/latest-mac.yml
+          current="$(gh release view --repo "${TARGET_REPO}" --json tagName --jq .tagName 2>/dev/null || true)"
+          newest="$(printf '%s\n%s\n' "${current#v}" "${RELEASE_TAG#v}" | sort -V | tail -1)"
+          if [[ -z "${current}" || "${newest}" == "${RELEASE_TAG#v}" ]]; then
+            gh release edit "${RELEASE_TAG}" --repo "${TARGET_REPO}" --latest
+            echo "${RELEASE_TAG} is now the latest release on ${TARGET_REPO}."
+          else
+            echo "::warning::${current} stays the latest release; ${RELEASE_TAG} is older, so installed apps will not be offered it."
+          fi
+          gh release view "${RELEASE_TAG}" --repo "${TARGET_REPO}" --json assets --jq '.assets[].name'
 
       - name: Build without publishing (no signing secrets)
         if: steps.signing.outputs.enabled != 'true'
