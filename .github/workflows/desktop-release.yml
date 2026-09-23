@@ -60,7 +60,9 @@ concurrency:
 env:
   RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.inputs.tag }}
   BUILD_REF: ${{ github.event_name == 'push' && github.ref_name || (github.event.inputs.ref != '' && github.event.inputs.ref || github.event.inputs.tag) }}
-  TARGET_REPO: ${{ github.event_name == 'push' && 'use-agent-os/agent-os' || github.event.inputs.repo }}
+  # A pushed tag releases into the repository it was pushed to; a manual run
+  # names its target (default use-agent-os/agent-os, where the wheel lives).
+  TARGET_REPO: ${{ github.event_name == 'push' && github.repository || github.event.inputs.repo }}
 
 jobs:
   build-desktop:
