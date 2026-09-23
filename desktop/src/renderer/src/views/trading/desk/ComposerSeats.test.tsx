@@ -13,7 +13,7 @@ const limits: Limits = {
 
 const wallet = {
   address: '0x89E0000000000000000000000000000000000a97',
-  label: 'Key main',
+  label: 'Main',
 } as Wallet
 
 function renderSeats() {

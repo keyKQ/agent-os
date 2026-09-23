@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { qrDataUrl, qrSvg } from './qr'
 
-const ADDRESS = '0x89E034A6AD22CE6Cd46e907E090bfB17DFa0da97'
+const ADDRESS = '0x89e0fA1B2c3D4e5F60718293a4b5C6d7E8f9da97'
 
 /** The modules of the symbol, as a grid, read back out of the rendered path. */
 function grid(svg: string): boolean[][] {

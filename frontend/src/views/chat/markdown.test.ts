@@ -71,10 +71,10 @@ describe('chat markdown renderer', () => {
   })
 
   it('draws an agentos-qr image here instead of asking a web service for it', () => {
-    const root = fragment('![QR Key main](agentos-qr:0x89E034A6AD22CE6Cd46e907E090bfB17DFa0da97)')
+    const root = fragment('![QR Main](agentos-qr:0x89e0fA1B2c3D4e5F60718293a4b5C6d7E8f9da97)')
     const image = root.querySelector('img')
 
-    expect(image?.getAttribute('alt')).toBe('QR Key main')
+    expect(image?.getAttribute('alt')).toBe('QR Main')
     const src = image?.getAttribute('src') || ''
     expect(src.startsWith('data:image/svg+xml;base64,')).toBe(true)
     expect(atob(src.slice('data:image/svg+xml;base64,'.length))).toContain('<svg')
@@ -84,7 +84,7 @@ describe('chat markdown renderer', () => {
     // What an assistant reaches for unprompted: the wallet address handed to a
     // QR service in a query string, which also never loads under the CSP.
     const root = fragment(
-      '![QR](https://api.qrserver.com/v1/create-qr-code/?data=0x89E034A6AD22CE6Cd46e907E090bfB17DFa0da97)',
+      '![QR](https://api.qrserver.com/v1/create-qr-code/?data=0x89e0fA1B2c3D4e5F60718293a4b5C6d7E8f9da97)',
     )
 
     expect(root.querySelector('img')).toBeNull()
