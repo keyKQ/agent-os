@@ -17,7 +17,7 @@ import re
 import shlex
 from pathlib import Path, PurePosixPath
 
-from agentos.redact import CREDENTIAL_FILE_NAMES
+from agentos.redact import CREDENTIAL_FILE_NAMES, CREDENTIAL_HOME_DIRS
 
 # Operator escape hatch — set AGENTOS_SENSITIVE_PATHS_DISABLED=1 to no-op
 # the entire sensitive-path block layer. ONLY for trusted single-operator
@@ -46,26 +46,14 @@ _HOST_CREDENTIAL_FILES: tuple[str, ...] = tuple(
 # entry matches the path itself or the path plus ``/``), so ``~/.config/gh``
 # guards the GitHub CLI directory without reaching ``~/.config/gh-dash`` or
 # ``~/.config`` at large.
+#
+# The directories come from the redaction layer's list, the same way the
+# credential filenames do, so an entry added here for ``read_file`` also
+# gates ``cat`` of the same path -- the two lists drifted once (#2621), and
+# the anchored match is also why ``~/.docker/config`` never guarded
+# ``~/.docker/config.json`` (#2623): the shared entry is the directory.
 _BASE_SENSITIVE_PREFIXES: tuple[str, ...] = (
-    "~/.ssh",
-    "~/.aws",
-    "~/.azure",
-    "~/.config/gcloud",
-    # Agents run ``gh`` routinely, so a live GitHub token sits in
-    # ``~/.config/gh/hosts.yml`` next to entries that already guard ``~/.npmrc``.
-    "~/.config/gh",
-    "~/.anthropic",
-    "~/.openai",
-    # The directory, not ``~/.docker/config``: the match below is anchored at a
-    # path segment boundary, and ``docker login`` writes ``config.json``, so the
-    # narrower spelling guarded a path Docker never creates while the registry
-    # credentials beside it stayed readable. ``.docker`` is also how the
-    # redaction layer's ``_CREDENTIAL_DIR_NAMES`` already names it, so the two
-    # layers now agree on this entry.
-    "~/.docker",
-    "~/.kube",
-    "~/.gnupg",
-    "~/.password-store",
+    *(f"~/{directory}" for directory in CREDENTIAL_HOME_DIRS),
     # The trading wallet vault: keystores, and in auto-unlock mode the vault
     # password itself (``unlock.key``). An agent trades through the gateway
     # RPC, which signs for it; it never needs to read these.
