@@ -23,6 +23,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- Pricing: `deepseek/deepseek-v4-flash`, the OpenRouter `c0` default, is now
+  pinned to DeepSeek's 0.14/0.28 rate like `deepseek/deepseek-v4-pro`.
+  OpenRouter often lists no DeepSeek-owned endpoint for it, so the live
+  lookup took whichever reseller came first, and that price moved between
+  fetches (0.54 on one, 1.10 on the next). Above `c1`'s 0.60 the cost-aware
+  router sent every `c0` turn to `openai/gpt-6-luna`, which also failed
+  the pilot golden-set test on main CI. The test suite now keeps
+  OpenRouter and Surplus price lookups offline by default, as it already did
+  for OpenCAP.
+
 - Pricing: the live OpenRouter price for a model now comes from the owner's
   standard endpoint rather than whichever of its service tiers is listed
   first. OpenRouter lists `openai/gpt-6-luna`'s `openai/flex` tier (0.05/0.25)
